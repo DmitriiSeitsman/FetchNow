@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fetchnow"
+version = "0.1.0"
+description = "FetchNow API and worker"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.116.1",
+    "uvicorn[standard]==0.35.0",
+    "sqlalchemy[asyncio]==2.0.42",
+    "alembic==1.16.4",
+    "asyncpg==0.30.0",
+    "pydantic-settings==2.10.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.4.1",
+    "pytest-asyncio==1.1.0",
+    "httpx==0.28.1",
+    "ruff==0.12.7",
+    "mypy==1.17.1",
+]
+
+[project.scripts]
+fetchnow-api = "fetchnow.api.main:run"
+fetchnow-worker = "fetchnow.worker:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fetchnow"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+packages = ["fetchnow"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["src"]

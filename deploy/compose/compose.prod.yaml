@@ -1,0 +1,16 @@
+# Optional production-shaped compose fragment (no host API exposure).
+# Usage: docker compose -f compose.yaml -f deploy/compose/compose.prod.yaml up -d --build
+services:
+  api:
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+  worker:
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+  gateway:
+    ports:
+      - "${GATEWAY_PORT:-80}:8080"

@@ -1,0 +1,26 @@
+# FetchNow MVP scope
+
+## In scope
+
+- **Public links only.** Users paste publicly reachable media URLs.
+- **First providers:** VK and Rutube.
+- **Free quality:** up to 720p without payment.
+- **Turbo:** time-limited boost (24 hours) for faster/higher-priority processing — details in a later PR.
+- **No registration.** No accounts, no passwords, no OAuth in the MVP.
+- **Download modes:** direct URL handoff when possible; server-processed fetch when the provider requires it.
+- **No permanent media storage.** Temporary files exist only for processing/delivery and are deleted afterward.
+
+## Out of MVP
+
+- Arbitrary private or authenticated media sources
+- Long-term media library / cloud locker
+- User profiles, history accounts, or social login
+- Mobile native apps
+- Multi-region active-active deployment
+- Kubernetes / Terraform automation
+- Redis-backed queues
+- Adult-content specialized workflows beyond baseline abuse controls (later)
+
+## Foundation note (this PR)
+
+PR0A ships the monorepo, health endpoints, worker lifecycle, static landing page, and Compose gateway only. Provider integrations, ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs.

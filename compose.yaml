@@ -1,0 +1,165 @@
+name: fetchnow
+
+services:
+  postgres:
+    image: postgres:16.9-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fetchnow}
+      POSTGRES_USER: ${POSTGRES_USER:-fetchnow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fetchnow}
+    volumes:
+      - fetchnow_pgdata:/var/lib/postgresql/data
+    networks:
+      - fetchnow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fetchnow} -d ${POSTGRES_DB:-fetchnow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    # No host ports published; reachable only on the Compose network.
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: fetchnow-api:local
+    restart: unless-stopped
+    command: ["fetchnow-api"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      API_CONCURRENCY_LIMIT: ${API_CONCURRENCY_LIMIT:-32}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      TEMP_STORAGE_PATH: /var/lib/fetchnow/tmp
+      TEMP_STORAGE_MAX_BYTES: ${TEMP_STORAGE_MAX_BYTES:-10737418240}
+    volumes:
+      - fetchnow_tmp:/var/lib/fetchnow/tmp
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: fetchnow-api:local
+    restart: unless-stopped
+    command: ["fetchnow-worker"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      TEMP_STORAGE_PATH: /var/lib/fetchnow/tmp
+      TEMP_STORAGE_MAX_BYTES: ${TEMP_STORAGE_MAX_BYTES:-10737418240}
+    volumes:
+      - fetchnow_tmp:/var/lib/fetchnow/tmp
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost}
+    image: fetchnow-web:local
+    restart: unless-stopped
+    networks:
+      - fetchnow
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
+  gateway:
+    build:
+      context: ./deploy/nginx
+      dockerfile: Dockerfile
+    image: fetchnow-gateway:local
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-80}:8080"
+    networks:
+      - fetchnow
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:8080/api/v1/health/live",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
+networks:
+  fetchnow:
+    driver: bridge
+
+volumes:
+  fetchnow_pgdata:
+    name: fetchnow_pgdata
+  fetchnow_tmp:
+    name: fetchnow_tmp

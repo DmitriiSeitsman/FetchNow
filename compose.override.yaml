@@ -1,0 +1,24 @@
+# Local development overrides. Loaded automatically by Docker Compose.
+services:
+  api:
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+    # Publish API only for local debugging; gateway remains the primary entrypoint.
+    ports:
+      - "8000:8000"
+
+  worker:
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+      WORKER_POLL_INTERVAL_SECONDS: "5"
+
+  web:
+    build:
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:8080}
+
+  gateway:
+    ports:
+      - "8080:8080"
