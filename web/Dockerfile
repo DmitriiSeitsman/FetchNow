@@ -12,7 +12,7 @@ ARG PUBLIC_SITE_URL=http://localhost
 ENV PUBLIC_SITE_URL=$PUBLIC_SITE_URL
 RUN npm run build
 
-FROM nginx:1.29.0-alpine AS runtime
+FROM nginx:1.31.3-alpine AS runtime
 
 RUN addgroup -g 10001 -S fetchnow \
     && adduser -S -D -H -u 10001 -G fetchnow fetchnow \
