@@ -10,7 +10,7 @@ TCP создаёт надёжное соединение к `IP:port`. Inbound-�
 
 Host Nginx — единая публичная точка `80/443`, где управляются TLS и virtual hosts. Gateway должен публиковаться как `127.0.0.1:8091`, чтобы firewall/Docker rules не сделали его публичным. PostgreSQL вообще не публикуется: `api`/`worker` находят `postgres:5432` через Compose DNS. Docker не занимает `80/443`, а также `8000` CryptoBot и `8080` JustTwo.
 
-Фактический `compose.yaml` использует `${GATEWAY_PORT:-80}:8080`. Для staging значение должно быть полным `GATEWAY_PORT=127.0.0.1:8091`; это обязательно подтвердить через rendered config до запуска.
+Фактический staging publish задаётся в `compose.staging.yaml` как `${GATEWAY_PORT:-127.0.0.1:8091}:8080`. Local publish — только через `compose.override.yaml` (`8080:8080`). Base `compose.yaml` host ports не публикует. Перед запуском staging подтвердите loopback-only binding через `docker compose ... config`.
 
 ## Безопасность пользовательского URL после PR2
 

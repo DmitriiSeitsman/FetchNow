@@ -9,8 +9,8 @@ Backup — отдельная восстанавливаемая копия да
 ```bash
 umask 077
 install -d -m 0700 /srv/fetchnow-staging/backups
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml exec -T postgres \
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml exec -T postgres \
   sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
   > /srv/fetchnow-staging/backups/fetchnow-YYYYMMDDTHHMMSSZ.dump
 stat -c '%a %s %n' /srv/fetchnow-staging/backups/fetchnow-YYYYMMDDTHHMMSSZ.dump

@@ -16,7 +16,7 @@ FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro sta
 | `worker` | Separate process from the same Python package |
 | `postgres` | PostgreSQL (future job queue lives here; no Redis) |
 
-Named volumes: `fetchnow_pgdata` (database), `fetchnow_tmp` (future temporary media files).
+Named volumes (project-scoped): `{project}_pgdata` (database), `{project}_tmp` (future temporary media files). With local `COMPOSE_PROJECT_NAME=fetchnow` these resolve to `fetchnow_pgdata` / `fetchnow_tmp`.
 
 ## Security posture
 
@@ -90,25 +90,28 @@ make migrate        # apply Alembic migrations (explicit; not on API boot)
 
 Open the gateway:
 
-- Frontend: http://localhost:8080/ (Compose override also maps host `8080`)
+- Frontend: http://localhost:8080/ (from `compose.override.yaml`)
 - Liveness: http://localhost:8080/api/v1/health/live
 - Readiness: http://localhost:8080/api/v1/health/ready
 
-With only `compose.yaml` (no override), the gateway publishes host port `80` by default (`GATEWAY_PORT`).
+Base `compose.yaml` does not publish host ports. Staging uses `compose.staging.yaml` with loopback `127.0.0.1:8091` (see Infrastructure Handbook ch. 06).
 
 ## Common commands
 
 ```bash
 make logs           # follow Compose logs
-make down           # stop containers (volumes preserved)
+make down           # stop containers (volumes preserved; never use -v routinely)
 make lint           # Ruff + ESLint
 make format         # Ruff format/fix + Prettier
 make typecheck      # mypy + astro check
 make test           # pytest
+make compose-check  # Compose base/dev/staging isolation contract
 make build          # web build + Compose image build
-make check          # lint + typecheck + test + web build
+make check          # lint + typecheck + test + compose-check + web build
 make migration m="add something"
 ```
+
+`make compose-check` (and therefore full `make check`) requires Docker Compose v2 (`docker compose config`). It does not start containers or mutate volumes, but the Compose CLI normally needs a reachable Docker daemon.
 
 ## Configuration
 
@@ -116,9 +119,10 @@ All runtime configuration is environment-driven. Templates:
 
 - `backend/.env.example`
 - `web/.env.example`
-- root `.env.example` (Compose-oriented knobs, including capacity and `ABUSE_CONTACT_EMAIL`)
+- root `.env.example` (local Compose knobs; set `COMPOSE_PROJECT_NAME=fetchnow`)
+- `.env.staging.example` → gitignored `.env.staging` for staging
 
-Compose injects service environment in `compose.yaml`. Local overrides live in `compose.override.yaml` (auto-loaded). A production-shaped fragment is in `deploy/compose/compose.prod.yaml`.
+Compose injects service environment in `compose.yaml`. Local overrides live in `compose.override.yaml` (auto-loaded). Staging uses explicit `-f compose.yaml -f compose.staging.yaml` with `--project-name fetchnow-staging`. An optional production-shaped fragment remains in `deploy/compose/compose.prod.yaml`.
 
 ## Repository layout
 

@@ -2,17 +2,18 @@
 
 ## Фактический inventory
 
-Источник — `compose.yaml`, `compose.override.yaml`, `deploy/compose/compose.prod.yaml` и Dockerfiles локального `main`.
+Источник — `compose.yaml`, `compose.override.yaml`, `compose.staging.yaml`, `deploy/compose/compose.prod.yaml` и Dockerfiles.
 
 | Service | Image/build | Port/publish | User | Health, dependency, volume |
 |---|---|---|---|---|
-| `gateway` | `fetchnow-gateway:local`, `deploy/nginx/Dockerfile` | `8080`; staging target `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет |
+| `gateway` | `fetchnow-gateway:local`, `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет |
 | `web` | `fetchnow-web:local`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; dependency/volume нет |
-| `api` | `fetchnow-api:local`, `backend/Dockerfile` | `8000`; staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; `fetchnow_tmp` |
-| `worker` | тот же backend image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; `fetchnow_tmp` |
-| `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; `fetchnow_pgdata` |
+| `api` | `fetchnow-api:local`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; volume `tmp` |
+| `worker` | тот же backend image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; volume `tmp` |
+| `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
 
-Все services находятся в bridge network `fetchnow`. `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
+Все services находятся в bridge network `fetchnow` (Docker name `{project}_fetchnow`). `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
+
 
 ## Компоненты и restart
 
@@ -22,31 +23,34 @@
 
 ### api
 
-Image `fetchnow-api:local` собирается из `backend/Dockerfile`; процесс non-root UID 10001 и подключает `fetchnow_tmp` к `/var/lib/fetchnow/tmp`. Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет.
+Image `fetchnow-api:local` собирается из `backend/Dockerfile`; процесс non-root UID 10001 и подключает logical volume `tmp` к `/var/lib/fetchnow/tmp` (Docker name `{project}_tmp`). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет.
 
 ### worker
 
-Тот же backend image и `fetchnow_tmp`, команда `fetchnow-worker`, non-root UID 10001. Сейчас это idle heartbeat без media jobs и без SafeHTTPClient; отсутствие Docker healthcheck требует проверять state/logs. Restart прерывает процесс через SIGTERM. PostgreSQL queue и recovery jobs ещё не реализованы.
+Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Сейчас это idle heartbeat без media jobs и без SafeHTTPClient; отсутствие Docker healthcheck требует проверять state/logs. Restart прерывает процесс через SIGTERM. PostgreSQL queue и recovery jobs ещё не реализованы.
 
 ### postgres
 
-Официальный image хранит cluster в `fetchnow_pgdata:/var/lib/postgresql/data`. Recreate контейнера сохраняет volume, удаление volume уничтожает БД. Логи: service `postgres`.
+Официальный image хранит cluster в `pgdata:/var/lib/postgresql/data` (Docker name `{project}_pgdata`). Recreate контейнера сохраняет volume, удаление volume уничтожает БД. Логи: service `postgres`.
 
 ## Volumes
 
-- `fetchnow_pgdata` — persistent database state.
-- `fetchnow_tmp` — общий временный storage API/worker; в текущем коде media pipeline отсутствует.
+- `pgdata` → `{project}_pgdata` — persistent database state.
+- `tmp` → `{project}_tmp` — общий временный storage API/worker; в текущем коде media pipeline отсутствует.
 
-Отдельного media volume нет. Не называйте `fetchnow_tmp` архивом или backup. Оба explicit volume name глобальны для Docker host; это нерешённый blocker совместного local/staging deployment, описанный в [главе 06](06-docker-compose.md).
+При `COMPOSE_PROJECT_NAME=fetchnow` имена совпадают с историческими `fetchnow_pgdata` / `fetchnow_tmp`. Staging (`fetchnow-staging`) получает отдельные volumes. Explicit global `name:` больше не используется (PRD1A).
+
+Отдельного media volume нет. Не называйте `tmp` архивом или backup.
 
 ## Проверки
 
 ```bash
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml ps
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml logs --tail 100 gateway api worker postgres web
-docker volume inspect fetchnow_pgdata fetchnow_tmp
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml ps
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml logs --tail 100 gateway api worker postgres web
+docker volume inspect fetchnow_pgdata fetchnow_tmp \
+  fetchnow-staging_pgdata fetchnow-staging_tmp
 docker network inspect fetchnow-staging_fetchnow
 ```
 

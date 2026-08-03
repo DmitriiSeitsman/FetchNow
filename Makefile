@@ -1,8 +1,9 @@
-.PHONY: setup up down logs lint format typecheck test build check migrate migration
+.PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
 WEB ?= web
+STAGING_COMPOSE ?= $(COMPOSE) --env-file .env.staging --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml
 
 setup:
 	@command -v python3.12 >/dev/null || (echo "python3.12 is required" && exit 1)
@@ -41,7 +42,15 @@ build:
 	cd $(WEB) && npm run build
 	$(COMPOSE) build
 
-check: lint typecheck test
+compose-check:
+	python3 scripts/compose_contract_check.py
+
+staging-config:
+	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)
+	$(STAGING_COMPOSE) config >/dev/null
+	@echo "Staging compose config OK"
+
+check: lint typecheck test compose-check
 	cd $(WEB) && npm run build
 
 migrate:

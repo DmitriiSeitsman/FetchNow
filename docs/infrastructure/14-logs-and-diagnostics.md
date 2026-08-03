@@ -10,10 +10,10 @@
 PR1/PR2 разрешают структурированные поля: request ID, provider ID, normalized hostname, HTTP method/status, redirect count, bytes read, duration и stable error code. Запрещены raw URL, query, fragment, credentials, полный `Location`, resolved IP, response body, cookies, `Authorization` и CDN/download URL. `httpx`/`httpcore` INFO подавлены, потому что могут печатать полный URL.
 
 ```bash
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml ps
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml logs --since 10m --tail 300 SERVICE
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml ps
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml logs --since 10m --tail 300 SERVICE
 sudo journalctl -u nginx --since "10 minutes ago" --no-pager
 sudo tail -n 200 /var/log/nginx/error.log
 df -hT
@@ -61,8 +61,8 @@ sudo ss -lntup
 ```bash
 sudo du -xhd1 /var /srv 2>/dev/null
 docker system df
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml logs postgres --tail 200
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml logs postgres --tail 200
 ```
 
 `du` может быть I/O-heavy — запускать вне пика. Не публиковать raw logs: они могут содержать IP/user agent; source URLs, headers и secrets должны быть redacted согласно [logging policy](../security/logging-and-privacy.md).
