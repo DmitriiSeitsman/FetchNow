@@ -1,4 +1,5 @@
-# Local development overrides. Loaded automatically by Docker Compose.
+# Local development overrides. Loaded automatically by Docker Compose
+# when you run `docker compose` without an explicit `-f` file list.
 services:
   api:
     environment:

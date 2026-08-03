@@ -1,5 +1,9 @@
 # Optional production-shaped compose fragment (no host API exposure).
-# Usage: docker compose -f compose.yaml -f deploy/compose/compose.prod.yaml up -d --build
+# Usage:
+#   docker compose --project-name fetchnow-prod \
+#     -f compose.yaml -f deploy/compose/compose.prod.yaml up -d --build
+#
+# For staging, prefer compose.staging.yaml (loopback gateway + fail-closed secrets).
 services:
   api:
     environment:

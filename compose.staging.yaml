@@ -1,0 +1,43 @@
+# Staging overrides for FetchNow.
+#
+# Always launch with an explicit project name and file set so the local
+# compose.override.yaml is NOT applied:
+#
+#   docker compose \
+#     --env-file .env.staging \
+#     --project-name fetchnow-staging \
+#     -f compose.yaml \
+#     -f compose.staging.yaml \
+#     <command>
+#
+# Do not rely on the working-directory name for isolation.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}
+
+  api:
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
+
+  worker:
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
+
+  web:
+    build:
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:?PUBLIC_SITE_URL must be set in .env.staging}
+
+  gateway:
+    # Loopback-only publish. Default host port 8091 for host Nginx reverse proxy.
+    # Override with GATEWAY_PORT=127.0.0.1:<port> in .env.staging if needed.
+    ports:
+      - "${GATEWAY_PORT:-127.0.0.1:8091}:8080"

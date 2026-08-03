@@ -4,7 +4,7 @@
 
 ## STOP conditions
 
-Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB, пока planned-only) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути.
+Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB, пока planned-only) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути. Host Nginx/TLS/backup automation остаются в PRD1B–PRD1D — этот gate list описывает полный staging go-live, не только PRD1A Compose contract.
 
 ## Этапы и gates
 
@@ -14,8 +14,8 @@
 4. **Docker check.** `docker version`, `docker compose version`, `docker info`. **Gate:** client/server доступны; установка Docker не входит в этот handbook-run.
 5. **Directories.** Создать структуру из [главы 02](02-linux-filesystem-and-users.md). **Gate:** owner/modes проверены `stat`.
 6. **Checkout/release.** Получить ровно reviewed commit в `/srv/fetchnow-staging/releases/<release-id>`, направить `app` по принятой схеме. **Gate:** `git rev-parse HEAD` совпадает с report.
-7. **Staging env.** Создать вне Git, `GATEWAY_PORT=127.0.0.1:8091`, уникальный PostgreSQL password. **Gate:** `stat` mode 600/700; секреты не печатать.
-8. **Compose config.** Явные `-p/-f`, как в главе 06. **Gate:** services `gateway/web/api/worker/postgres`; только loopback 8091 published; БД не published; volume names staging-specific. Текущий Compose проваливает последний gate, поэтому deployment блокирован до отдельного Compose-изменения.
+7. **Staging env.** Создать gitignored `.env.staging` из `.env.staging.example` вне публичного Git, `GATEWAY_PORT=127.0.0.1:8091`, уникальный PostgreSQL password. **Gate:** `stat` mode 600/700; секреты не печатать.
+8. **Compose config.** Явные `--project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml --env-file .env.staging`, как в главе 06. **Gate:** services `gateway/web/api/worker/postgres`; только loopback 8091 published; БД не published; volume names `fetchnow-staging_pgdata` / `fetchnow-staging_tmp`. `make compose-check` должен быть green.
 9. **Image build.** `docker compose ... build`. **Gate:** build success, expected local images/release labels recorded.
 10. **Database start.** `docker compose ... up -d postgres`. **Gate:** `postgres` healthy.
 11. **Migrations.** Сначала backup (если БД не новая), `alembic current`, затем `upgrade head`. **Gate:** head revision и DB readiness.

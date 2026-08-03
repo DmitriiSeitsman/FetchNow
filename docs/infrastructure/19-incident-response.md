@@ -30,10 +30,10 @@ Provider enable flags уже реализованы, но это startup configu
 
 ```bash
 date -u
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml ps -a
-docker compose -p fetchnow-staging -f compose.yaml \
-  -f deploy/compose/compose.prod.yaml logs --since 30m --tail 1000
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml ps -a
+docker compose --env-file .env.staging --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml logs --since 30m --tail 1000
 sudo ss -ntup
 df -hT
 free -h

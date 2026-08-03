@@ -65,6 +65,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Compose contract check
+        run: python3 scripts/compose_contract_check.py
       - name: Build API image
         uses: docker/build-push-action@v7
         with:

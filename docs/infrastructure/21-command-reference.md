@@ -1,6 +1,6 @@
 # 21. Справочник команд
 
-Risk: low — чтение; medium — контролируемое изменение; high — возможен простой/данные. `…` означает явные `-p fetchnow-staging -f compose.yaml -f deploy/compose/compose.prod.yaml`.
+Risk: low — чтение; medium — контролируемое изменение; high — возможен простой/данные. `…` означает явные `--env-file .env.staging --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml`.
 
 | Категория | Команда | Назначение | Режим | sudo | Risk / ожидаемый вывод |
 |---|---|---|---|---|---|

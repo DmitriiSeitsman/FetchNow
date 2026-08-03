@@ -1,4 +1,7 @@
-name: fetchnow
+# Environment-neutral Compose topology for FetchNow.
+# Project name must come from COMPOSE_PROJECT_NAME / --project-name (no top-level name:).
+# Local defaults: compose.override.yaml (auto-loaded).
+# Staging: compose.yaml + compose.staging.yaml with --project-name fetchnow-staging.
 
 services:
   postgres:
@@ -9,7 +12,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-fetchnow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fetchnow}
     volumes:
-      - fetchnow_pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     networks:
       - fetchnow
     healthcheck:
@@ -58,7 +61,7 @@ services:
       OUTBOUND_USER_AGENT: ${OUTBOUND_USER_AGENT:-FetchNow/1.0}
       OUTBOUND_ALLOWED_CONTENT_TYPES: ${OUTBOUND_ALLOWED_CONTENT_TYPES:-text/html,application/json,text/plain}
     volumes:
-      - fetchnow_tmp:/var/lib/fetchnow/tmp
+      - tmp:/var/lib/fetchnow/tmp
     networks:
       - fetchnow
     depends_on:
@@ -99,7 +102,7 @@ services:
       TEMP_STORAGE_PATH: /var/lib/fetchnow/tmp
       TEMP_STORAGE_MAX_BYTES: ${TEMP_STORAGE_MAX_BYTES:-10737418240}
     volumes:
-      - fetchnow_tmp:/var/lib/fetchnow/tmp
+      - tmp:/var/lib/fetchnow/tmp
     networks:
       - fetchnow
     depends_on:
@@ -141,8 +144,8 @@ services:
       dockerfile: Dockerfile
     image: fetchnow-gateway:local
     restart: unless-stopped
-    ports:
-      - "${GATEWAY_PORT:-80}:8080"
+    # Host ports are published only by compose.override.yaml (local) or
+    # compose.staging.yaml / deploy/compose/compose.prod.yaml.
     networks:
       - fetchnow
     depends_on:
@@ -172,8 +175,8 @@ networks:
   fetchnow:
     driver: bridge
 
+# Logical volume keys. Compose prefixes them with the project name, e.g.
+# fetchnow_pgdata / fetchnow-staging_pgdata. Do not set explicit volume name:.
 volumes:
-  fetchnow_pgdata:
-    name: fetchnow_pgdata
-  fetchnow_tmp:
-    name: fetchnow_tmp
+  pgdata:
+  tmp:
