@@ -21,6 +21,8 @@
 - Redis-backed queues
 - Adult-content specialized workflows beyond baseline abuse controls (later)
 
-## Foundation note (this PR)
+## Foundation note
 
-PR0A ships the monorepo, health endpoints, worker lifecycle, static landing page, and Compose gateway only. Provider integrations, ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs.
+- **PR0A:** monorepo, health endpoints, worker lifecycle, static landing page, Compose gateway.
+- **PR0B:** product/security/capacity policies, URL security fixtures, error-code registry — still **no** media processing.
+- Provider integrations (planned: VK, Rutube), ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs. Until then, those providers are **not** implemented.

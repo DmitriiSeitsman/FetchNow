@@ -1,0 +1,351 @@
+{
+  "schema_version": 1,
+  "schema": {
+    "description": "Machine-readable URL security vectors for the future FetchNow URL validator. This fixture is policy conformance data; tests load and validate structure only — they do not execute a validator in PR0B.",
+    "policy_under_test": "docs/security/url-validation-policy.md",
+    "fields": {
+      "id": "Unique stable case identifier (string).",
+      "url": "Input URL string as a user might submit (string).",
+      "expected": "allow | deny (string).",
+      "reason_code": "Stable code aligned with docs/api/error-codes.md or 'ok' when allowed.",
+      "rationale": "Human-readable explanation of the expected decision (string, required).",
+      "category": "Optional tag: allowlist | scheme | credentials | localhost | private | metadata | ipv6 | port | redirect | dns | encoding | deception.",
+      "notes": "Optional extra context for implementers (string)."
+    },
+    "test_allowlist_hosts": [
+      "vk.com",
+      "www.vk.com",
+      "m.vk.com",
+      "rutube.ru",
+      "www.rutube.ru",
+      "xn--e1aybc.xn--p1ai"
+    ],
+    "test_allowlist_notes": "xn--e1aybc.xn--p1ai is the IDNA form used in case allow-unicode-idna for a fictional allowlisted IDN in this fixture only — not a production provider."
+  },
+  "cases": [
+    {
+      "id": "allow-vk-https",
+      "url": "https://vk.com/video-123_456",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Canonical HTTPS URL on an explicitly allowlisted provider host.",
+      "category": "allowlist"
+    },
+    {
+      "id": "allow-vk-path-query",
+      "url": "https://vk.com/video-123_456?list=abc&t=30s",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Path and query are permitted at validation time; query must still be redacted from logs later.",
+      "category": "allowlist"
+    },
+    {
+      "id": "allow-mixed-case-host",
+      "url": "https://WWW.VK.COM/video-1",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Hostname must be normalized to lowercase before allowlist comparison.",
+      "category": "allowlist"
+    },
+    {
+      "id": "allow-explicit-subdomain",
+      "url": "https://m.vk.com/video-1",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "m.vk.com is explicitly listed in the test allowlist (not via naive suffix match).",
+      "category": "allowlist"
+    },
+    {
+      "id": "allow-rutube-https",
+      "url": "https://rutube.ru/video/abcdef0123456789/",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Allowlisted Rutube HTTPS URL.",
+      "category": "allowlist"
+    },
+    {
+      "id": "allow-unicode-idna",
+      "url": "https://тест.рф/video/1",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Unicode hostname converts to IDNA xn--e1aybc.xn--p1ai which is explicitly in the test allowlist.",
+      "category": "allowlist",
+      "notes": "Fixture-only IDN; not a production FetchNow provider."
+    },
+    {
+      "id": "deny-localhost-name",
+      "url": "https://localhost/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Localhost hostname is forbidden.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-127-0-0-1",
+      "url": "https://127.0.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv4 loopback literal is forbidden.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-127-1",
+      "url": "https://127.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Abbreviated loopback form 127.1 must be rejected after normalization.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-0-0-0-0",
+      "url": "https://0.0.0.0/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Unspecified IPv4 address is forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-10-0-0-1",
+      "url": "https://10.0.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "RFC1918 10/8 address is forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-172-16-0-1",
+      "url": "https://172.16.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "RFC1918 172.16/12 address is forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-192-168-1-1",
+      "url": "https://192.168.1.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "RFC1918 192.168/16 address is forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-cgnat-100-64",
+      "url": "https://100.64.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Carrier-grade NAT 100.64/10 is forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-metadata-169-254-169-254",
+      "url": "https://169.254.169.254/latest/meta-data/",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Cloud metadata link-local address is forbidden.",
+      "category": "metadata"
+    },
+    {
+      "id": "deny-ipv6-loopback",
+      "url": "https://[::1]/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv6 loopback is forbidden.",
+      "category": "ipv6"
+    },
+    {
+      "id": "deny-ipv6-link-local",
+      "url": "https://[fe80::1]/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv6 link-local addresses are forbidden.",
+      "category": "ipv6"
+    },
+    {
+      "id": "deny-ipv4-mapped-ipv6-private",
+      "url": "https://[::ffff:192.168.0.1]/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv4-mapped IPv6 private addresses must be classified as private and denied.",
+      "category": "ipv6"
+    },
+    {
+      "id": "deny-embedded-credentials",
+      "url": "https://user:pass@vk.com/video-1",
+      "expected": "deny",
+      "reason_code": "INVALID_URL",
+      "rationale": "Embedded credentials are rejected before allowlist success.",
+      "category": "credentials"
+    },
+    {
+      "id": "deny-file-scheme",
+      "url": "file:///etc/passwd",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_SCHEME",
+      "rationale": "Only http/https schemes are allowed.",
+      "category": "scheme"
+    },
+    {
+      "id": "deny-ftp-scheme",
+      "url": "ftp://vk.com/video",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_SCHEME",
+      "rationale": "FTP is not an allowed scheme.",
+      "category": "scheme"
+    },
+    {
+      "id": "deny-scheme-relative",
+      "url": "//vk.com/video-1",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_SCHEME",
+      "rationale": "Scheme-relative URLs are rejected.",
+      "category": "scheme"
+    },
+    {
+      "id": "deny-unsupported-port",
+      "url": "https://vk.com:8443/video-1",
+      "expected": "deny",
+      "reason_code": "INVALID_URL",
+      "rationale": "Non-default ports are denied by default policy.",
+      "category": "port"
+    },
+    {
+      "id": "deny-deceptive-suffix",
+      "url": "https://vk.com.attacker.example/video",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Hostname ends with vk.com as a suffix but is a different domain; naive endswith would wrongly allow.",
+      "category": "deception"
+    },
+    {
+      "id": "deny-deceptive-prefix",
+      "url": "https://notvk.com/video",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Prefix lookalike must not match vk.com allowlist entry.",
+      "category": "deception"
+    },
+    {
+      "id": "deny-percent-encoded-hostname-trick",
+      "url": "https://vk.com%2eattacker.example/video",
+      "expected": "deny",
+      "reason_code": "INVALID_URL",
+      "rationale": "Percent-encoded dots/authority tricks must not yield an allowlisted host.",
+      "category": "encoding"
+    },
+    {
+      "id": "deny-userinfo-trusted-hostname",
+      "url": "https://vk.com@attacker.example/video",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Userinfo that visually contains vk.com must not authenticate the allowlist; host is attacker.example.",
+      "category": "deception"
+    },
+    {
+      "id": "deny-decimal-ip",
+      "url": "https://2130706433/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Decimal dword form of 127.0.0.1 must be rejected.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-hex-ip",
+      "url": "https://0x7f000001/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Hexadecimal form of 127.0.0.1 must be rejected.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-octal-like-ip",
+      "url": "https://0177.0.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Octal-ish IP notation for loopback must be rejected after normalization.",
+      "category": "localhost"
+    },
+    {
+      "id": "deny-redirect-to-private",
+      "url": "https://vk.com/redirect-probe",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Even if the initial host is allowlisted, a redirect hop to a private IP must be denied after re-validation.",
+      "category": "redirect",
+      "notes": "Implementers should simulate Location: https://192.168.0.5/ in validator integration tests."
+    },
+    {
+      "id": "deny-dns-private-answer",
+      "url": "https://vk.com/dns-private-probe",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "If DNS for an allowlisted name returns a private address, connection must be denied.",
+      "category": "dns",
+      "notes": "Stub resolver in future tests should answer 10.1.2.3."
+    },
+    {
+      "id": "deny-dns-mixed-public-private",
+      "url": "https://vk.com/dns-mixed-probe",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "When DNS returns both public and private addresses, default policy denies (fail closed).",
+      "category": "dns",
+      "notes": "Stub resolver should return 203.0.113.10 and 10.0.0.8."
+    },
+    {
+      "id": "deny-unsupported-provider-host",
+      "url": "https://example.com/video.mp4",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Public host outside the provider allowlist is rejected.",
+      "category": "allowlist"
+    },
+    {
+      "id": "deny-http-on-nonstandard-provider-port",
+      "url": "http://vk.com:8080/video-1",
+      "expected": "deny",
+      "reason_code": "INVALID_URL",
+      "rationale": "Port 8080 is not in the default allowed port set.",
+      "category": "port"
+    },
+    {
+      "id": "deny-multicast-v4",
+      "url": "https://224.0.0.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv4 multicast destinations are forbidden.",
+      "category": "private"
+    },
+    {
+      "id": "deny-link-local-non-metadata",
+      "url": "https://169.254.1.1/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Any IPv4 link-local address is forbidden, not only the metadata IP.",
+      "category": "metadata"
+    },
+    {
+      "id": "deny-ipv6-unspecified",
+      "url": "https://[::]/video",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "IPv6 unspecified address is forbidden.",
+      "category": "ipv6"
+    },
+    {
+      "id": "deny-javascript-scheme",
+      "url": "javascript:alert(1)",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_SCHEME",
+      "rationale": "Non-http(s) schemes including javascript are rejected.",
+      "category": "scheme"
+    },
+    {
+      "id": "deny-data-scheme",
+      "url": "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_SCHEME",
+      "rationale": "data: URLs are rejected.",
+      "category": "scheme"
+    }
+  ]
+}

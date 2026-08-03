@@ -4,6 +4,8 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
+> **Current status:** the foundation stack (health checks, worker lifecycle, static landing page, Compose gateway) is running. **FetchNow does not yet process real media URLs.** There is no yt-dlp/ffmpeg pipeline, job queue, provider integration, or download delivery in the tree. Planned MVP providers (for example VK and Rutube) are **product scope**, not implemented features — do not treat them as live support.
+
 ## Architecture
 
 | Service | Role |
@@ -15,6 +17,31 @@ FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro sta
 | `postgres` | PostgreSQL (future job queue lives here; no Redis) |
 
 Named volumes: `fetchnow_pgdata` (database), `fetchnow_tmp` (future temporary media files).
+
+## Security posture
+
+Security and product boundaries are documented **before** media processing ships:
+
+- User URLs are untrusted input; only `http`/`https` with a provider hostname allowlist will be accepted (spec: [URL validation policy](docs/security/url-validation-policy.md)).
+- Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
+- Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
+- Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
+- Public error namespace: [Error codes](docs/api/error-codes.md).
+- Why this order: [ADR 0003](docs/adr/0003-security-boundaries-before-media-processing.md).
+
+The web UI uses a **system font stack only** (no Google Fonts CDN).
+
+## Documentation map
+
+| Doc | Topic |
+|---|---|
+| [MVP scope](docs/product/mvp-scope.md) | Planned product boundaries |
+| [Product policy](docs/product/product-policy.md) | What FetchNow will and will not do with content |
+| [Abuse and copyright process](docs/product/abuse-and-copyright-process.md) | Intake process and `ABUSE_CONTACT_EMAIL` |
+| [File lifecycle policy](docs/product/file-lifecycle-policy.md) | Temp file states and TTL |
+| [ADR 0001](docs/adr/0001-monorepo-and-stack.md) | Monorepo and stack |
+| [ADR 0002](docs/adr/0002-deployment-portability.md) | Portability |
+| [ADR 0003](docs/adr/0003-security-boundaries-before-media-processing.md) | Security before media tools |
 
 ## Prerequisites
 
@@ -58,12 +85,13 @@ All runtime configuration is environment-driven. Templates:
 
 - `backend/.env.example`
 - `web/.env.example`
+- root `.env.example` (Compose-oriented knobs, including capacity and `ABUSE_CONTACT_EMAIL`)
 
 Compose injects service environment in `compose.yaml`. Local overrides live in `compose.override.yaml` (auto-loaded). A production-shaped fragment is in `deploy/compose/compose.prod.yaml`.
 
 ## Repository layout
 
-See the monorepo tree under `backend/`, `web/`, `deploy/`, and `docs/`. Design decisions are recorded in `docs/adr/`; MVP product boundaries are in `docs/product/mvp-scope.md`.
+See the monorepo tree under `backend/`, `web/`, `deploy/`, and `docs/`.
 
 ## Contributing
 
