@@ -1,7 +1,6 @@
 # API error code registry
 
-Status: Accepted for PR0B  
-This is a **stable public code namespace**. Runtime handlers for every code are **not** required in this PR.
+Status: Accepted for PR0B · Partially implemented in runtime (PR1 validation codes)
 
 Envelope shape (already used by the API foundation):
 

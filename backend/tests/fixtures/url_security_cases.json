@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "schema": {
-    "description": "Machine-readable URL security vectors for the future FetchNow URL validator. This fixture is policy conformance data; tests load and validate structure only — they do not execute a validator in PR0B.",
+    "description": "Machine-readable URL security vectors for the FetchNow URL validator. Cases with stage=validate are executed by the PR1 validator with an injectable DNS fake. Cases with stage=redirect_future are categorized for a later redirect-following PR.",
     "policy_under_test": "docs/security/url-validation-policy.md",
     "fields": {
       "id": "Unique stable case identifier (string).",
@@ -10,7 +10,13 @@
       "reason_code": "Stable code aligned with docs/api/error-codes.md or 'ok' when allowed.",
       "rationale": "Human-readable explanation of the expected decision (string, required).",
       "category": "Optional tag: allowlist | scheme | credentials | localhost | private | metadata | ipv6 | port | redirect | dns | encoding | deception.",
-      "notes": "Optional extra context for implementers (string)."
+      "notes": "Optional extra context for implementers (string).",
+      "stage": "validate | redirect_future (required in PR1).",
+      "dns_addresses": "Optional list of IP strings returned by FakeDnsResolver for this hostname.",
+      "dns_behavior": "Optional: timeout | empty.",
+      "expected_hostname": "Optional normalized hostname assertion.",
+      "expected_provider": "Optional provider id on allow.",
+      "extra_allowlist_hosts": "Optional exact hosts added to a temporary test provider for this case."
     },
     "test_allowlist_hosts": [
       "vk.com",
@@ -29,7 +35,13 @@
       "expected": "allow",
       "reason_code": "ok",
       "rationale": "Canonical HTTPS URL on an explicitly allowlisted provider host.",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "expected_provider": "vk",
+      "expected_hostname": "vk.com"
     },
     {
       "id": "allow-vk-path-query",
@@ -37,7 +49,12 @@
       "expected": "allow",
       "reason_code": "ok",
       "rationale": "Path and query are permitted at validation time; query must still be redacted from logs later.",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "expected_provider": "vk"
     },
     {
       "id": "allow-mixed-case-host",
@@ -45,7 +62,13 @@
       "expected": "allow",
       "reason_code": "ok",
       "rationale": "Hostname must be normalized to lowercase before allowlist comparison.",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "expected_provider": "vk",
+      "expected_hostname": "www.vk.com"
     },
     {
       "id": "allow-explicit-subdomain",
@@ -53,7 +76,13 @@
       "expected": "allow",
       "reason_code": "ok",
       "rationale": "m.vk.com is explicitly listed in the test allowlist (not via naive suffix match).",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "expected_provider": "vk",
+      "expected_hostname": "m.vk.com"
     },
     {
       "id": "allow-rutube-https",
@@ -61,7 +90,13 @@
       "expected": "allow",
       "reason_code": "ok",
       "rationale": "Allowlisted Rutube HTTPS URL.",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "expected_provider": "rutube",
+      "expected_hostname": "rutube.ru"
     },
     {
       "id": "allow-unicode-idna",
@@ -70,7 +105,16 @@
       "reason_code": "ok",
       "rationale": "Unicode hostname converts to IDNA xn--e1aybc.xn--p1ai which is explicitly in the test allowlist.",
       "category": "allowlist",
-      "notes": "Fixture-only IDN; not a production FetchNow provider."
+      "notes": "Fixture-only IDN; not a production FetchNow provider.",
+      "stage": "validate",
+      "extra_allowlist_hosts": [
+        "xn--e1aybc.xn--p1ai"
+      ],
+      "expected_hostname": "xn--e1aybc.xn--p1ai",
+      "expected_provider": "fixture-idn",
+      "dns_addresses": [
+        "8.8.8.8"
+      ]
     },
     {
       "id": "deny-localhost-name",
@@ -78,7 +122,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Localhost hostname is forbidden.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-127-0-0-1",
@@ -86,7 +131,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv4 loopback literal is forbidden.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-127-1",
@@ -94,7 +140,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Abbreviated loopback form 127.1 must be rejected after normalization.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-0-0-0-0",
@@ -102,7 +149,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Unspecified IPv4 address is forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-10-0-0-1",
@@ -110,7 +158,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "RFC1918 10/8 address is forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-172-16-0-1",
@@ -118,7 +167,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "RFC1918 172.16/12 address is forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-192-168-1-1",
@@ -126,7 +176,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "RFC1918 192.168/16 address is forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-cgnat-100-64",
@@ -134,7 +185,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Carrier-grade NAT 100.64/10 is forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-metadata-169-254-169-254",
@@ -142,7 +194,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Cloud metadata link-local address is forbidden.",
-      "category": "metadata"
+      "category": "metadata",
+      "stage": "validate"
     },
     {
       "id": "deny-ipv6-loopback",
@@ -150,7 +203,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv6 loopback is forbidden.",
-      "category": "ipv6"
+      "category": "ipv6",
+      "stage": "validate"
     },
     {
       "id": "deny-ipv6-link-local",
@@ -158,7 +212,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv6 link-local addresses are forbidden.",
-      "category": "ipv6"
+      "category": "ipv6",
+      "stage": "validate"
     },
     {
       "id": "deny-ipv4-mapped-ipv6-private",
@@ -166,7 +221,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv4-mapped IPv6 private addresses must be classified as private and denied.",
-      "category": "ipv6"
+      "category": "ipv6",
+      "stage": "validate"
     },
     {
       "id": "deny-embedded-credentials",
@@ -174,7 +230,8 @@
       "expected": "deny",
       "reason_code": "INVALID_URL",
       "rationale": "Embedded credentials are rejected before allowlist success.",
-      "category": "credentials"
+      "category": "credentials",
+      "stage": "validate"
     },
     {
       "id": "deny-file-scheme",
@@ -182,7 +239,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_SCHEME",
       "rationale": "Only http/https schemes are allowed.",
-      "category": "scheme"
+      "category": "scheme",
+      "stage": "validate"
     },
     {
       "id": "deny-ftp-scheme",
@@ -190,7 +248,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_SCHEME",
       "rationale": "FTP is not an allowed scheme.",
-      "category": "scheme"
+      "category": "scheme",
+      "stage": "validate"
     },
     {
       "id": "deny-scheme-relative",
@@ -198,7 +257,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_SCHEME",
       "rationale": "Scheme-relative URLs are rejected.",
-      "category": "scheme"
+      "category": "scheme",
+      "stage": "validate"
     },
     {
       "id": "deny-unsupported-port",
@@ -206,7 +266,8 @@
       "expected": "deny",
       "reason_code": "INVALID_URL",
       "rationale": "Non-default ports are denied by default policy.",
-      "category": "port"
+      "category": "port",
+      "stage": "validate"
     },
     {
       "id": "deny-deceptive-suffix",
@@ -214,7 +275,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_PROVIDER",
       "rationale": "Hostname ends with vk.com as a suffix but is a different domain; naive endswith would wrongly allow.",
-      "category": "deception"
+      "category": "deception",
+      "stage": "validate"
     },
     {
       "id": "deny-deceptive-prefix",
@@ -222,7 +284,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_PROVIDER",
       "rationale": "Prefix lookalike must not match vk.com allowlist entry.",
-      "category": "deception"
+      "category": "deception",
+      "stage": "validate"
     },
     {
       "id": "deny-percent-encoded-hostname-trick",
@@ -230,15 +293,17 @@
       "expected": "deny",
       "reason_code": "INVALID_URL",
       "rationale": "Percent-encoded dots/authority tricks must not yield an allowlisted host.",
-      "category": "encoding"
+      "category": "encoding",
+      "stage": "validate"
     },
     {
       "id": "deny-userinfo-trusted-hostname",
       "url": "https://vk.com@attacker.example/video",
       "expected": "deny",
-      "reason_code": "UNSUPPORTED_PROVIDER",
-      "rationale": "Userinfo that visually contains vk.com must not authenticate the allowlist; host is attacker.example.",
-      "category": "deception"
+      "reason_code": "INVALID_URL",
+      "rationale": "Userinfo that visually contains vk.com is rejected as embedded credentials; the allowlist is never consulted for URLs with userinfo.",
+      "category": "deception",
+      "stage": "validate"
     },
     {
       "id": "deny-decimal-ip",
@@ -246,7 +311,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Decimal dword form of 127.0.0.1 must be rejected.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-hex-ip",
@@ -254,7 +320,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Hexadecimal form of 127.0.0.1 must be rejected.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-octal-like-ip",
@@ -262,7 +329,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Octal-ish IP notation for loopback must be rejected after normalization.",
-      "category": "localhost"
+      "category": "localhost",
+      "stage": "validate"
     },
     {
       "id": "deny-redirect-to-private",
@@ -271,7 +339,8 @@
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Even if the initial host is allowlisted, a redirect hop to a private IP must be denied after re-validation.",
       "category": "redirect",
-      "notes": "Implementers should simulate Location: https://192.168.0.5/ in validator integration tests."
+      "notes": "Implementers should simulate Location: https://192.168.0.5/ in validator integration tests.",
+      "stage": "redirect_future"
     },
     {
       "id": "deny-dns-private-answer",
@@ -280,7 +349,11 @@
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "If DNS for an allowlisted name returns a private address, connection must be denied.",
       "category": "dns",
-      "notes": "Stub resolver in future tests should answer 10.1.2.3."
+      "notes": "Stub resolver in future tests should answer 10.1.2.3.",
+      "stage": "validate",
+      "dns_addresses": [
+        "10.1.2.3"
+      ]
     },
     {
       "id": "deny-dns-mixed-public-private",
@@ -289,7 +362,12 @@
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "When DNS returns both public and private addresses, default policy denies (fail closed).",
       "category": "dns",
-      "notes": "Stub resolver should return 203.0.113.10 and 10.0.0.8."
+      "notes": "Stub resolver should return 203.0.113.10 and 10.0.0.8.",
+      "stage": "validate",
+      "dns_addresses": [
+        "8.8.8.8",
+        "10.0.0.8"
+      ]
     },
     {
       "id": "deny-unsupported-provider-host",
@@ -297,7 +375,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_PROVIDER",
       "rationale": "Public host outside the provider allowlist is rejected.",
-      "category": "allowlist"
+      "category": "allowlist",
+      "stage": "validate"
     },
     {
       "id": "deny-http-on-nonstandard-provider-port",
@@ -305,7 +384,8 @@
       "expected": "deny",
       "reason_code": "INVALID_URL",
       "rationale": "Port 8080 is not in the default allowed port set.",
-      "category": "port"
+      "category": "port",
+      "stage": "validate"
     },
     {
       "id": "deny-multicast-v4",
@@ -313,7 +393,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv4 multicast destinations are forbidden.",
-      "category": "private"
+      "category": "private",
+      "stage": "validate"
     },
     {
       "id": "deny-link-local-non-metadata",
@@ -321,7 +402,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Any IPv4 link-local address is forbidden, not only the metadata IP.",
-      "category": "metadata"
+      "category": "metadata",
+      "stage": "validate"
     },
     {
       "id": "deny-ipv6-unspecified",
@@ -329,7 +411,8 @@
       "expected": "deny",
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "IPv6 unspecified address is forbidden.",
-      "category": "ipv6"
+      "category": "ipv6",
+      "stage": "validate"
     },
     {
       "id": "deny-javascript-scheme",
@@ -337,7 +420,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_SCHEME",
       "rationale": "Non-http(s) schemes including javascript are rejected.",
-      "category": "scheme"
+      "category": "scheme",
+      "stage": "validate"
     },
     {
       "id": "deny-data-scheme",
@@ -345,7 +429,8 @@
       "expected": "deny",
       "reason_code": "UNSUPPORTED_SCHEME",
       "rationale": "data: URLs are rejected.",
-      "category": "scheme"
+      "category": "scheme",
+      "stage": "validate"
     }
   ]
 }

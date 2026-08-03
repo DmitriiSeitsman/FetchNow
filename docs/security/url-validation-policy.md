@@ -1,7 +1,11 @@
 # URL validation policy
 
-Status: Accepted for PR0B  
-This is a **specification**. The executable validator is intentionally **not** implemented in this PR. Conformance is expressed via `backend/tests/fixtures/url_security_cases.json` and loader tests.
+Status: Accepted (PR0B spec) · Implemented for parse/registry/DNS in PR1  
+Redirect-following and outbound HTTP probe re-validation remain **future** work.
+
+Executable code lives in `backend/src/fetchnow/url/`. Conformance vectors:
+`backend/tests/fixtures/url_security_cases.json` (`stage=validate` executed;
+`stage=redirect_future` deferred).
 
 ## Goals
 
@@ -10,7 +14,7 @@ Treat every user-supplied URL as hostile. Before any outbound connect (probe, yt
 1. Parse and normalize strictly.
 2. Enforce scheme, port, credentials, and provider allowlist rules.
 3. Resolve DNS and classify **every** returned address.
-4. Re-validate after redirects, hop by hop.
+4. Re-validate after redirects, hop by hop (**not in PR1**).
 
 Fail closed on ambiguity.
 
@@ -92,10 +96,11 @@ Machine-readable cases live in:
 
 `backend/tests/fixtures/url_security_cases.json`
 
-Schema is documented in that file’s `schema` field and enforced by `backend/tests/test_url_security_fixture.py`. Cases cover allow and deny examples required by PR0B; the loader does **not** call a real validator yet.
+Schema is documented in that file’s `schema` field. PR1 executes all `stage=validate` cases against `URLValidator` with `FakeDnsResolver`. Cases marked `stage=redirect_future` remain documented until redirect re-validation ships.
 
 ## Related documents
 
 - [Threat model](threat-model.md)
 - [Error codes](../api/error-codes.md)
 - [ADR 0003](../adr/0003-security-boundaries-before-media-processing.md)
+- [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md)

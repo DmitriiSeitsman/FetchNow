@@ -24,5 +24,6 @@
 ## Foundation note
 
 - **PR0A:** monorepo, health endpoints, worker lifecycle, static landing page, Compose gateway.
-- **PR0B:** product/security/capacity policies, URL security fixtures, error-code registry — still **no** media processing.
-- Provider integrations (planned: VK, Rutube), ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs. Until then, those providers are **not** implemented.
+- **PR0B:** product/security/capacity policies, URL security fixtures, error-code registry.
+- **PR1:** executable URL validation + VK/Rutube provider registry + `POST /api/v1/media/validate` (no media download).
+- ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs.

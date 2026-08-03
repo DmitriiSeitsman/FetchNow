@@ -14,6 +14,9 @@ from fetchnow.core.errors import register_exception_handlers
 from fetchnow.core.logging import configure_logging
 from fetchnow.core.middleware import RequestIdMiddleware
 from fetchnow.db.session import create_engine
+from fetchnow.url.dns import SystemDnsResolver
+from fetchnow.url.providers import ProviderRegistry
+from fetchnow.url.validate import URLValidator
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,6 +29,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = create_engine(settings)
         app.state.engine = engine
         app.state.settings = settings
+        app.state.url_validator = URLValidator(
+            settings,
+            registry=ProviderRegistry.from_settings(settings),
+            resolver=SystemDnsResolver(
+                timeout_seconds=settings.dns_resolution_timeout_seconds
+            ),
+        )
         try:
             yield
         finally:

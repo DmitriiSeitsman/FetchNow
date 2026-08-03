@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** the foundation stack (health checks, worker lifecycle, static landing page, Compose gateway) is running. **FetchNow does not yet process real media URLs.** There is no yt-dlp/ffmpeg pipeline, job queue, provider integration, or download delivery in the tree. Planned MVP providers (for example VK and Rutube) are **product scope**, not implemented features — do not treat them as live support.
+> **Current status:** foundation stack + **URL validation API** (`POST /api/v1/media/validate`) with VK/Rutube hostname allowlists and DNS destination checks. **FetchNow still does not download or process media.** There is no yt-dlp/ffmpeg pipeline, job queue, or download delivery. Provider allowlisting means URL *acceptance*, not live media extraction.
 
 ## Architecture
 
@@ -22,12 +22,12 @@ Named volumes: `fetchnow_pgdata` (database), `fetchnow_tmp` (future temporary me
 
 Security and product boundaries are documented **before** media processing ships:
 
-- User URLs are untrusted input; only `http`/`https` with a provider hostname allowlist will be accepted (spec: [URL validation policy](docs/security/url-validation-policy.md)).
+- User URLs are untrusted input; only `http`/`https` with a provider hostname allowlist are accepted (`POST /api/v1/media/validate`; policy: [URL validation](docs/security/url-validation-policy.md), [ADR 0004](docs/adr/0004-provider-registry-and-dns-validation.md)).
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
 - Public error namespace: [Error codes](docs/api/error-codes.md).
-- Why this order: [ADR 0003](docs/adr/0003-security-boundaries-before-media-processing.md).
+- Why security docs preceded media tools: [ADR 0003](docs/adr/0003-security-boundaries-before-media-processing.md).
 
 The web UI uses a **system font stack only** (no Google Fonts CDN).
 
@@ -42,6 +42,17 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0001](docs/adr/0001-monorepo-and-stack.md) | Monorepo and stack |
 | [ADR 0002](docs/adr/0002-deployment-portability.md) | Portability |
 | [ADR 0003](docs/adr/0003-security-boundaries-before-media-processing.md) | Security before media tools |
+| [ADR 0004](docs/adr/0004-provider-registry-and-dns-validation.md) | Provider registry + DNS order |
+
+## Validate API (PR1)
+
+```bash
+curl -sS -X POST http://localhost:8080/api/v1/media/validate \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://vk.com/video-123_456"}'
+```
+
+Success returns provider id/displayName and a query-stripped canonical URL. Errors use the stable error envelope (`INVALID_URL`, `UNSUPPORTED_PROVIDER`, `BLOCKED_DESTINATION`, …).
 
 ## Prerequisites
 

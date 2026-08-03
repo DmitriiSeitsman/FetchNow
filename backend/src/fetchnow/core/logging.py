@@ -8,6 +8,17 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+# Extra LogRecord attributes that are safe to emit when present.
+_SAFE_EXTRA_FIELDS = (
+    "request_id",
+    "outcome",
+    "provider_id",
+    "hostname",
+    "error_code",
+    "duration_ms",
+    "route",
+)
+
 
 class JsonFormatter(logging.Formatter):
     """Format log records as single-line JSON objects."""
@@ -19,9 +30,10 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        request_id = getattr(record, "request_id", None)
-        if request_id:
-            payload["request_id"] = request_id
+        for field in _SAFE_EXTRA_FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

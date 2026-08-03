@@ -1,4 +1,4 @@
-"""Structural tests for URL security fixture (no validator execution)."""
+"""Execute URL security fixture cases against the real validator."""
 
 from __future__ import annotations
 
@@ -8,16 +8,22 @@ from typing import Any
 
 import pytest
 
+from fetchnow.core.config import Settings
+from fetchnow.url.dns import FakeDnsResolver
+from fetchnow.url.errors import URLValidationError
+from fetchnow.url.providers import ProviderRegistry
+from fetchnow.url.validate import URLValidator
+
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "url_security_cases.json"
 MIN_CASES = 35
-REQUIRED_CASE_FIELDS = ("id", "url", "expected", "reason_code", "rationale")
+REQUIRED_CASE_FIELDS = ("id", "url", "expected", "reason_code", "rationale", "stage")
 ALLOWED_EXPECTED = frozenset({"allow", "deny"})
+ALLOWED_STAGES = frozenset({"validate", "redirect_future"})
 
 
 @pytest.fixture(scope="module")
 def fixture_payload() -> dict[str, Any]:
-    raw = FIXTURE_PATH.read_text(encoding="utf-8")
-    payload = json.loads(raw)
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
 
@@ -25,13 +31,11 @@ def fixture_payload() -> dict[str, Any]:
 def test_fixture_is_valid_json_object(fixture_payload: dict[str, Any]) -> None:
     assert "cases" in fixture_payload
     assert "schema" in fixture_payload
-    assert fixture_payload.get("schema_version") == 1
+    assert fixture_payload.get("schema_version") == 2
 
 
 def test_fixture_has_minimum_case_count(fixture_payload: dict[str, Any]) -> None:
-    cases = fixture_payload["cases"]
-    assert isinstance(cases, list)
-    assert len(cases) >= MIN_CASES
+    assert len(fixture_payload["cases"]) >= MIN_CASES
 
 
 def test_case_ids_are_unique(fixture_payload: dict[str, Any]) -> None:
@@ -39,72 +43,107 @@ def test_case_ids_are_unique(fixture_payload: dict[str, Any]) -> None:
     assert len(ids) == len(set(ids))
 
 
-def test_each_case_has_required_fields_and_decision(
-    fixture_payload: dict[str, Any],
-) -> None:
+def test_each_case_has_required_fields(fixture_payload: dict[str, Any]) -> None:
     for case in fixture_payload["cases"]:
-        assert isinstance(case, dict)
         for field in REQUIRED_CASE_FIELDS:
-            assert field in case, f"missing {field} in {case.get('id')}"
-            assert case[field], f"empty {field} in {case.get('id')}"
+            assert case.get(field), f"missing {field} in {case.get('id')}"
         assert case["expected"] in ALLOWED_EXPECTED
-        assert isinstance(case["rationale"], str)
+        assert case["stage"] in ALLOWED_STAGES
         assert len(case["rationale"].strip()) >= 10
 
 
-def test_fixture_includes_required_deny_and_allow_coverage(
+def test_every_case_is_categorized(fixture_payload: dict[str, Any]) -> None:
+    uncategorized = [
+        case["id"]
+        for case in fixture_payload["cases"]
+        if case.get("stage") not in ALLOWED_STAGES
+    ]
+    assert not uncategorized
+
+
+def test_redirect_future_cases_are_documented(fixture_payload: dict[str, Any]) -> None:
+    deferred = [c for c in fixture_payload["cases"] if c["stage"] == "redirect_future"]
+    assert deferred, "expected at least one redirect_future case"
+    for case in deferred:
+        assert case.get("notes"), f"{case['id']} needs documented deferral reason"
+
+
+def _settings() -> Settings:
+    return Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        URL_ALLOWED_SCHEMES="http,https",
+        URL_ALLOWED_PORTS="80,443",
+        URL_MAX_LENGTH=4096,
+        DNS_RESOLUTION_TIMEOUT_SECONDS=1,
+        PROVIDER_VK_ENABLED=True,
+        PROVIDER_RUTUBE_ENABLED=True,
+    )
+
+
+def _validator_for_case(case: dict[str, Any]) -> URLValidator:
+    settings = _settings()
+    registry = ProviderRegistry.from_settings(settings)
+    extra_hosts = case.get("extra_allowlist_hosts") or []
+    if extra_hosts:
+        registry = registry.with_extra_exact_hosts(
+            provider_id=case.get("expected_provider") or "fixture-extra",
+            display_name="Fixture Extra",
+            hostnames=extra_hosts,
+        )
+
+    records: dict[str, list[str]] = {}
+    timeouts: set[str] = set()
+    empty: set[str] = set()
+
+    # Apply DNS stub by expected hostname / URL host when provided.
+    host_hint = case.get("expected_hostname")
+    if case.get("dns_behavior") == "timeout" and host_hint:
+        timeouts.add(host_hint)
+    elif case.get("dns_behavior") == "empty" and host_hint:
+        empty.add(host_hint)
+    elif case.get("dns_addresses") is not None:
+        # Map addresses onto allowlisted hostnames that need resolution.
+        for provider in registry.providers:
+            for host in provider.exact_hostnames:
+                records[host] = list(case["dns_addresses"])
+        if host_hint:
+            records[host_hint] = list(case["dns_addresses"])
+
+    resolver = FakeDnsResolver(
+        records=records,
+        timeouts=timeouts,
+        empty=empty,
+        default_addresses=("8.8.8.8",),
+    )
+    return URLValidator(settings, registry=registry, resolver=resolver)
+
+
+@pytest.mark.asyncio
+async def test_validate_stage_cases_against_validator(
     fixture_payload: dict[str, Any],
 ) -> None:
-    ids = {case["id"] for case in fixture_payload["cases"]}
-    required_ids = {
-        "allow-vk-https",
-        "allow-vk-path-query",
-        "allow-mixed-case-host",
-        "allow-explicit-subdomain",
-        "allow-unicode-idna",
-        "deny-localhost-name",
-        "deny-127-0-0-1",
-        "deny-127-1",
-        "deny-0-0-0-0",
-        "deny-10-0-0-1",
-        "deny-172-16-0-1",
-        "deny-192-168-1-1",
-        "deny-cgnat-100-64",
-        "deny-metadata-169-254-169-254",
-        "deny-ipv6-loopback",
-        "deny-ipv6-link-local",
-        "deny-ipv4-mapped-ipv6-private",
-        "deny-embedded-credentials",
-        "deny-file-scheme",
-        "deny-ftp-scheme",
-        "deny-scheme-relative",
-        "deny-unsupported-port",
-        "deny-deceptive-suffix",
-        "deny-deceptive-prefix",
-        "deny-percent-encoded-hostname-trick",
-        "deny-userinfo-trusted-hostname",
-        "deny-decimal-ip",
-        "deny-hex-ip",
-        "deny-redirect-to-private",
-        "deny-dns-private-answer",
-        "deny-dns-mixed-public-private",
-    }
-    missing = required_ids - ids
-    assert not missing, f"missing required case ids: {sorted(missing)}"
+    validate_cases = [c for c in fixture_payload["cases"] if c["stage"] == "validate"]
+    assert len(validate_cases) >= 35
+
+    for case in validate_cases:
+        validator = _validator_for_case(case)
+        if case["expected"] == "allow":
+            result = await validator.validate(case["url"])
+            if case.get("expected_hostname"):
+                assert result.url.hostname == case["expected_hostname"]
+            if case.get("expected_provider"):
+                assert result.provider_id == case["expected_provider"]
+        else:
+            with pytest.raises(URLValidationError) as excinfo:
+                await validator.validate(case["url"])
+            assert excinfo.value.code == case["reason_code"], (
+                f"{case['id']}: expected {case['reason_code']}, "
+                f"got {excinfo.value.code}"
+            )
 
 
-def test_loader_does_not_invoke_url_validator() -> None:
-    """PR0B guard: no fetchnow URL validator module should exist yet."""
+def test_validator_module_exists() -> None:
     import importlib.util
 
-    def _spec_exists(name: str) -> bool:
-        try:
-            return importlib.util.find_spec(name) is not None
-        except ModuleNotFoundError:
-            return False
-
-    assert not _spec_exists("fetchnow.security.url_validator")
-    assert not _spec_exists("fetchnow.url_validator")
-    # Ensure this test file itself does not import a validator implementation.
-    assert "fetchnow.security" not in globals()
-
+    assert importlib.util.find_spec("fetchnow.url.validate") is not None

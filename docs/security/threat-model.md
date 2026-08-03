@@ -15,7 +15,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Read internal APIs, cloud metadata, or scan private networks |
 | Mitigation | Scheme allowlist; block private/link-local/metadata ranges; DNS re-check; redirect re-validation; provider hostname allowlist (`url-validation-policy.md`) |
 | Residual risk | Novel IP encodings, shared hosting confused-deputy cases |
-| Planned PR | Spec: PR0B; executable validator: media-intake PR |
+| Planned PR | Spec: PR0B; executable validator: **PR1**; connect-time revalidation: future network PR |
 
 ### DNS rebinding
 
@@ -255,7 +255,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | SSRF, ToS violations, legal risk |
 | Mitigation | Strict provider hostname allowlist with boundary checks |
 | Residual risk | Compromised allowlisted CDN host |
-| Planned PR | Spec: PR0B; allowlist enforcement: provider PR |
+| Planned PR | Spec: PR0B; allowlist enforcement: **PR1** |
 
 ## Trust boundaries (summary)
 
