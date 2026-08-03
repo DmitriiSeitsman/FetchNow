@@ -51,7 +51,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/media/validate \
   -H 'content-type: application/json' \
-  -d '{"url":"https://vk.com/video-123_456"}'
+  -d '{"url":"<PUBLIC_VK_URL>"}'
 ```
 
 Success returns provider id/displayName and a query-stripped canonical URL. Errors use the stable error envelope (`INVALID_URL`, `UNSUPPORTED_PROVIDER`, `BLOCKED_DESTINATION`, …).
@@ -61,10 +61,18 @@ Success returns provider id/displayName and a query-stripped canonical URL. Erro
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/media/probe \
   -H 'content-type: application/json' \
-  -d '{"url":"https://vk.com/video-123_456"}'
+  -d '{"url":"<PUBLIC_VK_URL>"}'
 ```
 
 Diagnostic only: provider, final URL without query, and limited HTTP metadata (`status`, `contentType`, `contentLength`, `redirectCount`, `methodUsed`). Does not extract media metadata or download files. Some providers may fall back from HEAD to a bounded GET per provider policy.
+
+## Infrastructure Handbook
+
+Подробный русскоязычный учебник и staging runbook находится в
+[Infrastructure Handbook](docs/infrastructure/README.md). Он объясняет Linux,
+Docker/Compose, Nginx, TLS, PostgreSQL, deployment, диагностику, backup,
+rollback и перенос на новый сервер; фактическое состояние сервера всегда
+подтверждается preflight-проверками.
 
 ## Prerequisites
 
