@@ -34,3 +34,4 @@ class URLValidationResult:
     provider_id: str
     provider_display_name: str
     url: NormalizedMediaURL
+    head_fallback_statuses: frozenset[int] = frozenset()

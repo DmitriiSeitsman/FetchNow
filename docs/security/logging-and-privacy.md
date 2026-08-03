@@ -1,6 +1,6 @@
 # Logging and privacy baseline
 
-Status: Accepted for PR0B
+Status: Accepted for PR0B · Outbound probe logging rules in PR2
 
 ## Principle
 
@@ -11,14 +11,20 @@ Logs exist for operations and abuse response. They must not become a second copy
 Do not write:
 
 - full user source URLs including query tokens or signatures;
-- cookies;
+- raw `Location` headers (may contain tokens);
+- cookies / `Set-Cookie`;
 - recovery / magic-link / premium tokens;
 - payment secrets, card data, provider secret keys;
 - raw webhook bodies without redaction;
 - direct CDN / prepared-file URLs that grant download access;
 - `Authorization` and similar auth headers;
 - session tokens;
+- resolved IP addresses;
+- TLS internals;
+- response bodies;
 - unsanitized filenames that embed secrets or full URLs.
+
+Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 
 Debug overrides that print the above are forbidden in production (`APP_ENV=production`).
 
@@ -30,7 +36,9 @@ Safe examples:
 - provider ID;
 - normalized hostname (no userinfo, no query);
 - route / handler name;
-- HTTP status;
+- HTTP method / status (outbound probe);
+- redirect count (not full chain URLs);
+- body bytes read (count only);
 - duration;
 - job ID;
 - stable public error code;
@@ -63,4 +71,5 @@ Abuse intake may store normalized hostname and opaque report IDs — not full to
 ## Related documents
 
 - [Threat model](threat-model.md)
+- [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md)
 - [Product policy](../product/product-policy.md)

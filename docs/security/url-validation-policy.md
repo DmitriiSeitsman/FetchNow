@@ -1,20 +1,23 @@
 # URL validation policy
 
-Status: Accepted (PR0B spec) · Implemented for parse/registry/DNS in PR1  
-Redirect-following and outbound HTTP probe re-validation remain **future** work.
+Status: Accepted (PR0B spec) · Parse/registry/DNS in PR1 · Outbound probe + redirects in PR2
 
-Executable code lives in `backend/src/fetchnow/url/`. Conformance vectors:
-`backend/tests/fixtures/url_security_cases.json` (`stage=validate` executed;
-`stage=redirect_future` deferred).
+Executable code:
+
+- `backend/src/fetchnow/url/` — parse, provider registry, DNS, destination classification
+- `backend/src/fetchnow/network/` — safe outbound HTTP with manual redirects
+
+Conformance vectors: `backend/tests/fixtures/url_security_cases.json`
+(`stage=validate` and `stage=network`; no public internet in tests).
 
 ## Goals
 
-Treat every user-supplied URL as hostile. Before any outbound connect (probe, yt-dlp, or HTTP client):
+Treat every user-supplied URL as hostile. Before any outbound connect:
 
 1. Parse and normalize strictly.
 2. Enforce scheme, port, credentials, and provider allowlist rules.
 3. Resolve DNS and classify **every** returned address.
-4. Re-validate after redirects, hop by hop (**not in PR1**).
+4. Re-validate after redirects, hop by hop (PR2).
 
 Fail closed on ambiguity.
 
@@ -22,7 +25,7 @@ Fail closed on ambiguity.
 
 ### Scheme and credentials
 
-- Allow only `http` and `https` (MVP may further prefer `https`-only for some providers).
+- Allow only `http` and `https`.
 - Reject `file://`, `ftp://`, `data:`, `javascript:`, and scheme-relative URLs (`//evil.example/...`).
 - Reject URLs with embedded credentials (`https://user:pass@host/`).
 
@@ -48,12 +51,18 @@ Deny destinations that are or resolve to:
 
 Checks apply to **both** IPv4 and IPv6.
 
-### DNS and redirects
+### DNS and redirects (PR2)
 
-- After DNS resolution, re-run address classification on **all** answers. If any answer is blocked, deny (do not “prefer” a public A record while a private one exists unless a future explicit policy says otherwise — default is deny).
-- Follow redirects only up to `MAX_REDIRECTS`.
-- Re-validate scheme, host allowlist, ports, and resolved addresses on **each** hop.
-- A redirect from an allowed host to a private IP or non-allowlisted host is a hard deny (`BLOCKED_DESTINATION` / `REDIRECT_LIMIT_EXCEEDED` as applicable).
+- After DNS resolution, re-run address classification on **all** answers. If any answer is blocked, deny.
+- Follow redirects **manually** only (`follow_redirects=False`); statuses 301/302/303/307/308.
+- Cap hops with `URL_MAX_REDIRECTS` (hard ceiling 20 in Settings).
+- On each hop: normalize → provider registry → DNS → IP classification → connect-time DNS re-check.
+- Do not trust “same hostname” redirects without re-validation.
+- Do not follow redirects to unsupported providers (same-provider policy in PR2).
+- Reject HTTPS→HTTP downgrade (`INVALID_REDIRECT`).
+- Do not return full Location/query or resolved IPs to API clients.
+- Connect-time strategy: re-resolve immediately before each request; both answer sets must be public and non-empty with a non-empty **intersection** (CDN rotation tolerant; not IP pinning). Keep hostname for TLS SNI/certs (no TLS verification disable). Residual TOCTOU documented in ADR 0005.
+- Provider HEAD→GET fallback statuses live on the provider descriptor (VK: 418/405/501; Rutube: 405/501). Fallback is transport compatibility only; 418 is never itself a successful probe.
 
 ### Ports
 
@@ -63,20 +72,20 @@ Checks apply to **both** IPv4 and IPv6.
 ### Provider hostname allowlist
 
 - Only explicitly allowlisted hostnames (and explicitly listed subdomains) are accepted.
-- Matching must be **label-boundary safe**:
-  - do **not** use naive `endswith("vk.com")`;
-  - `vk.com.attacker.example` must not match `vk.com`;
-  - `notvk.com` must not match `vk.com`;
-  - `evil.vk.com` is allowed only if `evil.vk.com` or a documented `*.vk.com` rule is explicitly configured.
-- Username/password or userinfo containing a trusted hostname must not satisfy the allowlist.
+- Matching must be **label-boundary safe** (no naive `endswith`).
 
-### Probe limits
+### Probe limits (PR2)
 
-For any preflight/probe HTTP request:
+For diagnostic/preflight HTTP (`SafeHTTPClient` / `POST /api/v1/media/probe`):
 
-- `OUTBOUND_CONNECT_TIMEOUT_SECONDS` and `OUTBOUND_READ_TIMEOUT_SECONDS`;
-- maximum response size;
-- redirect cap as above.
+- timeouts: `OUTBOUND_CONNECT_TIMEOUT_SECONDS`, `OUTBOUND_READ_TIMEOUT_SECONDS`, `OUTBOUND_TOTAL_TIMEOUT_SECONDS`;
+- soft body read: `OUTBOUND_PROBE_BODY_BYTES` (stop after enough diagnostic bytes);
+- hard body cap: `OUTBOUND_MAX_RESPONSE_BYTES` (fail on overflow; must be ≥ probe soft cap);
+- content types: `OUTBOUND_ALLOWED_CONTENT_TYPES` (GET requires Content-Type; missing → deny);
+- methods: HEAD and limited GET only (`http.methodUsed` reports which succeeded);
+- User-Agent: `OUTBOUND_USER_AGENT`.
+
+This probe is **not** media metadata extraction and must not download full media files.
 
 ## Error mapping (public)
 
@@ -86,21 +95,22 @@ Prefer stable codes from `docs/api/error-codes.md`:
 - parse/credential/port issues → `INVALID_URL`
 - host not allowlisted → `UNSUPPORTED_PROVIDER`
 - private/metadata/localhost → `BLOCKED_DESTINATION`
-- too many redirects → `REDIRECT_LIMIT_EXCEEDED`
+- too many redirects / loops → `REDIRECT_LIMIT_EXCEEDED`
+- bad/missing Location, HTTPS downgrade → `INVALID_REDIRECT`
+- oversized body → `RESPONSE_TOO_LARGE`
+- disallowed/missing MIME on GET → `UNSUPPORTED_CONTENT_TYPE`
+- connect/TLS failures → `SOURCE_UNAVAILABLE`
+- timeouts → `SOURCE_TIMEOUT`
 
-Do not return raw resolver internals or internal IPs to clients.
+Do not return raw resolver internals, exception strings, or internal IPs to clients.
 
 ## Test vectors
 
-Machine-readable cases live in:
-
-`backend/tests/fixtures/url_security_cases.json`
-
-Schema is documented in that file’s `schema` field. PR1 executes all `stage=validate` cases against `URLValidator` with `FakeDnsResolver`. Cases marked `stage=redirect_future` remain documented until redirect re-validation ships.
+`backend/tests/fixtures/url_security_cases.json` — PR1/PR2 execute `validate` and `network` stages with fake DNS and `httpx.MockTransport`.
 
 ## Related documents
 
 - [Threat model](threat-model.md)
 - [Error codes](../api/error-codes.md)
-- [ADR 0003](../adr/0003-security-boundaries-before-media-processing.md)
 - [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md)
+- [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md)

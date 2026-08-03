@@ -14,6 +14,7 @@ from fetchnow.core.errors import register_exception_handlers
 from fetchnow.core.logging import configure_logging
 from fetchnow.core.middleware import RequestIdMiddleware
 from fetchnow.db.session import create_engine
+from fetchnow.network.client import SafeHTTPClient
 from fetchnow.url.dns import SystemDnsResolver
 from fetchnow.url.providers import ProviderRegistry
 from fetchnow.url.validate import URLValidator
@@ -27,18 +28,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine(settings)
+        resolver = SystemDnsResolver(
+            timeout_seconds=settings.dns_resolution_timeout_seconds
+        )
+        registry = ProviderRegistry.from_settings(settings)
+        validator = URLValidator(settings, registry=registry, resolver=resolver)
+        http_client = SafeHTTPClient(
+            settings,
+            validator=validator,
+            resolver=resolver,
+        )
         app.state.engine = engine
         app.state.settings = settings
-        app.state.url_validator = URLValidator(
-            settings,
-            registry=ProviderRegistry.from_settings(settings),
-            resolver=SystemDnsResolver(
-                timeout_seconds=settings.dns_resolution_timeout_seconds
-            ),
-        )
+        app.state.url_validator = validator
+        app.state.safe_http_client = http_client
         try:
             yield
         finally:
+            await http_client.aclose()
             await engine.dispose()
 
     app = FastAPI(

@@ -1,6 +1,6 @@
 # API error code registry
 
-Status: Accepted for PR0B · Partially implemented in runtime (PR1 validation codes)
+Status: Accepted for PR0B · Runtime codes for validation (PR1) and outbound probe (PR2)
 
 Envelope shape (already used by the API foundation):
 
@@ -23,7 +23,10 @@ Envelope shape (already used by the API foundation):
 | `UNSUPPORTED_PROVIDER` | 422 | Provider/host not supported | no | no | Full allowlist contents |
 | `BLOCKED_DESTINATION` | 422 | Destination not allowed | no | no | Resolved private IPs, DNS answers |
 | `REDIRECT_LIMIT_EXCEEDED` | 422 | Too many redirects | no | no | Full redirect chain URLs |
-| `SOURCE_UNAVAILABLE` | 502 | Source could not be fetched | soft | yes (limited) | Upstream headers/body |
+| `INVALID_REDIRECT` | 422 | Redirect target not accepted | no | no | Location header, query tokens |
+| `UNSUPPORTED_CONTENT_TYPE` | 422 | Response content type not allowed | no | no | Raw Content-Type header bag |
+| `RESPONSE_TOO_LARGE` | 413 | Response exceeded allowed size | no | no | Exact byte counters beyond public message |
+| `SOURCE_UNAVAILABLE` | 502 | Source could not be fetched | soft | yes (limited) | Upstream headers/body, TLS internals, peer IPs |
 | `SOURCE_TIMEOUT` | 504 | Source timed out | soft | yes (limited) | Peer IPs, exact syscall errors |
 | `RATE_LIMITED` | 429 | Too many requests | yes | yes (honor Retry-After) | Per-user internal quotas math |
 | `CAPACITY_UNAVAILABLE` | 503 | Temporary capacity limit | yes | yes | Disk paths, free-byte counts |
@@ -48,4 +51,5 @@ New codes require a docs update in this registry before public clients depend on
 ## Related documents
 
 - [URL validation policy](../security/url-validation-policy.md)
+- [ADR 0005 — safe outbound HTTP](../adr/0005-safe-outbound-http-and-redirects.md)
 - [Capacity policy](../operations/capacity-policy.md)

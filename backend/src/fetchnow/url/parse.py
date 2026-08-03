@@ -123,9 +123,7 @@ def parse_and_normalize(
         # Unexpected colon in hostname
         raise_validation_error("INVALID_URL")
 
-    normalized_host = (
-        host.lower() if _is_probably_ipv6(host) else _idna_hostname(host)
-    )
+    normalized_host = host.lower() if _is_probably_ipv6(host) else _idna_hostname(host)
 
     try:
         port = parsed.port

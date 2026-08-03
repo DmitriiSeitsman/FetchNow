@@ -18,7 +18,7 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "url_security_cases.json"
 MIN_CASES = 35
 REQUIRED_CASE_FIELDS = ("id", "url", "expected", "reason_code", "rationale", "stage")
 ALLOWED_EXPECTED = frozenset({"allow", "deny"})
-ALLOWED_STAGES = frozenset({"validate", "redirect_future"})
+ALLOWED_STAGES = frozenset({"validate", "network"})
 
 
 @pytest.fixture(scope="module")
@@ -31,11 +31,11 @@ def fixture_payload() -> dict[str, Any]:
 def test_fixture_is_valid_json_object(fixture_payload: dict[str, Any]) -> None:
     assert "cases" in fixture_payload
     assert "schema" in fixture_payload
-    assert fixture_payload.get("schema_version") == 2
+    assert fixture_payload.get("schema_version") >= 2
 
 
 def test_fixture_has_minimum_case_count(fixture_payload: dict[str, Any]) -> None:
-    assert len(fixture_payload["cases"]) >= MIN_CASES
+    assert len(fixture_payload["cases"]) >= 50
 
 
 def test_case_ids_are_unique(fixture_payload: dict[str, Any]) -> None:
@@ -63,9 +63,11 @@ def test_every_case_is_categorized(fixture_payload: dict[str, Any]) -> None:
 
 def test_redirect_future_cases_are_documented(fixture_payload: dict[str, Any]) -> None:
     deferred = [c for c in fixture_payload["cases"] if c["stage"] == "redirect_future"]
-    assert deferred, "expected at least one redirect_future case"
-    for case in deferred:
-        assert case.get("notes"), f"{case['id']} needs documented deferral reason"
+    assert not deferred, "redirect_future cases must be promoted to network in PR2"
+    network = [c for c in fixture_payload["cases"] if c["stage"] == "network"]
+    assert network, "expected network-stage cases"
+    for case in network:
+        assert case.get("rationale")
 
 
 def _settings() -> Settings:

@@ -86,6 +86,42 @@ class Settings(BaseSettings):
     provider_vk_enabled: bool = Field(default=True, alias="PROVIDER_VK_ENABLED")
     provider_rutube_enabled: bool = Field(default=True, alias="PROVIDER_RUTUBE_ENABLED")
 
+    # Safe outbound HTTP (PR2)
+    outbound_connect_timeout_seconds: float = Field(
+        default=5.0,
+        alias="OUTBOUND_CONNECT_TIMEOUT_SECONDS",
+        gt=0,
+    )
+    outbound_read_timeout_seconds: float = Field(
+        default=10.0,
+        alias="OUTBOUND_READ_TIMEOUT_SECONDS",
+        gt=0,
+    )
+    outbound_total_timeout_seconds: float = Field(
+        default=15.0,
+        alias="OUTBOUND_TOTAL_TIMEOUT_SECONDS",
+        gt=0,
+    )
+    outbound_max_response_bytes: int = Field(
+        default=1_048_576,
+        alias="OUTBOUND_MAX_RESPONSE_BYTES",
+        gt=0,
+    )
+    outbound_probe_body_bytes: int = Field(
+        default=131_072,
+        alias="OUTBOUND_PROBE_BODY_BYTES",
+        gt=0,
+    )
+    outbound_user_agent: str = Field(
+        default="FetchNow/1.0",
+        alias="OUTBOUND_USER_AGENT",
+        min_length=1,
+    )
+    outbound_allowed_content_types: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["text/html", "application/json", "text/plain"],
+        alias="OUTBOUND_ALLOWED_CONTENT_TYPES",
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -96,6 +132,11 @@ class Settings(BaseSettings):
     def _parse_ports(cls, value: Any) -> list[int]:
         return _split_csv_ports(value)
 
+    @field_validator("outbound_allowed_content_types", mode="before")
+    @classmethod
+    def _parse_content_types(cls, value: Any) -> list[str]:
+        return [item.lower() for item in _split_csv(value)]
+
     @model_validator(mode="after")
     def _validate_url_policy(self) -> Settings:
         if not self.url_allowed_schemes:
@@ -105,6 +146,19 @@ class Settings(BaseSettings):
         for scheme in self.url_allowed_schemes:
             if scheme not in {"http", "https"}:
                 raise ValueError(f"Unsupported configured scheme: {scheme}")
+        if self.url_max_redirects > 20:
+            raise ValueError("URL_MAX_REDIRECTS must be <= 20")
+        if not self.outbound_allowed_content_types:
+            raise ValueError("OUTBOUND_ALLOWED_CONTENT_TYPES must not be empty")
+        if self.outbound_probe_body_bytes > self.outbound_max_response_bytes:
+            raise ValueError(
+                "OUTBOUND_PROBE_BODY_BYTES must be <= OUTBOUND_MAX_RESPONSE_BYTES"
+            )
+        if self.outbound_total_timeout_seconds < self.outbound_connect_timeout_seconds:
+            raise ValueError(
+                "OUTBOUND_TOTAL_TIMEOUT_SECONDS must be >= "
+                "OUTBOUND_CONNECT_TIMEOUT_SECONDS"
+            )
         return self
 
 

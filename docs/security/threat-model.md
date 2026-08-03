@@ -15,7 +15,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Read internal APIs, cloud metadata, or scan private networks |
 | Mitigation | Scheme allowlist; block private/link-local/metadata ranges; DNS re-check; redirect re-validation; provider hostname allowlist (`url-validation-policy.md`) |
 | Residual risk | Novel IP encodings, shared hosting confused-deputy cases |
-| Planned PR | Spec: PR0B; executable validator: **PR1**; connect-time revalidation: future network PR |
+| Planned PR | Spec: PR0B; validator: **PR1**; outbound + redirects: **PR2** (ADR 0005) |
 
 ### DNS rebinding
 
@@ -23,9 +23,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Hostname resolves to public IP at check time, then to private IP at connect time |
 | Impact | Bypass pre-connect SSRF filters |
-| Mitigation | Resolve, validate every address, connect to pinned address or re-validate immediately before connect; short TTL awareness; no long-lived “trusted hostname” cache without re-check |
-| Residual risk | TOCTOU on some OS resolvers |
-| Planned PR | Media-intake / outbound HTTP client PR |
+| Mitigation | Resolve, validate every address; connect-time re-resolve; require non-empty **intersection** of public address sets (CDN-tolerant); no TLS disable / no claimed full IP pinning |
+| Residual risk | TOCTOU after connect-time re-resolve during TCP/TLS handshake; intersection ≠ pinning (ADR 0005) |
+| Planned PR | **PR2** best-effort intersection; residual risk remains |
 
 ### Localhost and private address access
 
@@ -35,7 +35,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Same as SSRF |
 | Mitigation | Explicit deny lists for names and resolved addresses (v4+v6) |
 | Residual risk | Misconfigured custom allow exceptions in future ops |
-| Planned PR | Media-intake PR |
+| Planned PR | **PR1** + **PR2** redirect hops |
 
 ### IPv4 and IPv6 private ranges
 
@@ -45,7 +45,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Internal network access |
 | Mitigation | Classify and deny all non-public destinations after resolution, including IPv4-mapped IPv6 |
 | Residual risk | New special-use ranges over time — keep classifier updated |
-| Planned PR | Media-intake PR |
+| Planned PR | **PR1** (literals + DNS answers) |
 
 ### Link-local and metadata endpoints
 
@@ -55,7 +55,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Cloud credential theft |
 | Mitigation | Hard deny metadata and link-local; prefer instance policies that block IMDS from app network namespace where possible |
 | Residual risk | Provider-specific metadata IPs |
-| Planned PR | Media-intake + deploy hardening PR |
+| Planned PR | **PR1**/**PR2** + deploy hardening |
 
 ### Redirect chains
 
@@ -63,9 +63,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Allowed host redirects to private IP or disallowed host |
 | Impact | SSRF / open redirect into internal fetch |
-| Mitigation | Re-validate every hop; `MAX_REDIRECTS`; fail closed |
-| Residual risk | Protocol downgrade tricks if http allowed carelessly |
-| Planned PR | Media-intake PR |
+| Mitigation | Manual redirects; re-validate every hop; `URL_MAX_REDIRECTS`; no HTTPS downgrade; same-provider policy |
+| Residual risk | Future cross-provider allow rules must stay explicit |
+| Planned PR | **PR2** |
 
 ### Maliciously large responses
 
@@ -73,9 +73,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Huge Content-Length or endless stream |
 | Impact | Disk/memory exhaustion |
-| Mitigation | `MAX_SOURCE_FILE_BYTES` / read caps; timeouts; reject oversize early |
-| Residual risk | Lying Content-Length with chunked abuse — enforce byte counters |
-| Planned PR | Media pipeline PR |
+| Mitigation | Streamed `OUTBOUND_MAX_RESPONSE_BYTES` on probe; timeouts; reject oversize |
+| Residual risk | Full media downloads need separate caps (`MAX_SOURCE_FILE_BYTES`) in media PR |
+| Planned PR | Probe caps: **PR2**; media file caps: later |
 
 ### Decompression bombs
 
@@ -83,9 +83,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Tiny compressed payload expands hugely |
 | Impact | CPU/memory exhaustion |
-| Mitigation | Cap decompressed size; avoid unbounded auto-decompress of untrusted bodies |
-| Residual risk | Novel codecs |
-| Planned PR | Media pipeline PR |
+| Mitigation | Cap decompressed bytes via streamed `OUTBOUND_MAX_RESPONSE_BYTES` on probe; avoid unbounded bodies |
+| Residual risk | Media pipeline needs stronger codec-aware limits |
+| Planned PR | Probe: **PR2**; media: later |
 
 ### Command injection
 

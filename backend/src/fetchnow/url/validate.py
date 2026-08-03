@@ -134,4 +134,5 @@ class URLValidator:
             provider_id=provider.id,
             provider_display_name=provider.display_name,
             url=normalized,
+            head_fallback_statuses=provider.head_fallback_statuses,
         )

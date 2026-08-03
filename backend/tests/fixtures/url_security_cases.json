@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "schema": {
     "description": "Machine-readable URL security vectors for the FetchNow URL validator. Cases with stage=validate are executed by the PR1 validator with an injectable DNS fake. Cases with stage=redirect_future are categorized for a later redirect-following PR.",
     "policy_under_test": "docs/security/url-validation-policy.md",
@@ -11,12 +11,13 @@
       "rationale": "Human-readable explanation of the expected decision (string, required).",
       "category": "Optional tag: allowlist | scheme | credentials | localhost | private | metadata | ipv6 | port | redirect | dns | encoding | deception.",
       "notes": "Optional extra context for implementers (string).",
-      "stage": "validate | redirect_future (required in PR1).",
+      "stage": "validate | network (required).",
       "dns_addresses": "Optional list of IP strings returned by FakeDnsResolver for this hostname.",
       "dns_behavior": "Optional: timeout | empty.",
       "expected_hostname": "Optional normalized hostname assertion.",
       "expected_provider": "Optional provider id on allow.",
-      "extra_allowlist_hosts": "Optional exact hosts added to a temporary test provider for this case."
+      "extra_allowlist_hosts": "Optional exact hosts added to a temporary test provider for this case.",
+      "network": "Optional MockTransport script for stage=network cases."
     },
     "test_allowlist_hosts": [
       "vk.com",
@@ -339,8 +340,18 @@
       "reason_code": "BLOCKED_DESTINATION",
       "rationale": "Even if the initial host is allowlisted, a redirect hop to a private IP must be denied after re-validation.",
       "category": "redirect",
-      "notes": "Implementers should simulate Location: https://192.168.0.5/ in validator integration tests.",
-      "stage": "redirect_future"
+      "notes": "Executed in PR2 with MockTransport; Location points at private IP.",
+      "stage": "network",
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/redirect-probe",
+            "status": 302,
+            "location": "https://192.168.0.5/"
+          }
+        ]
+      }
     },
     {
       "id": "deny-dns-private-answer",
@@ -431,6 +442,381 @@
       "rationale": "data: URLs are rejected.",
       "category": "scheme",
       "stage": "validate"
+    },
+    {
+      "id": "net-same-provider-redirect",
+      "url": "https://vk.com/start",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Same-provider redirect from vk.com to m.vk.com is allowed.",
+      "category": "redirect",
+      "stage": "network",
+      "expected_provider": "vk",
+      "expected_hostname": "m.vk.com",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/start",
+            "status": 302,
+            "location": "https://m.vk.com/done"
+          },
+          {
+            "url": "https://m.vk.com/done",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-relative-redirect",
+      "url": "https://vk.com/rel",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Relative redirect is resolved against current URL.",
+      "category": "redirect",
+      "stage": "network",
+      "expected_hostname": "vk.com",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/rel",
+            "status": 302,
+            "location": "/rel-final"
+          },
+          {
+            "url": "https://vk.com/rel-final",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-loop",
+      "url": "https://vk.com/loop-a",
+      "expected": "deny",
+      "reason_code": "REDIRECT_LIMIT_EXCEEDED",
+      "rationale": "A↔B redirect loop must stop.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/loop-a",
+            "status": 302,
+            "location": "https://vk.com/loop-b"
+          },
+          {
+            "url": "https://vk.com/loop-b",
+            "status": 302,
+            "location": "https://vk.com/loop-a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-limit",
+      "url": "https://vk.com/r1",
+      "expected": "deny",
+      "reason_code": "REDIRECT_LIMIT_EXCEEDED",
+      "rationale": "Exceeding URL_MAX_REDIRECTS fails closed.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "max_redirects": 1,
+        "hops": [
+          {
+            "url": "https://vk.com/r1",
+            "status": 302,
+            "location": "https://vk.com/r2"
+          },
+          {
+            "url": "https://vk.com/r2",
+            "status": 302,
+            "location": "https://vk.com/r3"
+          },
+          {
+            "url": "https://vk.com/r3",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-localhost",
+      "url": "https://vk.com/to-local",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Redirect to localhost is blocked.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/to-local",
+            "status": 302,
+            "location": "https://localhost/x"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-rfc1918",
+      "url": "https://vk.com/to-private",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Redirect to RFC1918 is blocked.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/to-private",
+            "status": 302,
+            "location": "https://10.0.0.8/x"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-metadata",
+      "url": "https://vk.com/to-meta",
+      "expected": "deny",
+      "reason_code": "BLOCKED_DESTINATION",
+      "rationale": "Redirect to cloud metadata IP is blocked.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/to-meta",
+            "status": 302,
+            "location": "https://169.254.169.254/latest/meta-data/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-deceptive",
+      "url": "https://vk.com/to-deceptive",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Redirect to deceptive suffix host is rejected.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/to-deceptive",
+            "status": 302,
+            "location": "https://vk.com.attacker.example/x"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-redirect-unsupported-provider",
+      "url": "https://vk.com/to-example",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_PROVIDER",
+      "rationale": "Redirect to example.com is unsupported.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/to-example",
+            "status": 302,
+            "location": "https://example.com/x"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-https-downgrade",
+      "url": "https://vk.com/down",
+      "expected": "deny",
+      "reason_code": "INVALID_REDIRECT",
+      "rationale": "HTTPS to HTTP downgrade is forbidden.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/down",
+            "status": 302,
+            "location": "http://vk.com/down2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-missing-location",
+      "url": "https://vk.com/noloc",
+      "expected": "deny",
+      "reason_code": "INVALID_REDIRECT",
+      "rationale": "Redirect without Location is invalid.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/noloc",
+            "status": 302
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-malformed-location",
+      "url": "https://vk.com/badloc",
+      "expected": "deny",
+      "reason_code": "INVALID_REDIRECT",
+      "rationale": "Malformed Location is invalid.",
+      "category": "redirect",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/badloc",
+            "status": 302,
+            "location": ":::not-a-url"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-response-too-large",
+      "url": "https://vk.com/huge",
+      "expected": "deny",
+      "reason_code": "RESPONSE_TOO_LARGE",
+      "rationale": "GET body exceeding limit is rejected.",
+      "category": "encoding",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "GET",
+        "max_bytes": 32,
+        "hops": [
+          {
+            "url": "https://vk.com/huge",
+            "status": 200,
+            "headers": {
+              "content-type": "text/plain"
+            },
+            "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-unsupported-content-type",
+      "url": "https://vk.com/mp4",
+      "expected": "deny",
+      "reason_code": "UNSUPPORTED_CONTENT_TYPE",
+      "rationale": "video/mp4 is not allowed for probe.",
+      "category": "encoding",
+      "stage": "network",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "GET",
+        "hops": [
+          {
+            "url": "https://vk.com/mp4",
+            "status": 200,
+            "headers": {
+              "content-type": "video/mp4"
+            },
+            "body": "data"
+          }
+        ]
+      }
+    },
+    {
+      "id": "net-head-ok",
+      "url": "https://vk.com/ok",
+      "expected": "allow",
+      "reason_code": "ok",
+      "rationale": "Successful HEAD probe on allowlisted host.",
+      "category": "allowlist",
+      "stage": "network",
+      "expected_hostname": "vk.com",
+      "dns_addresses": [
+        "8.8.8.8"
+      ],
+      "network": {
+        "method": "HEAD",
+        "hops": [
+          {
+            "url": "https://vk.com/ok",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html",
+              "content-length": "4"
+            }
+          }
+        ]
+      }
     }
   ]
 }

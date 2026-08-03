@@ -17,6 +17,11 @@ _SAFE_EXTRA_FIELDS = (
     "error_code",
     "duration_ms",
     "route",
+    "redirect_count",
+    "body_bytes_read",
+    "http_method",
+    "http_status",
+    "internal_reason",
 )
 
 
@@ -49,4 +54,8 @@ def configure_logging(level: str = "INFO") -> None:
     root.setLevel(level.upper())
 
     # Quiet noisy third-party loggers in production-shaped output.
+    # httpx/httpcore log full request URLs (including query) at INFO — never
+    # allow that in FetchNow process output.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
