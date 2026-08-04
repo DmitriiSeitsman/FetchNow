@@ -51,6 +51,34 @@ jobs:
       - name: Unit tests
         run: python -m pytest -q tests/pg_backup
 
+  pg-backup-integration:
+    name: Postgres backup restore integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Postgres backup restore integration
+        id: pg_backup_integration
+        env:
+          # Surfaced into make_project_name() for per-run uniqueness.
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/pg_backup_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-pg-backup-project.txt"
+      - name: Cleanup Postgres backup integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/pg_backup_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-pg-backup-project.txt" \
+            --compose-file compose.yaml \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -86,33 +114,6 @@ jobs:
         run: docker compose version
       - name: Compose contract check
         run: python3 scripts/compose_contract_check.py
-      - name: Postgres backup integration
-        id: pg_backup_integration
-        run: |
-          python3 scripts/pg_backup_integration_test.py \
-            --project-file "${RUNNER_TEMP}/fetchnow-pg-backup-project.txt"
-      - name: Cleanup Postgres backup integration project
-        if: always()
-        run: |
-          set -euo pipefail
-          PROJECT_FILE="${RUNNER_TEMP}/fetchnow-pg-backup-project.txt"
-          if [[ ! -f "${PROJECT_FILE}" ]]; then
-            echo "No project file; nothing to clean"
-            exit 0
-          fi
-          PROJECT="$(tr -d '[:space:]' < "${PROJECT_FILE}")"
-          case "${PROJECT}" in
-            fetchnow|fetchnow-staging|fetchnow-prod|fetchnow-backup-test|"")
-              echo "Refusing to clean forbidden project: '${PROJECT}'"
-              exit 1
-              ;;
-          esac
-          if [[ ! "${PROJECT}" =~ ^fetchnow-backup-test-[a-z0-9]{8,32}$ ]]; then
-            echo "Refusing unsafe project name: '${PROJECT}'"
-            exit 1
-          fi
-          echo "Cleaning Compose project ${PROJECT}"
-          docker compose --project-name "${PROJECT}" -f compose.yaml down -v --remove-orphans || true
       - name: Build API image
         uses: docker/build-push-action@v7
         with:

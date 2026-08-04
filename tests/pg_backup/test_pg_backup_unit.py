@@ -320,13 +320,12 @@ def test_attestation_rejects_untruthful_passed() -> None:
 
 
 def test_integration_project_name_safety() -> None:
-    import importlib.util
+    from fetchnow_pg_backup.integration_project import (
+        ProjectNameError,
+        assert_safe_project,
+        make_project_name,
+    )
 
-    path = ROOT / "scripts" / "pg_backup_integration_test.py"
-    spec = importlib.util.spec_from_file_location("pg_backup_integration_test", path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
     for bad in (
         "",
         "fetchnow",
@@ -337,13 +336,85 @@ def test_integration_project_name_safety() -> None:
         "other-project",
         "fetchnow-backup-test-SHORT",
     ):
-        with pytest.raises(SystemExit):
-            mod.assert_safe_project(bad)
-    good = mod.make_project_name()
+        with pytest.raises(ProjectNameError):
+            assert_safe_project(bad)
+    good = make_project_name()
     assert good.startswith("fetchnow-backup-test-")
-    assert mod.assert_safe_project(good) == good
-    # Two generated names should differ (collision extremely unlikely).
-    assert mod.make_project_name() != good
+    assert assert_safe_project(good) == good
+    assert make_project_name() != good
+
+
+def test_project_file_cleanup_validation(tmp_path: Path) -> None:
+    from fetchnow_pg_backup.integration_project import (
+        ProjectNameError,
+        load_project_file,
+    )
+
+    missing = tmp_path / "missing.txt"
+    with pytest.raises(ProjectNameError, match="missing"):
+        load_project_file(missing)
+
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n")
+    with pytest.raises(ProjectNameError, match="empty"):
+        load_project_file(empty)
+
+    for bad in (
+        "fetchnow",
+        "fetchnow-staging",
+        "fetchnow-prod",
+        "fetchnow-backup-test",
+    ):
+        path = tmp_path / f"{bad}.txt"
+        path.write_text(bad + "\n")
+        with pytest.raises(ProjectNameError):
+            load_project_file(path)
+
+    good = tmp_path / "good.txt"
+    good.write_text("fetchnow-backup-test-abcdef012345\n")
+    assert load_project_file(good) == "fetchnow-backup-test-abcdef012345"
+
+
+def test_ci_cleanup_refuses_missing_or_forbidden(tmp_path: Path) -> None:
+    import importlib.util
+
+    path = ROOT / "scripts" / "pg_backup_ci_cleanup.py"
+    spec = importlib.util.spec_from_file_location("pg_backup_ci_cleanup", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    missing = tmp_path / "nope.txt"
+    # Missing project file: refuse mutation, exit 0 (nothing to clean).
+    assert (
+        mod.main(
+            [
+                "--project-file",
+                str(missing),
+                "--compose-file",
+                str(ROOT / "compose.yaml"),
+                "--repo-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+
+    bad = tmp_path / "bad.txt"
+    bad.write_text("fetchnow-staging\n")
+    assert (
+        mod.main(
+            [
+                "--project-file",
+                str(bad),
+                "--compose-file",
+                str(ROOT / "compose.yaml"),
+                "--repo-root",
+                str(ROOT),
+            ]
+        )
+        == 1
+    )
 
 
 def _write_valid_backup(root: Path, backup_id: str, *, verified: bool = False) -> None:
