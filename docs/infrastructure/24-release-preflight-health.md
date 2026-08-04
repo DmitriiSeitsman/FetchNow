@@ -1,6 +1,6 @@
 # 24. Release identity, preflight & health gate (PRD1C1)
 
-**INFO:** This chapter documents repository tooling for immutable release identity, read-only staging preflight, and a Compose+HTTP health gate. It does **not** claim staging has been deployed. Deploy orchestration (PRD1C2) and automatic rollback (PRD1C3) are out of scope.
+**INFO:** This chapter documents repository tooling for immutable release identity, read-only staging preflight, and a Compose+HTTP health gate. It does **not** claim staging has been deployed. Exact-revision materialization and image build are in [глава 25](25-release-materialization-build.md) (PRD1C2). Container deploy/rollback (PRD1C3) remain out of scope.
 
 ## Scope (PRD1C1)
 
@@ -123,5 +123,5 @@ Health integration uses unique `fetchnow-health-test-<suffix>` only. Ancestry in
 | PRD1A Compose isolation | done |
 | PRD1B PostgreSQL backup tooling | done |
 | **PRD1C1 release identity / preflight / health** | this chapter |
-| PRD1C2 deploy command | not implemented |
-| PRD1C3 rollback | not implemented |
+| PRD1C2 materialize + image build | [глава 25](25-release-materialization-build.md) |
+| PRD1C3 deploy / rollback | not implemented |

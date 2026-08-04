@@ -30,7 +30,7 @@ Provider enable flags уже реализованы, но это startup configu
 
 Если `make release-health EXPECTED_REVISION=<sha>` падает:
 
-1. Не запускать deploy/rollback автоматически (PRD1C2/C3 ещё нет).
+1. Не запускать container deploy/rollback автоматически (PRD1C3 ещё нет). При подозрении на release drift — `make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` (PRD1C2, read-only).
 2. Смотреть безопасные diagnostics CLI (service/state/health/image/HTTP class) — не печатать `.env.staging` / `DATABASE_URL`.
 3. Сопоставить с `docker compose … ps --format json` и inspect health.
 4. Live fail → process/gateway; live OK + ready fail → PostgreSQL; tag/OCI mismatch → wrong release images.

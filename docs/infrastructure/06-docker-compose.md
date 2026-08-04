@@ -116,7 +116,7 @@ Application images use one variable `FETCHNOW_RELEASE_REVISION`:
 
 API and worker share `fetchnow-api:<revision>`. Web/gateway use the same revision. Postgres remains pinned. See [глава 24](24-release-preflight-health.md).
 
-Host Nginx/TLS, off-host backup copy, deploy/rollback automation — PRD1C2–PRD1D (logical backup tooling: PRD1B / [глава 15](15-backups-and-restore.md); preflight/health: PRD1C1 / [глава 24](24-release-preflight-health.md)).
+Host Nginx/TLS, off-host backup copy, container deploy/rollback automation — PRD1C3–PRD1D (logical backup tooling: PRD1B / [глава 15](15-backups-and-restore.md); preflight/health: PRD1C1 / [глава 24](24-release-preflight-health.md); exact-revision materialize + image build: PRD1C2 / [глава 25](25-release-materialization-build.md)).
 
 **CHECK:** rendered config может содержать пароль БД; не прикладывайте полный вывод к публичному тикету.
 

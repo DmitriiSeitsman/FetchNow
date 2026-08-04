@@ -117,7 +117,7 @@ make migration m="add something"
 
 Staging PostgreSQL backup/restore-verify tooling: `make pg-backup-create|verify|list|prune-dry` (see Infrastructure Handbook ch. 15). Isolated integration: `make pg-backup-integration` (unique `fetchnow-backup-test-<suffix>` project only).
 
-Release identity / read-only preflight & health (PRD1C1): `make release-preflight|release-health EXPECTED_REVISION=<40-char-sha>` (requires `.env.staging`; revision must already be contained in local `origin/main` — preflight does not fetch). Trusted-main ancestry fixture: `make release-ancestry-integration`. Isolated health integration: `make release-health-integration` (unique `fetchnow-health-test-<suffix>` only). No deploy/rollback CLI yet — see Infrastructure Handbook ch. 24.
+Release identity / read-only preflight & health (PRD1C1): `make release-preflight|release-health EXPECTED_REVISION=<40-char-sha>` (requires `.env.staging`; revision must already be contained in local `origin/main` — preflight does not fetch). Exact-revision materialization & image build (PRD1C2): `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` and `make release-verify ...` (no compose up). Isolated build integration: `make release-build-integration`. No deploy/rollback CLI yet — see Infrastructure Handbook ch. 24–25.
 
 ## Configuration
 
