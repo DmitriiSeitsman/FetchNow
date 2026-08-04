@@ -60,6 +60,9 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` | materialize archive + build images | modifying deploy-root only | нет* | medium; publishes `releases/<sha>` |
 | Release | `make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only release verify | read-only | нет* | low; OK/FAIL |
 | Release | `make release-build-integration` | isolated materialize/build IT | temp dirs only | нет* | medium; no compose up |
+| Release | `make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=... [BOOTSTRAP=1]` | application-only image-ID rollout | modifying app containers | нет* | high; stabilized commit or rollback |
+| Release | `make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback\|accept-target ENV_FILE=... DEPLOY_ROOT=...` | explicit unresolved-journal recovery | modifying app containers | нет* | high; explicit terminal action |
+| Release | `make release-rollout-integration` | isolated rollout/rollback IT | unique test project only | нет* | high; `fetchnow-rollout-test-*` only |
 | Release | `make release-test` | preflight/health unit tests | read-only | нет | low; pytest |
 
 | Release | `make release-health-integration` | isolated health integration | modifying test project | нет* | medium; unique `fetchnow-health-test-*` only |

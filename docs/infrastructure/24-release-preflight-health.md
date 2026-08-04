@@ -124,4 +124,6 @@ Health integration uses unique `fetchnow-health-test-<suffix>` only. Ancestry in
 | PRD1B PostgreSQL backup tooling | done |
 | **PRD1C1 release identity / preflight / health** | this chapter |
 | PRD1C2 materialize + image build | [глава 25](25-release-materialization-build.md) |
-| PRD1C3 deploy / rollback | not implemented |
+| PRD1C3A application activation / rollback | [глава 26](26-deployment-transaction-rollback.md) |
+| PRD1C3B migration transaction | not implemented |
+| PRD1D public publishing | not implemented |

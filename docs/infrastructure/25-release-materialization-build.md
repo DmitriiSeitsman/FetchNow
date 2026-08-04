@@ -81,4 +81,6 @@ Second prepare for the same SHA verifies and returns already prepared (no rebuil
 |---|---|
 | PRD1C1 preflight/health | done |
 | **PRD1C2 materialize + image build** | this chapter |
-| PRD1C3 deploy/rollback | not implemented |
+| PRD1C3A application activation / rollback | [глава 26](26-deployment-transaction-rollback.md) |
+| PRD1C3B migrations | not implemented |
+| PRD1D host/public publishing | not implemented |

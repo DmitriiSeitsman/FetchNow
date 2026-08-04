@@ -27,6 +27,9 @@ class HealthInput:
     expected_revision: str
     repo_root: Path
     gateway_base_url: str = "http://127.0.0.1:8091"
+    # When set (PRD1C3A image-ID activation), require exact inspect IDs for
+    # api/worker/web/gateway instead of tag-string matching alone.
+    expected_image_ids: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,27 +162,7 @@ def run_health(inp: HealthInput) -> HealthResult:
             # Prefer RepoTags from image inspect via Config.Image which may be ID;
             # use row Image field when available.
             image_ref = str(row.get("Image") or image)
-            if svc_name in {"api", "worker"}:
-                if f":{rev}" not in image_ref and not image_ref.endswith(f":{rev}"):
-                    # Also accept digest-only if label matches — still require tag in Image field
-                    if (
-                        not image_ref.endswith(rev)
-                        and f"fetchnow-api:{rev}" not in image_ref
-                    ):
-                        raise HealthError(
-                            f"{svc_name} image reference {image_ref!r} missing tag :{rev}"
-                        )
-            elif svc_name == "web":
-                if f"fetchnow-web:{rev}" not in image_ref and not image_ref.endswith(
-                    f":{rev}"
-                ):
-                    raise HealthError(f"web image {image_ref!r} missing tag :{rev}")
-            elif svc_name == "gateway":
-                if (
-                    f"fetchnow-gateway:{rev}" not in image_ref
-                    and not image_ref.endswith(f":{rev}")
-                ):
-                    raise HealthError(f"gateway image {image_ref!r} missing tag :{rev}")
+            image_id = str(info.get("Image") or "")
 
             if svc_name in {"api", "worker", "web", "gateway"}:
                 oci = labels.get(OCI_REVISION_LABEL)
@@ -187,8 +170,48 @@ def run_health(inp: HealthInput) -> HealthResult:
                     raise HealthError(
                         f"{svc_name} OCI revision label {oci!r} != {rev!r}"
                     )
+                expected_ids = inp.expected_image_ids
+                if expected_ids is not None:
+                    # Worker shares the API image ID contract.
+                    key = "api" if svc_name == "worker" else svc_name
+                    want = expected_ids.get(key)
+                    if not want:
+                        raise HealthError(f"missing expected image ID for {key}")
+                    if image_id != want:
+                        raise HealthError(
+                            f"{svc_name} image ID {image_id!r} != expected {want!r}"
+                        )
+                else:
+                    if svc_name in {"api", "worker"}:
+                        if (
+                            f":{rev}" not in image_ref
+                            and not image_ref.endswith(f":{rev}")
+                        ):
+                            if (
+                                not image_ref.endswith(rev)
+                                and f"fetchnow-api:{rev}" not in image_ref
+                            ):
+                                raise HealthError(
+                                    f"{svc_name} image reference {image_ref!r} "
+                                    f"missing tag :{rev}"
+                                )
+                    elif svc_name == "web":
+                        if (
+                            f"fetchnow-web:{rev}" not in image_ref
+                            and not image_ref.endswith(f":{rev}")
+                        ):
+                            raise HealthError(
+                                f"web image {image_ref!r} missing tag :{rev}"
+                            )
+                    elif svc_name == "gateway":
+                        if (
+                            f"fetchnow-gateway:{rev}" not in image_ref
+                            and not image_ref.endswith(f":{rev}")
+                        ):
+                            raise HealthError(
+                                f"gateway image {image_ref!r} missing tag :{rev}"
+                            )
 
-            image_id = info.get("Image")
             if svc_name == "api":
                 api_image_id = image_id
             if svc_name == "worker":

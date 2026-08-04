@@ -42,7 +42,9 @@ Internet
 
 **PRD1C1 (release identity / preflight / health):** immutable `FETCHNOW_RELEASE_REVISION`, revision-tagged images + OCI labels, read-only staging preflight и Compose+HTTP health gate реализованы в репозитории. Staging revision must already be contained in local `refs/remotes/origin/main` (feature-branch descendants rejected; preflight does not fetch). См. [главу 24](24-release-preflight-health.md).
 
-**PRD1C2 (materialize + image build):** exact `git archive` snapshot under explicit deploy root, application image build, immutable `release.json`, atomic publish — без container rollout. Deploy/rollback (PRD1C3) ещё не реализованы. См. [главу 25](25-release-materialization-build.md).
+**PRD1C2 (materialize + image build):** exact `git archive` snapshot under explicit deploy root, application image build, immutable `release.json`, atomic publish. См. [главу 25](25-release-materialization-build.md).
+
+**PRD1C3A (deployment transaction):** application-only activation from immutable image IDs, stabilization, journaled rollback and explicit recover are implemented in the repository; no database mutation occurs in this path. См. [главу 26](26-deployment-transaction-rollback.md). This does not claim staging is deployed.
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
@@ -89,3 +91,4 @@ Internet
 23. [Глоссарий](23-glossary.md)
 24. [Release identity, preflight & health (PRD1C1)](24-release-preflight-health.md)
 25. [Release materialization & image build (PRD1C2)](25-release-materialization-build.md)
+26. [Deployment transaction & rollback (PRD1C3A)](26-deployment-transaction-rollback.md)

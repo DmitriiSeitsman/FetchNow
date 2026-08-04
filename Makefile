@@ -1,7 +1,8 @@
 .PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config \
 	pg-backup-test pg-backup-integration pg-backup-create pg-backup-verify pg-backup-list pg-backup-prune-dry \
 	release-test release-preflight release-health release-health-integration release-ancestry-integration \
-	release-build-test release-prepare release-verify release-build-integration
+	release-build-test release-prepare release-verify release-build-integration \
+	release-rollout-test release-rollout release-recover release-rollout-integration
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
@@ -145,6 +146,35 @@ release-verify:
 
 release-build-integration:
 	$(PYTHON) scripts/release_build_integration_test.py
+
+release-rollout-test:
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py
+
+release-rollout:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
+	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
+	$(RELEASE) rollout \
+		--project-name fetchnow-staging \
+		--env-file "$(ENV_FILE)" \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)" \
+		$(if $(filter 1,$(BOOTSTRAP)),--bootstrap)
+
+release-recover:
+	@test -n "$(DEPLOYMENT_ID)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(ACTION)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	$(RELEASE) recover \
+		--project-name fetchnow-staging \
+		--env-file "$(ENV_FILE)" \
+		--deploy-root "$(DEPLOY_ROOT)" \
+		--deployment-id "$(DEPLOYMENT_ID)" \
+		--action "$(ACTION)"
+
+release-rollout-integration:
+	$(PYTHON) scripts/release_rollout_integration_test.py
 
 staging-config:
 	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)
