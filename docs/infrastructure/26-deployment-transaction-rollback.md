@@ -1,0 +1,77 @@
+# 26. Deployment transaction & rollback (PRD1C3A)
+
+**INFO:** This chapter describes repository tooling for an application-only rollout transaction. It does **not** claim that staging is deployed.
+
+## Scope
+
+PRD1C3A activates only `api`, `worker`, `web`, and then `gateway`, using immutable image IDs recorded by PRD1C2. PostgreSQL is neither recreated nor migrated by `rollout`; the Alembic-head gate is read-only and fails closed when database and target heads differ.
+
+`current.json` is written atomically only after the target passes stabilization. Each attempt has a deployment journal with a plan, events, image override, and terminal result. Journals redact password and `DATABASE_URL` values.
+
+## Normal activation
+
+First prepare the exact trusted revision, then roll it out:
+
+```bash
+make release-prepare \
+  EXPECTED_REVISION=<40-char-sha> \
+  ENV_FILE=.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging
+
+make release-rollout \
+  EXPECTED_REVISION=<40-char-sha> \
+  ENV_FILE=.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging
+```
+
+The Make target fixes `--project-name fetchnow-staging`; it cannot be redirected to another project. Image tags are not the activation authority: the generated Compose override pins the inspected immutable image IDs from `release.json`.
+
+## Bootstrap
+
+The first application rollout requires an explicit acknowledgement:
+
+```bash
+make release-rollout \
+  EXPECTED_REVISION=<40-char-sha> \
+  ENV_FILE=.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging \
+  BOOTSTRAP=1
+```
+
+Bootstrap requires a healthy existing PostgreSQL container and refuses to run when application containers or `current.json` already exist. Database initialization/migrations remain a separately approved operation; this command does not perform them.
+
+## Recovery history
+
+When automatic rollback itself fails, the original deployment `result.json` (including `rollback_failed`) remains immutable forever. Operators run explicit recovery; each attempt creates a separate directory under `recoveries/<recovery-id>/` with its own plan, events, and terminal result. A successful recovery atomically publishes `resolution.json` referencing the SHA-256 hashes of the original deployment result and the successful recovery result. Failed recovery attempts also remain immutable; a later attempt uses a new recovery ID. Rollout remains blocked until `rollback_failed` is paired with a validated `resolution.json`.
+
+Recovery never overwrites deployment `result.json`. Bootstrap activation labels every recreated application container with `com.fetchnow.deployment-id` and `com.fetchnow.release-revision`; bootstrap failure cleanup removes only containers bearing the exact labels for that transaction.
+
+## Alembic head discovery
+
+Target Alembic heads are discovered via static AST parsing of migration files (no import/execution). Heads are revisions never referenced as a `down_revision` parent; `depends_on` is validated when present but does not change head calculation.
+
+## Automatic rollback and recovery
+
+After application activation begins, an unhealthy target causes an attempt to restore the previous application's immutable image IDs. `current.json` remains on the previous release unless the new target stabilizes successfully. A successful repeat of the current revision is idempotent: it verifies health without recreating services.
+
+If automatic rollback itself cannot complete, inspect the deployment journal and choose an explicit action:
+
+```bash
+make release-recover \
+  DEPLOYMENT_ID=<journal-uuid> \
+  ACTION=rollback \
+  ENV_FILE=.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging
+```
+
+`ACTION=accept-target` is only for an operator who has verified that the target is healthy and should become current. Recovery does not introduce a database migration path.
+
+## Boundaries
+
+| Milestone | Responsibility |
+|---|---|
+| PRD1C3A (this chapter) | application image-ID activation, health stabilization, journaled rollback/recover; no DB mutation |
+| PRD1C3B | migration orchestration and any explicitly approved schema-change transaction |
+| PRD1D | host Nginx/TLS/public publish and production operationalization |
+
+Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, or `fetchnow-prod`.

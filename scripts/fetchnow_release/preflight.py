@@ -27,6 +27,20 @@ from .password import PasswordError, validate_staging_password
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 from .roots import RootPathError, validate_operator_root
+from .rollout_project import RolloutProjectError, assert_rollout_project
+
+
+def _assert_allowed_project(name: str) -> None:
+    """Allow production staging or validated rollout integration projects."""
+    if name == STAGING_PROJECT:
+        return
+    try:
+        assert_rollout_project(name)
+    except RolloutProjectError as exc:
+        raise PreflightError(
+            f"project name must be {STAGING_PROJECT!r} or a validated "
+            f"fetchnow-rollout-test-* name, got {name!r}"
+        ) from exc
 
 
 class PreflightError(ValueError):
@@ -66,17 +80,17 @@ class PreflightResult:
 def run_preflight(inp: PreflightInput) -> PreflightResult:
     messages: list[str] = []
     try:
-        if inp.project_name != STAGING_PROJECT:
-            raise PreflightError(
-                f"project name must be exactly {STAGING_PROJECT!r}, got {inp.project_name!r}"
-            )
+        _assert_allowed_project(inp.project_name)
         if not inp.compose_files:
             raise PreflightError("at least one Compose file is required")
 
         env = load_env_file(inp.env_file)
         require_keys(env, REQUIRED_ENV)
-        if env.get("COMPOSE_PROJECT_NAME") != STAGING_PROJECT:
-            raise PreflightError("COMPOSE_PROJECT_NAME must be fetchnow-staging")
+        if env.get("COMPOSE_PROJECT_NAME") != inp.project_name:
+            raise PreflightError(
+                "COMPOSE_PROJECT_NAME must match --project-name "
+                f"({inp.project_name!r})"
+            )
 
         expected = validate_full_sha(inp.expected_revision)
         env_rev = validate_full_sha(env["FETCHNOW_RELEASE_REVISION"])
@@ -126,7 +140,7 @@ def run_preflight(inp: PreflightInput) -> PreflightResult:
             repo_root=inp.repo_root,
         )
         validate_staging_rendered(
-            cfg, expected_revision=expected, expected_project=STAGING_PROJECT
+            cfg, expected_revision=expected, expected_project=inp.project_name
         )
         messages.append("OK: staging deployment preflight passed")
         messages.append(f"revision={expected}")

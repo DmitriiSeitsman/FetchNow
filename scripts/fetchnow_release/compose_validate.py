@@ -9,7 +9,9 @@ from . import (
     DEFAULT_GATEWAY_PORT,
     EXPECTED_SERVICES,
     POSTGRES_IMAGE_PREFIX,
+    STAGING_PROJECT,
 )
+from .rollout_project import RolloutProjectError, assert_rollout_project
 from .revision import validate_full_sha
 
 
@@ -60,17 +62,24 @@ def validate_staging_rendered(
         raise ComposeContractError(
             f"gateway must bind loopback, got host_ip={host_ip!r}"
         )
+    expected_gateway_port = DEFAULT_GATEWAY_PORT
+    if expected_project != STAGING_PROJECT:
+        try:
+            assert_rollout_project(expected_project)
+        except RolloutProjectError as exc:
+            raise ComposeContractError(str(exc)) from exc
+        expected_gateway_port = int(published)
     if published not in {
-        str(DEFAULT_GATEWAY_PORT),
-        f"{DEFAULT_GATEWAY_LOOPBACK}:{DEFAULT_GATEWAY_PORT}",
+        str(expected_gateway_port),
+        f"{DEFAULT_GATEWAY_LOOPBACK}:{expected_gateway_port}",
     }:
         # Compose may split host_ip and published.
         if not (
             host_ip == DEFAULT_GATEWAY_LOOPBACK
-            and published == str(DEFAULT_GATEWAY_PORT)
+            and published == str(expected_gateway_port)
         ):
             raise ComposeContractError(
-                f"gateway must publish {DEFAULT_GATEWAY_LOOPBACK}:{DEFAULT_GATEWAY_PORT}, got {gp!r}"
+                f"gateway must publish {DEFAULT_GATEWAY_LOOPBACK}:{expected_gateway_port}, got {gp!r}"
             )
     if int(gp.get("target") or 0) != 8080:
         raise ComposeContractError("gateway target port must be 8080")

@@ -1,4 +1,4 @@
-"""CLI for FetchNow release preflight, health, prepare & verify (PRD1C1/C2)."""
+"""CLI for FetchNow release preflight, health, prepare, verify & rollout (PRD1C1–C3A)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
 from .preflight import PreflightInput, run_preflight
 from .prepare import PrepareInput, prepare_release
+from .recover import RecoverInput, recover_deployment
+from .rollout import RolloutInput, rollout_release
 from .verify_release import verify_prepared_release
 
 
@@ -35,7 +37,10 @@ def _compose_files(args: argparse.Namespace, repo: Path) -> tuple[Path, ...]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fetchnow_release",
-        description="FetchNow release preflight, health, prepare & verify",
+        description=(
+            "FetchNow release preflight, health, prepare, verify, "
+            "application rollout & recover"
+        ),
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -92,6 +97,50 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--expected-revision", required=True)
     ver.add_argument("--deploy-root", type=Path, required=True)
     ver.add_argument("--repo-root", type=Path, default=None)
+
+    roll = sub.add_parser(
+        "rollout",
+        help="Application-only rollout transaction (no DB mutation)",
+    )
+    roll.add_argument("--project-name", default=STAGING_PROJECT)
+    roll.add_argument("--env-file", type=Path, required=True)
+    roll.add_argument("--expected-revision", required=True)
+    roll.add_argument("--deploy-root", type=Path, required=True)
+    roll.add_argument("--repo-root", type=Path, default=None)
+    roll.add_argument(
+        "--gateway-base-url",
+        default="http://127.0.0.1:8091",
+    )
+    roll.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="First application rollout when current.json is absent",
+    )
+    roll.add_argument(
+        "--wait-lock",
+        action="store_true",
+        help="Wait for exclusive rollout lock (default: fail immediately)",
+    )
+
+    rec = sub.add_parser(
+        "recover",
+        help="Recover an unresolved deployment journal (explicit action)",
+    )
+    rec.add_argument("--project-name", default=STAGING_PROJECT)
+    rec.add_argument("--env-file", type=Path, required=True)
+    rec.add_argument("--deploy-root", type=Path, required=True)
+    rec.add_argument("--deployment-id", required=True)
+    rec.add_argument(
+        "--action",
+        required=True,
+        choices=("accept-target", "rollback"),
+    )
+    rec.add_argument("--repo-root", type=Path, default=None)
+    rec.add_argument(
+        "--gateway-base-url",
+        default="http://127.0.0.1:8091",
+    )
+    rec.add_argument("--wait-lock", action="store_true")
     return parser
 
 
@@ -99,6 +148,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     repo = (args.repo_root or _repo_root()).resolve()
+
+    # Refuse known unsafe bypass flags if ever passed as unknowns — argparse
+    # already rejects unknown options. Explicit denylist for help-text audits.
+    help_text = parser.format_help()
+    for banned in (
+        "skip-health",
+        "allow-dirty",
+        "skip-preflight",
+        "skip-db-check",
+        "test-mode",
+    ):
+        if banned in help_text:
+            print(f"ERROR: forbidden flag leaked into CLI: {banned}", file=sys.stderr)
+            return 2
 
     if args.command == "preflight":
         result = run_preflight(
@@ -162,6 +225,52 @@ def main(argv: list[str] | None = None) -> int:
             final,
             expected_revision=args.expected_revision,
             repo_root=repo,
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        return 0 if result.ok else 1
+
+    if args.command == "rollout":
+        base = args.gateway_base_url
+        if not base.startswith("http://127.0.0.1:") and not base.startswith(
+            "http://localhost:"
+        ):
+            print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
+            return 1
+        result = rollout_release(
+            RolloutInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                expected_revision=args.expected_revision,
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                gateway_base_url=base,
+                bootstrap=bool(args.bootstrap),
+                wait_lock=bool(args.wait_lock),
+            )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        return 0 if result.ok else 1
+
+    if args.command == "recover":
+        base = args.gateway_base_url
+        if not base.startswith("http://127.0.0.1:") and not base.startswith(
+            "http://localhost:"
+        ):
+            print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
+            return 1
+        result = recover_deployment(
+            RecoverInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                repo_root=repo,
+                deployment_id=args.deployment_id,
+                action=args.action,
+                gateway_base_url=base,
+                wait_lock=bool(args.wait_lock),
+            )
         )
         for line in result.messages:
             print(line, file=sys.stdout if result.ok else sys.stderr)

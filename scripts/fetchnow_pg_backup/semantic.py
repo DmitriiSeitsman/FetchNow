@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,35 +20,9 @@ class SemanticCheckResult:
 
 def discover_alembic_head_revisions(migrations_versions_dir: Path) -> tuple[str, ...]:
     """Discover Alembic head revision IDs from migration files (no DB access)."""
-    revision_re = re.compile(r'^revision:\s*str\s*=\s*["\']([^"\']+)["\']', re.M)
-    down_re = re.compile(r"^down_revision:\s*.*$", re.M)
-    revisions: dict[str, str | None] = {}
-    if not migrations_versions_dir.is_dir():
-        raise FileNotFoundError(f"migrations dir not found: {migrations_versions_dir}")
-    for path in sorted(migrations_versions_dir.glob("*.py")):
-        if path.name.startswith("__"):
-            continue
-        text = path.read_text(encoding="utf-8")
-        rev_m = revision_re.search(text)
-        if not rev_m:
-            continue
-        rev = rev_m.group(1)
-        down_line = None
-        for line in text.splitlines():
-            if line.startswith("down_revision:"):
-                down_line = line
-                break
-        _ = down_re  # pattern kept for clarity
-        if down_line is None or "None" in down_line.split("=", 1)[-1]:
-            revisions[rev] = None
-        else:
-            m = re.search(r'["\']([^"\']+)["\']', down_line.split("=", 1)[-1])
-            revisions[rev] = m.group(1) if m else None
-    pointed = {parent for parent in revisions.values() if parent}
-    heads = tuple(sorted(rev for rev in revisions if rev not in pointed))
-    if not heads:
-        raise RuntimeError("no Alembic head revisions discovered")
-    return heads
+    from .alembic_graph import discover_alembic_head_revisions as _discover
+
+    return _discover(migrations_versions_dir)
 
 
 def build_semantic_sql(*, expected_revisions: tuple[str, ...]) -> str:
