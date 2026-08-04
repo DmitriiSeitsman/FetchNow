@@ -40,7 +40,9 @@ Internet
 
 **PRD1B (PostgreSQL backup):** logical dump / restore-verify / retention tooling реализованы в репозитории. См. [главу 15](15-backups-and-restore.md).
 
-**PRD1C1 (release identity / preflight / health):** immutable `FETCHNOW_RELEASE_REVISION`, revision-tagged images + OCI labels, read-only staging preflight и Compose+HTTP health gate реализованы в репозитории. Staging revision must already be contained in local `refs/remotes/origin/main` (feature-branch descendants rejected; preflight does not fetch). Deploy automation (PRD1C2) и automatic rollback (PRD1C3) ещё не реализованы. Host Nginx/TLS и off-host copy остаются последующими milestones. См. [главу 24](24-release-preflight-health.md).
+**PRD1C1 (release identity / preflight / health):** immutable `FETCHNOW_RELEASE_REVISION`, revision-tagged images + OCI labels, read-only staging preflight и Compose+HTTP health gate реализованы в репозитории. Staging revision must already be contained in local `refs/remotes/origin/main` (feature-branch descendants rejected; preflight does not fetch). См. [главу 24](24-release-preflight-health.md).
+
+**PRD1C2 (materialize + image build):** exact `git archive` snapshot under explicit deploy root, application image build, immutable `release.json`, atomic publish — без container rollout. Deploy/rollback (PRD1C3) ещё не реализованы. См. [главу 25](25-release-materialization-build.md).
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
@@ -86,3 +88,4 @@ Internet
 22. [Учебные упражнения](22-learning-exercises.md)
 23. [Глоссарий](23-glossary.md)
 24. [Release identity, preflight & health (PRD1C1)](24-release-preflight-health.md)
+25. [Release materialization & image build (PRD1C2)](25-release-materialization-build.md)

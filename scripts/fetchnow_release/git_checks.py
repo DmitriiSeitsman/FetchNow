@@ -105,9 +105,7 @@ def assert_revision_contained_in_trusted_main(repo: Path, revision: str) -> str:
 
     # Direction is intentional and must not be reversed:
     # expected must be an ancestor of (or equal to) trusted main.
-    check = _run_git(
-        repo, "merge-base", "--is-ancestor", expected_oid, trusted_oid
-    )
+    check = _run_git(repo, "merge-base", "--is-ancestor", expected_oid, trusted_oid)
     if check.returncode != 0:
         raise GitCheckError(
             f"revision {expected_oid} is not contained in {TRUSTED_MAIN_REF} "

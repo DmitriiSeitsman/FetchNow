@@ -57,7 +57,11 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make release-preflight EXPECTED_REVISION=<sha>` | staging deployment preflight | read-only | нет* | low; OK/FAIL messages (no secrets) |
 | Release | `make release-health EXPECTED_REVISION=<sha>` | Compose+HTTP health gate | read-only | нет* | low; service/HTTP status |
 | Release | `make release-ancestry-integration` | temp-Git trusted-main ancestry + positive preflight | modifying temp dirs only | нет* | low/medium; disposable Git only |
+| Release | `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` | materialize archive + build images | modifying deploy-root only | нет* | medium; publishes `releases/<sha>` |
+| Release | `make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only release verify | read-only | нет* | low; OK/FAIL |
+| Release | `make release-build-integration` | isolated materialize/build IT | temp dirs only | нет* | medium; no compose up |
 | Release | `make release-test` | preflight/health unit tests | read-only | нет | low; pytest |
+
 | Release | `make release-health-integration` | isolated health integration | modifying test project | нет* | medium; unique `fetchnow-health-test-*` only |
 
 `*` Пользователь должен иметь разрешение Docker; membership в `docker` group практически даёт root-level control. `†` One-shot container создаётся/удаляется, но database не меняется.

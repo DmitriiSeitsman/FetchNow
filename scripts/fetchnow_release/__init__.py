@@ -1,8 +1,8 @@
-"""FetchNow release identity, staging preflight, and health gate (PRD1C1)."""
+"""FetchNow release identity, preflight, health, and materialization (PRD1C1/C2)."""
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 STAGING_PROJECT = "fetchnow-staging"
 EXPECTED_SERVICES = ("gateway", "api", "worker", "postgres", "web")

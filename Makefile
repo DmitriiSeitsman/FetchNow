@@ -1,6 +1,7 @@
 .PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config \
 	pg-backup-test pg-backup-integration pg-backup-create pg-backup-verify pg-backup-list pg-backup-prune-dry \
-	release-test release-preflight release-health release-health-integration release-ancestry-integration
+	release-test release-preflight release-health release-health-integration release-ancestry-integration \
+	release-build-test release-prepare release-verify release-build-integration
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
@@ -119,6 +120,31 @@ release-health:
 
 release-health-integration:
 	$(PYTHON) scripts/release_health_integration_test.py
+
+release-build-test:
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_release_build_unit.py
+
+release-prepare:
+	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	$(RELEASE) prepare \
+		--project-name fetchnow-staging \
+		--env-file "$(ENV_FILE)" \
+		--compose-file compose.yaml \
+		--compose-file compose.staging.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)"
+
+release-verify:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	$(RELEASE) verify-release \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)"
+
+release-build-integration:
+	$(PYTHON) scripts/release_build_integration_test.py
 
 staging-config:
 	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)
