@@ -4,7 +4,7 @@
 
 ## STOP conditions
 
-Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB, пока planned-only) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути. Host Nginx/TLS/backup automation остаются в PRD1B–PRD1D — этот gate list описывает полный staging go-live, не только PRD1A Compose contract.
+Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB, пока planned-only) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути. Host Nginx/TLS и deploy automation остаются в PRD1C–PRD1D; PRD1B закрывает logical backup/restore-verify tooling в репозитории — этот gate list описывает полный staging go-live.
 
 ## Этапы и gates
 
@@ -27,7 +27,7 @@
 17. **Neighbour checks.** Status units и их документированные local/public probes. **Gate:** без регрессий.
 18. **Persistence restart.** Записать DB marker безопасным test-процессом, restart/recreate по согласованному сценарию, сверить marker. **Gate:** данные сохранены; не использовать production records.
 19. **Resources.** `docker stats --no-stream`, `docker system df`, `free -h`, `df -hT`. **Gate:** запас выше thresholds.
-20. **Backup.** Сделать timestamped logical dump и проверить его структуру/restore в изолированной DB. **Gate:** off-server copy запланирована/подтверждена.
+20. **Backup.** `make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups`, затем `make pg-backup-verify ...`. **Gate:** verify passed; off-server copy всё ещё planned (не реализована в PRD1B).
 21. **Report.** Commit, config hash без secrets, migrations, timestamps, smoke, neighbours, backup, известные отклонения. **Gate:** другой человек может повторить/откатить.
 
 ## Безопасная отмена

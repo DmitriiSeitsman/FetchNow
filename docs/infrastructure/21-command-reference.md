@@ -50,8 +50,10 @@ Risk: low — чтение; medium — контролируемое измене
 | Disk | `df -hT` | bytes/filesystems | read-only | нет | low; usage table |
 | Disk | `df -ih` | inodes | read-only | нет | low; inode table |
 | Disk | `sudo du -xhd1 PATH` | directory sizes | read-only/heavy | да | medium; sizes |
-| Backup | `pg_dump ... -Fc > FILE` | logical DB dump | modifying file | зависит | medium; file, usually no stdout |
-| Backup | `pg_restore --list FILE` | inspect dump | read-only | нет | low; archive catalog |
+| Backup | `make pg-backup-create BACKUP_ROOT=...` | logical DB dump + manifest | modifying file | нет* | medium; backup id/sha |
+| Backup | `make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...` | restore drill + attestation | modifying temp DB | нет* | medium; passed/failed |
+| Backup | `make pg-backup-list BACKUP_ROOT=...` | inventory | read-only | нет | low; backup rows |
+| Backup | `make pg-backup-prune-dry BACKUP_ROOT=...` | retention dry-run | read-only | нет | low; keep/delete plan |
 
 `*` Пользователь должен иметь разрешение Docker; membership в `docker` group практически даёт root-level control. `†` One-shot container создаётся/удаляется, но database не меняется.
 

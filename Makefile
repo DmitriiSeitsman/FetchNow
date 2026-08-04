@@ -1,9 +1,12 @@
-.PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config
+.PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config \
+	pg-backup-test pg-backup-integration pg-backup-create pg-backup-verify pg-backup-list pg-backup-prune-dry
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
 WEB ?= web
 STAGING_COMPOSE ?= $(COMPOSE) --env-file .env.staging --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml
+PYTHON ?= python3.12
+PG_BACKUP ?= $(PYTHON) scripts/fetchnow_pg_backup_cli.py
 
 setup:
 	@command -v python3.12 >/dev/null || (echo "python3.12 is required" && exit 1)
@@ -25,11 +28,14 @@ logs:
 lint:
 	cd $(BACKEND) && .venv/bin/ruff check src tests
 	cd $(WEB) && npm run lint
+	$(BACKEND)/.venv/bin/ruff check scripts/fetchnow_pg_backup tests/pg_backup
 
 format:
 	cd $(BACKEND) && .venv/bin/ruff format src tests
 	cd $(BACKEND) && .venv/bin/ruff check --fix src tests
 	cd $(WEB) && npm run format
+	$(BACKEND)/.venv/bin/ruff format scripts/fetchnow_pg_backup tests/pg_backup
+	$(BACKEND)/.venv/bin/ruff check --fix scripts/fetchnow_pg_backup tests/pg_backup
 
 typecheck:
 	cd $(BACKEND) && .venv/bin/mypy src
@@ -37,6 +43,7 @@ typecheck:
 
 test:
 	cd $(BACKEND) && .venv/bin/pytest -q
+	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup
 
 build:
 	cd $(WEB) && npm run build
@@ -44,6 +51,42 @@ build:
 
 compose-check:
 	python3 scripts/compose_contract_check.py
+
+pg-backup-test:
+	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup
+
+pg-backup-integration:
+	$(PYTHON) scripts/pg_backup_integration_test.py
+
+pg-backup-create:
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	$(PG_BACKUP) create \
+		--project-name fetchnow-staging \
+		--env-file .env.staging \
+		--compose-file compose.yaml \
+		--compose-file compose.staging.yaml \
+		--backup-root "$(BACKUP_ROOT)"
+
+pg-backup-verify:
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...' && exit 1)
+	@test -n "$(BACKUP_ID)" || (echo 'Usage: make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...' && exit 1)
+	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	$(PG_BACKUP) verify \
+		--project-name fetchnow-staging \
+		--env-file .env.staging \
+		--compose-file compose.yaml \
+		--compose-file compose.staging.yaml \
+		--backup-root "$(BACKUP_ROOT)" \
+		--backup-id "$(BACKUP_ID)"
+
+pg-backup-list:
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-list BACKUP_ROOT=...' && exit 1)
+	$(PG_BACKUP) list --backup-root "$(BACKUP_ROOT)"
+
+pg-backup-prune-dry:
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-prune-dry BACKUP_ROOT=...' && exit 1)
+	$(PG_BACKUP) prune --backup-root "$(BACKUP_ROOT)" --keep $${KEEP:-7}
 
 staging-config:
 	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)

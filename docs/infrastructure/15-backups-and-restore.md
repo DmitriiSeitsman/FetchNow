@@ -2,33 +2,107 @@
 
 Backup — отдельная восстанавливаемая копия данных; snapshot фиксирует состояние volume/VM на момент времени, но может зависеть от того же provider/account и без DB coordination быть неконсистентным. Backup, для которого никогда не проверяли restore, — разновидность оптимизма, а не стратегия.
 
-## PostgreSQL logical dump
+## Scope (PRD1B)
 
-В репозитории backup script отсутствует. Ниже шаблон ручной будущей операции; имя файла содержит UTC timestamp, а credentials берутся из защищённого env, не из command line.
+Репозиторий предоставляет **database-level logical backup** PostgreSQL (custom-format `pg_dump`) для staging Compose project:
+
+- archive + SHA-256 + immutable `manifest.json`;
+- atomic publication;
+- structural validation (`pg_restore -l`);
+- restore drill в изолированную temporary database;
+- application/schema checks (Alembic);
+- list / count-based prune (default dry-run).
+
+**Не входит в PRD1B:** volume filesystem copy, backup `tmp`/media, restore поверх live DB, automatic rollback, cron/systemd, S3/off-host, encryption, `pg_basebackup`, WAL/PITR, host Nginx/TLS, deploy automation.
+
+Локальный backup root (например `/srv/fetchnow-staging/backups`) **не** является off-host защитой. Scheduling и off-host copy — отдельная последующая работа. Recovery ≠ automatic application rollback.
+
+## Tool
+
+```bash
+python3.12 scripts/fetchnow_pg_backup_cli.py --help
+# или Make-обёртки ниже
+```
+
+Обязательные операторские входы для create/verify: `--project-name`, `--env-file`, один или несколько `--compose-file` (порядок важен), `--backup-root`. Project name **не** выводится из CWD. Staging не должен подхватывать `compose.override.yaml`.
+
+Credentials не передаются в argv и не печатаются: утилиты выполняются внутри service `postgres`, используя его env (`POSTGRES_USER` / `POSTGRES_DB`).
+
+### Staging create
 
 ```bash
 umask 077
 install -d -m 0700 /srv/fetchnow-staging/backups
-docker compose --env-file .env.staging --project-name fetchnow-staging \
-  -f compose.yaml -f compose.staging.yaml exec -T postgres \
-  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
-  > /srv/fetchnow-staging/backups/fetchnow-YYYYMMDDTHHMMSSZ.dump
-stat -c '%a %s %n' /srv/fetchnow-staging/backups/fetchnow-YYYYMMDDTHHMMSSZ.dump
-pg_restore --list /srv/fetchnow-staging/backups/fetchnow-YYYYMMDDTHHMMSSZ.dump | head
+make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups
+# эквивалент:
+python3.12 scripts/fetchnow_pg_backup_cli.py create \
+  --project-name fetchnow-staging \
+  --env-file .env.staging \
+  --compose-file compose.yaml \
+  --compose-file compose.staging.yaml \
+  --backup-root /srv/fetchnow-staging/backups
 ```
 
-**WARNING modifying:** создаёт файл; shell redirection выполняется с правами текущего пользователя. Ожидаются mode 600 (при umask 077), ненулевой размер и читаемый catalog. Не использовать literal timestamp: подставить заранее проверенное UTC-значение без секретов.
+### Verify / list / prune
 
-## Restore test
+```bash
+make pg-backup-verify BACKUP_ROOT=/srv/fetchnow-staging/backups BACKUP_ID=20260804T012345Z_d26d920
+make pg-backup-list BACKUP_ROOT=/srv/fetchnow-staging/backups
+make pg-backup-prune-dry BACKUP_ROOT=/srv/fetchnow-staging/backups
+# фактическое удаление только явно:
+python3.12 scripts/fetchnow_pg_backup_cli.py prune \
+  --backup-root /srv/fetchnow-staging/backups --keep 7 --apply
+```
 
-Restore выполняют только в изолированную временную database/project, никогда поверх active DB. Согласовать имя, создать пустую test DB, применить `pg_restore`, сверить schema/Alembic и выборочные counts, затем удалить test DB отдельной утверждённой операцией. Здесь destructive-команды намеренно не приведены.
+Default retention keep count = **7**. Prune никогда не удаляет newest valid backup и newest successfully restore-verified backup; incomplete/malformed/symlink entries не удаляются. Default prune — dry-run.
 
-## Retention и off-server copy
+## Layout
 
-Политика должна задать, например, daily/weekly generations по объёму и RPO, но репозиторий её пока не фиксирует. До автоматизации оператор хранит inventory: timestamp, commit, DB revision, checksum, size, restore-test result. Хотя бы одна encrypted/authenticated copy должна находиться вне сервера и отдельного failure domain. Encryption — обязательное будущее усиление при появлении пользовательских данных; ключ нельзя хранить рядом с backup.
+```text
+/srv/fetchnow-staging/backups/
+  20260804T012345Z_<gitrev>/
+    database.dump          # mode 0600, custom format
+    manifest.json          # mode 0600, schema v1 (immutable after publish)
+    verifications/
+      verify_<ts>_passed.json
+  .lock
+```
 
-`fetchnow_tmp` не является backup и содержит временное состояние. Для будущих media artifacts действуют TTL и [file lifecycle policy](../product/file-lifecycle-policy.md), а не бессрочная архивация.
+Backup root и каталоги: `0700`. Root должен быть **вне** Git worktree (не `/`, не `$HOME`, не корень репозитория). Publication atomic: `.incomplete-<uuid>` → rename.
+
+## Manifest и checksum
+
+Manifest schema v1 фиксирует project, DB name, Postgres/`pg_dump` versions, compression, size, SHA-256, git revision (если доступен), structural validation result. Пароли, `DATABASE_URL` и содержимое таблиц не записываются.
+
+Перед publish обязателен `pg_restore -l`. Файл ненулевого размера без TOC **не** считается валидным backup.
+
+## Restore verification
+
+`verify` пересчитывает SHA-256, снова вызывает `pg_restore -l`, создаёт DB только с префиксом `fetchnow_restore_verify_`, восстанавливает с `--exit-on-error --no-owner --no-privileges`, проверяет:
+
+- соединение;
+- таблицу `alembic_version` (создаётся Alembic, не изобретена инструментом);
+- revision ∈ discovered Alembic heads репозитория (`version_num`);
+- required tables for the **current empty baseline** (`alembic_version` only — no invented application tables yet);
+- отсутствие invalid indexes.
+
+When real application tables appear in future migrations, extend semantic checks without changing the backup archive format.
+
+Temporary DB всегда удаляется в `finally`. Attestation пишется отдельно; published `manifest.json` не мутируется.
+
+## Password URL caveat
+
+Спецсимволы в `POSTGRES_PASSWORD` могут ломать raw URI interpolation `DATABASE_URL` (зафиксировано в PRD1A). PRD1B не меняет application config. Backup tool не парсит `DATABASE_URL` и не печатает пароль. **PRD1C** deployment preflight должен требовать URL-safe credentials или корректный encoding.
+
+## Tests
+
+```bash
+make pg-backup-test            # unit
+make pg-backup-integration     # unique project fetchnow-backup-test-<suffix> only
+```
+
+Integration always uses a per-run project name matching `fetchnow-backup-test-[a-z0-9]{8,32}` and refuses `fetchnow`, `fetchnow-staging`, `fetchnow-prod`, and the bare shared name `fetchnow-backup-test`. `down -v` is allowed only for that exact validated name.
 
 ## Ошибки и rollback
 
-Нулевой/truncated dump, world-readable mode или failed catalog check → backup недействителен. Не удалять предыдущую good copy. Restore rollback — прекратить работу с test target; изменение active DB требует отдельного recovery plan. **DANGER:** не писать пароль в filename/command, не хранить единственную копию на том же disk и не восстанавливать поверх production без подтверждённого downtime/backup.
+Нулевой/truncated dump, checksum mismatch, failed catalog check → backup/verify недействителен. Не удалять предыдущую good copy. Restore drill никогда не пишет в source application DB. **DANGER:** не писать пароль в filename/command; не считать local backup off-host copy; не восстанавливать поверх production без отдельного recovery plan.
