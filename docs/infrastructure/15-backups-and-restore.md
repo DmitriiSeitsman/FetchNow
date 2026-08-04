@@ -92,7 +92,7 @@ Temporary DB всегда удаляется в `finally`. Attestation пише�
 
 ## Password URL caveat
 
-Спецсимволы в `POSTGRES_PASSWORD` могут ломать raw URI interpolation `DATABASE_URL` (зафиксировано в PRD1A). PRD1B не меняет application config. Backup tool не парсит `DATABASE_URL` и не печатает пароль. **PRD1C** deployment preflight должен требовать URL-safe credentials или корректный encoding.
+Спецсимволы в `POSTGRES_PASSWORD` могут ломать raw URI interpolation `DATABASE_URL` (зафиксировано в PRD1A). PRD1B не меняет application config. Backup tool не парсит `DATABASE_URL` и не печатает пароль. **PRD1C1** staging preflight закрывает caveat: URL-safe password charset + length ≥ 32 (см. [главу 24](24-release-preflight-health.md)).
 
 ## Tests
 

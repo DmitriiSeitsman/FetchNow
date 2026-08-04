@@ -79,6 +79,65 @@ jobs:
             --compose-file compose.yaml \
             --repo-root "${GITHUB_WORKSPACE}"
 
+  release-unit:
+    name: Release preflight unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.4.1
+      - name: Unit tests
+        run: python -m pytest -q tests/release
+
+  release-ancestry-integration:
+    name: Release trusted-main ancestry integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Temporary Git ancestry + positive preflight
+        run: |
+          set -euo pipefail
+          python3 scripts/release_ancestry_integration_test.py
+
+  release-health-integration:
+    name: Release health integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Release health integration
+        id: release_health_integration
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_health_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-health-project.txt"
+      - name: Cleanup release health integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/release_health_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-health-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   web:
     name: Web
     runs-on: ubuntu-latest

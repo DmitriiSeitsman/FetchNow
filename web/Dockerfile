@@ -24,6 +24,10 @@ COPY docker/nginx.conf /etc/nginx/nginx.conf
 
 USER fetchnow
 
+# Late ARG so revision changes cannot reuse a stale LABEL from an earlier layer.
+ARG FETCHNOW_RELEASE_REVISION=local
+LABEL org.opencontainers.image.revision="${FETCHNOW_RELEASE_REVISION}"
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \

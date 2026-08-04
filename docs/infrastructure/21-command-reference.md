@@ -54,6 +54,11 @@ Risk: low — чтение; medium — контролируемое измене
 | Backup | `make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...` | restore drill + attestation | modifying temp DB | нет* | medium; passed/failed |
 | Backup | `make pg-backup-list BACKUP_ROOT=...` | inventory | read-only | нет | low; backup rows |
 | Backup | `make pg-backup-prune-dry BACKUP_ROOT=...` | retention dry-run | read-only | нет | low; keep/delete plan |
+| Release | `make release-preflight EXPECTED_REVISION=<sha>` | staging deployment preflight | read-only | нет* | low; OK/FAIL messages (no secrets) |
+| Release | `make release-health EXPECTED_REVISION=<sha>` | Compose+HTTP health gate | read-only | нет* | low; service/HTTP status |
+| Release | `make release-ancestry-integration` | temp-Git trusted-main ancestry + positive preflight | modifying temp dirs only | нет* | low/medium; disposable Git only |
+| Release | `make release-test` | preflight/health unit tests | read-only | нет | low; pytest |
+| Release | `make release-health-integration` | isolated health integration | modifying test project | нет* | medium; unique `fetchnow-health-test-*` only |
 
 `*` Пользователь должен иметь разрешение Docker; membership в `docker` group практически даёт root-level control. `†` One-shot container создаётся/удаляется, но database не меняется.
 

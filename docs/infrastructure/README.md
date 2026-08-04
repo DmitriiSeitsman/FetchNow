@@ -38,7 +38,9 @@ Internet
 
 **PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории.
 
-**PRD1B (PostgreSQL backup):** logical dump / restore-verify / retention tooling реализованы в репозитории; host Nginx/TLS, off-host copy, scheduling и deploy automation остаются PRD1C–PRD1D. См. [главу 15](15-backups-and-restore.md).
+**PRD1B (PostgreSQL backup):** logical dump / restore-verify / retention tooling реализованы в репозитории. См. [главу 15](15-backups-and-restore.md).
+
+**PRD1C1 (release identity / preflight / health):** immutable `FETCHNOW_RELEASE_REVISION`, revision-tagged images + OCI labels, read-only staging preflight и Compose+HTTP health gate реализованы в репозитории. Staging revision must already be contained in local `refs/remotes/origin/main` (feature-branch descendants rejected; preflight does not fetch). Deploy automation (PRD1C2) и automatic rollback (PRD1C3) ещё не реализованы. Host Nginx/TLS и off-host copy остаются последующими milestones. См. [главу 24](24-release-preflight-health.md).
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
@@ -48,11 +50,11 @@ Internet
 
 ### Быстрый маршрут для первого deployment
 
-[Основы сервера](01-server-basics.md) → [сеть](03-networking-and-ports.md) → [Compose](06-docker-compose.md) → [контейнеры FetchNow](07-fetch-now-containers.md) → [первое развёртывание](11-first-staging-deployment.md) → [healthchecks](13-healthchecks-and-smoke-tests.md) → [backup](15-backups-and-restore.md).
+[Основы сервера](01-server-basics.md) → [сеть](03-networking-and-ports.md) → [Compose](06-docker-compose.md) → [контейнеры FetchNow](07-fetch-now-containers.md) → [release preflight/health](24-release-preflight-health.md) → [первое развёртывание](11-first-staging-deployment.md) → [healthchecks](13-healthchecks-and-smoke-tests.md) → [backup](15-backups-and-restore.md).
 
 ### Маршрут для диагностики
 
-[Healthchecks](13-healthchecks-and-smoke-tests.md) → [логи и диагностика](14-logs-and-diagnostics.md) → [ёмкость](17-capacity-and-disk-management.md) → [инциденты](19-incident-response.md).
+[Release health gate](24-release-preflight-health.md) → [Healthchecks](13-healthchecks-and-smoke-tests.md) → [логи и диагностика](14-logs-and-diagnostics.md) → [ёмкость](17-capacity-and-disk-management.md) → [инциденты](19-incident-response.md).
 
 ### Маршрут для миграции
 
@@ -83,3 +85,4 @@ Internet
 21. [Справочник команд](21-command-reference.md)
 22. [Учебные упражнения](22-learning-exercises.md)
 23. [Глоссарий](23-glossary.md)
+24. [Release identity, preflight & health (PRD1C1)](24-release-preflight-health.md)

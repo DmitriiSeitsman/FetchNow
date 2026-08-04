@@ -107,6 +107,7 @@ make typecheck      # mypy + astro check
 make test           # pytest
 make compose-check  # Compose base/dev/staging isolation contract
 make pg-backup-test # PostgreSQL backup unit tests (PRD1B)
+make release-test   # release preflight/health unit tests (PRD1C1)
 make build          # web build + Compose image build
 make check          # lint + typecheck + test + compose-check + web build
 make migration m="add something"
@@ -115,6 +116,8 @@ make migration m="add something"
 `make compose-check` (and therefore full `make check`) requires Docker Compose v2 (`docker compose config`). It does not start containers or mutate volumes, but the Compose CLI normally needs a reachable Docker daemon.
 
 Staging PostgreSQL backup/restore-verify tooling: `make pg-backup-create|verify|list|prune-dry` (see Infrastructure Handbook ch. 15). Isolated integration: `make pg-backup-integration` (unique `fetchnow-backup-test-<suffix>` project only).
+
+Release identity / read-only preflight & health (PRD1C1): `make release-preflight|release-health EXPECTED_REVISION=<40-char-sha>` (requires `.env.staging`; revision must already be contained in local `origin/main` — preflight does not fetch). Trusted-main ancestry fixture: `make release-ancestry-integration`. Isolated health integration: `make release-health-integration` (unique `fetchnow-health-test-<suffix>` only). No deploy/rollback CLI yet — see Infrastructure Handbook ch. 24.
 
 ## Configuration
 

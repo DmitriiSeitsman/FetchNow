@@ -44,6 +44,10 @@ COPY --chown=fetchnow:fetchnow migrations ./migrations
 
 USER fetchnow
 
+# Late ARG so revision changes cannot reuse a stale LABEL from an earlier layer.
+ARG FETCHNOW_RELEASE_REVISION=local
+LABEL org.opencontainers.image.revision="${FETCHNOW_RELEASE_REVISION}"
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

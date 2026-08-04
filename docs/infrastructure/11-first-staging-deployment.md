@@ -4,7 +4,7 @@
 
 ## STOP conditions
 
-Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB, пока planned-only) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути. Host Nginx/TLS и deploy automation остаются в PRD1C–PRD1D; PRD1B закрывает logical backup/restore-verify tooling в репозитории — этот gate list описывает полный staging go-live.
+Остановиться, если DNS указывает не на `77.239.107.143`; `nginx -t` invalid; свободно меньше `MIN_FREE_DISK_BYTES` (example 1 GiB) или согласованного большего порога; CryptoBot/JustTwo не active; `8091` занят; rendered Compose публикует PostgreSQL/API; database/temp volume names совпадают с local или не являются staging-specific; secret env отсутствует или доступен group/other; нет проверенного backup/rollback пути; `FETCHNOW_RELEASE_REVISION` не полный SHA; `make release-preflight` / `make release-health` не проходят. Host Nginx/TLS и deploy/rollback automation остаются в PRD1C2–PRD1D; PRD1B закрывает logical backup tooling; PRD1C1 закрывает release identity + read-only preflight/health ([глава 24](24-release-preflight-health.md)). Этот gate list описывает полный staging go-live — репозиторий **не** утверждает, что staging уже развёрнут.
 
 ## Этапы и gates
 

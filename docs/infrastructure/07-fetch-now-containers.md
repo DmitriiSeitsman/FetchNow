@@ -6,10 +6,10 @@
 
 | Service | Image/build | Port/publish | User | Health, dependency, volume |
 |---|---|---|---|---|
-| `gateway` | `fetchnow-gateway:local`, `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет |
-| `web` | `fetchnow-web:local`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; dependency/volume нет |
-| `api` | `fetchnow-api:local`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; volume `tmp` |
-| `worker` | тот же backend image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; volume `tmp` |
+| `gateway` | `fetchnow-gateway:${FETCHNOW_RELEASE_REVISION}` (`local` or full SHA), `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет; OCI revision label |
+| `web` | `fetchnow-web:${FETCHNOW_RELEASE_REVISION}`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; dependency/volume нет; OCI revision label |
+| `api` | `fetchnow-api:${FETCHNOW_RELEASE_REVISION}`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; volume `tmp`; OCI revision label |
+| `worker` | тот же `fetchnow-api` image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; volume `tmp`; inherits API image label |
 | `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
 
 Все services находятся в bridge network `fetchnow` (Docker name `{project}_fetchnow`). `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
@@ -23,7 +23,7 @@
 
 ### api
 
-Image `fetchnow-api:local` собирается из `backend/Dockerfile`; процесс non-root UID 10001 и подключает logical volume `tmp` к `/var/lib/fetchnow/tmp` (Docker name `{project}_tmp`). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет.
+Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (development `local`, staging full SHA); процесс non-root UID 10001 и подключает logical volume `tmp` к `/var/lib/fetchnow/tmp` (Docker name `{project}_tmp`). Final stage несёт `org.opencontainers.image.revision`. Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет. См. [главу 24](24-release-preflight-health.md).
 
 ### worker
 

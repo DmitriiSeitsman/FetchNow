@@ -107,7 +107,16 @@ docker compose \
 
 **CHECK** rendered staging: пять services; единственная host-публикация gateway `127.0.0.1:8091→8080`; нет host ports у postgres/api/worker/web; volume names `fetchnow-staging_*`; нет bind mounts и reload/watch.
 
-Host Nginx/TLS, off-host backup copy, deploy automation — PRD1C–PRD1D (logical backup tooling: PRD1B / [глава 15](15-backups-and-restore.md)).
+## Release identity (PRD1C1)
+
+Application images use one variable `FETCHNOW_RELEASE_REVISION`:
+
+- development: defaults to `local`
+- staging: fail-closed full 40-char lowercase SHA on image tags and build args
+
+API and worker share `fetchnow-api:<revision>`. Web/gateway use the same revision. Postgres remains pinned. See [глава 24](24-release-preflight-health.md).
+
+Host Nginx/TLS, off-host backup copy, deploy/rollback automation — PRD1C2–PRD1D (logical backup tooling: PRD1B / [глава 15](15-backups-and-restore.md); preflight/health: PRD1C1 / [глава 24](24-release-preflight-health.md)).
 
 **CHECK:** rendered config может содержать пароль БД; не прикладывайте полный вывод к публичному тикету.
 

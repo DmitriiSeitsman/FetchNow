@@ -32,7 +32,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: fetchnow-api:local
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     command: ["fetchnow-api"]
     environment:
@@ -89,7 +91,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: fetchnow-api:local
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     command: ["fetchnow-worker"]
     environment:
@@ -122,7 +126,8 @@ services:
       dockerfile: Dockerfile
       args:
         PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost}
-    image: fetchnow-web:local
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     networks:
       - fetchnow
@@ -142,7 +147,9 @@ services:
     build:
       context: ./deploy/nginx
       dockerfile: Dockerfile
-    image: fetchnow-gateway:local
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-gateway:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     # Host ports are published only by compose.override.yaml (local) or
     # compose.staging.yaml / deploy/compose/compose.prod.yaml.
