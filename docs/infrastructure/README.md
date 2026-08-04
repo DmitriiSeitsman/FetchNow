@@ -34,9 +34,11 @@ Internet
 
 Реализованы URL validation (`POST /api/v1/media/validate`) и диагностический safe outbound probe (`POST /api/v1/media/probe`). Probe выполняет только контролируемый HEAD либо ограниченный GET и возвращает безопасные HTTP metadata; это не скачивание и не извлечение media metadata.
 
-Пока не реализованы yt-dlp, ffmpeg, media download pipeline, direct-download tickets, processed jobs, PostgreSQL job queue, реальная обработка worker, anonymous sessions, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker, rate limiting, host Nginx/TLS staging publish, автоматические backup/rollback, отдельный StorageProvider и S3 implementation.
+Пока не реализованы yt-dlp, ffmpeg, media download pipeline, direct-download tickets, processed jobs, PostgreSQL job queue, реальная обработка worker, anonymous sessions, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker, rate limiting, host Nginx/TLS staging publish, automatic deploy/rollback, отдельный StorageProvider или S3 implementation.
 
-**PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории; host Nginx/TLS/backups остаются PRD1B–PRD1D. См. [главу 06](06-docker-compose.md).
+**PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории.
+
+**PRD1B (PostgreSQL backup):** logical dump / restore-verify / retention tooling реализованы в репозитории; host Nginx/TLS, off-host copy, scheduling и deploy automation остаются PRD1C–PRD1D. См. [главу 15](15-backups-and-restore.md).
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 

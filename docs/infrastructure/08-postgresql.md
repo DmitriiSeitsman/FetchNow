@@ -31,3 +31,14 @@ docker compose --env-file .env.staging --project-name fetchnow-staging \
 Rollback приложения не означает Alembic downgrade: старая версия должна быть совместима с новой schema. Перед migration создают dump и читают migration code. Частично применённую/непонятную migration не «чинят» повторным downgrade на production; останавливают rollout и анализируют таблицу `alembic_version` и DDL.
 
 **DANGER:** не выполнять `DROP`, `TRUNCATE`, `down -v` или ручное удаление data directory. Не вставлять credentials в команды, history и отчёты.
+
+## Backup / restore verification (PRD1B)
+
+Logical dump + restore drill: см. [главу 15](15-backups-and-restore.md). Краткая staging-команда:
+
+```bash
+make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups
+make pg-backup-verify BACKUP_ROOT=/srv/fetchnow-staging/backups BACKUP_ID=<id>
+```
+
+Утилиты `pg_dump` / `pg_restore` / `psql` выполняются внутри container image `postgres:16.9-alpine`, чтобы клиент совпадал с сервером.

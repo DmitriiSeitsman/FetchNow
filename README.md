@@ -106,12 +106,15 @@ make format         # Ruff format/fix + Prettier
 make typecheck      # mypy + astro check
 make test           # pytest
 make compose-check  # Compose base/dev/staging isolation contract
+make pg-backup-test # PostgreSQL backup unit tests (PRD1B)
 make build          # web build + Compose image build
 make check          # lint + typecheck + test + compose-check + web build
 make migration m="add something"
 ```
 
 `make compose-check` (and therefore full `make check`) requires Docker Compose v2 (`docker compose config`). It does not start containers or mutate volumes, but the Compose CLI normally needs a reachable Docker daemon.
+
+Staging PostgreSQL backup/restore-verify tooling: `make pg-backup-create|verify|list|prune-dry` (see Infrastructure Handbook ch. 15). Isolated integration: `make pg-backup-integration` (unique `fetchnow-backup-test-<suffix>` project only).
 
 ## Configuration
 

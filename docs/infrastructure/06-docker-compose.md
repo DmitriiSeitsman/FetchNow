@@ -107,7 +107,7 @@ docker compose \
 
 **CHECK** rendered staging: пять services; единственная host-публикация gateway `127.0.0.1:8091→8080`; нет host ports у postgres/api/worker/web; volume names `fetchnow-staging_*`; нет bind mounts и reload/watch.
 
-`.env.staging` gitignored; tracked только `.env.staging.example`. Host Nginx/TLS, backups, deploy automation — PRD1B–PRD1D.
+Host Nginx/TLS, off-host backup copy, deploy automation — PRD1C–PRD1D (logical backup tooling: PRD1B / [глава 15](15-backups-and-restore.md)).
 
 **CHECK:** rendered config может содержать пароль БД; не прикладывайте полный вывод к публичному тикету.
 

@@ -8,7 +8,7 @@
 4. Не удалять containers/volumes и не перезагружать host в панике.
 5. Изолировать минимальный компонент: будущий provider/worker, а не весь health API, если это безопасно.
 6. Rotate exposed secrets, проверить filesystem ownership/changes и network connections.
-7. Восстановить из verified backup или known-good release по отдельному plan.
+7. Восстановить из verified backup или known-good release по отдельному plan (restore drill: глава 15; restore поверх live DB — отдельное решение, не автоматический rollback).
 8. Провести postmortem: timeline, root cause, impact, corrective actions без обвинений.
 
 ## Сценарии

@@ -34,6 +34,51 @@ jobs:
       - name: Pytest
         run: pytest -q
 
+  pg-backup:
+    name: Postgres backup unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.4.1
+      - name: Unit tests
+        run: python -m pytest -q tests/pg_backup
+
+  pg-backup-integration:
+    name: Postgres backup restore integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Postgres backup restore integration
+        id: pg_backup_integration
+        env:
+          # Surfaced into make_project_name() for per-run uniqueness.
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/pg_backup_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-pg-backup-project.txt"
+      - name: Cleanup Postgres backup integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/pg_backup_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-pg-backup-project.txt" \
+            --compose-file compose.yaml \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   web:
     name: Web
     runs-on: ubuntu-latest
