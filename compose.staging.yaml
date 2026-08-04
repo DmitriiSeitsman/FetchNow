@@ -20,23 +20,37 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}
 
   api:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
     environment:
       APP_ENV: ${APP_ENV:-staging}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
 
   worker:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
     environment:
       APP_ENV: ${APP_ENV:-staging}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
 
   web:
+    image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
     build:
       args:
         PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:?PUBLIC_SITE_URL must be set in .env.staging}
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
 
   gateway:
+    image: fetchnow-gateway:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
     # Loopback-only publish. Default host port 8091 for host Nginx reverse proxy.
     # Override with GATEWAY_PORT=127.0.0.1:<port> in .env.staging if needed.
     ports:

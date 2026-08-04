@@ -26,12 +26,25 @@
 
 Provider enable flags уже реализованы, но это startup configuration, а не динамический control plane: изменение требует проверить rendered config и recreate API. Job-level disable отсутствует. «Остановить worker» — **WARNING modifying** и допустимо только когда scope подтверждён; текущий worker media jobs всё равно не выполняет. API health можно оставить доступным, если он не продолжает опасную работу.
 
+## Health gate failure (PRD1C1)
+
+Если `make release-health EXPECTED_REVISION=<sha>` падает:
+
+1. Не запускать deploy/rollback автоматически (PRD1C2/C3 ещё нет).
+2. Смотреть безопасные diagnostics CLI (service/state/health/image/HTTP class) — не печатать `.env.staging` / `DATABASE_URL`.
+3. Сопоставить с `docker compose … ps --format json` и inspect health.
+4. Live fail → process/gateway; live OK + ready fail → PostgreSQL; tag/OCI mismatch → wrong release images.
+5. После восстановления повторить health gate на loopback.
+
+См. [главу 24](24-release-preflight-health.md) и [главу 13](13-healthchecks-and-smoke-tests.md).
+
 ## Evidence commands
 
 ```bash
 date -u
+make release-health EXPECTED_REVISION="$(git rev-parse HEAD)"
 docker compose --env-file .env.staging --project-name fetchnow-staging \
-  -f compose.yaml -f compose.staging.yaml ps -a
+  -f compose.yaml -f compose.staging.yaml ps -a --format json
 docker compose --env-file .env.staging --project-name fetchnow-staging \
   -f compose.yaml -f compose.staging.yaml logs --since 30m --tail 1000
 sudo ss -ntup

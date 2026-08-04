@@ -141,6 +141,22 @@ def check_dev_config() -> None:
     _assert(not _has_host_ports(services["postgres"]), "dev: postgres must not publish")
     _assert(not _has_host_ports(services["worker"]), "dev: worker must not publish")
     _assert(not _has_host_ports(services["web"]), "dev: web must not publish")
+    _assert(
+        services["api"].get("image") == "fetchnow-api:local",
+        "dev: api image must default to fetchnow-api:local",
+    )
+    _assert(
+        services["worker"].get("image") == "fetchnow-api:local",
+        "dev: worker must share fetchnow-api:local",
+    )
+    _assert(
+        services["web"].get("image") == "fetchnow-web:local",
+        "dev: web image must default to fetchnow-web:local",
+    )
+    _assert(
+        services["gateway"].get("image") == "fetchnow-gateway:local",
+        "dev: gateway image must default to fetchnow-gateway:local",
+    )
     print("OK: development compose contract")
 
 
@@ -163,14 +179,19 @@ def check_base_only_config() -> None:
 def check_staging_config() -> None:
     example = ROOT / ".env.staging.example"
     _assert(example.is_file(), ".env.staging.example must exist")
+    revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     with tempfile.TemporaryDirectory() as tmp:
         env_path = Path(tmp) / ".env.staging"
         # Safe local test values derived from the example contract.
         text = example.read_text(encoding="utf-8")
         text = text.replace(
-            "replace-with-unique-staging-password",
-            "staging-contract-check-only",
+            "replace-with-32plus-url-safe-staging-password",
+            "staging-contract-check-password-xxxxxxxx",
+        )
+        text = text.replace(
+            "0000000000000000000000000000000000000000",
+            revision,
         )
         env_path.write_text(text, encoding="utf-8")
 
@@ -223,6 +244,27 @@ def check_staging_config() -> None:
     )
     _assert(int(gp.get("target") or 0) == 8080, "staging: gateway target must be 8080")
 
+    _assert(
+        services["api"].get("image") == f"fetchnow-api:{revision}",
+        "staging: api image must use full SHA tag",
+    )
+    _assert(
+        services["worker"].get("image") == f"fetchnow-api:{revision}",
+        "staging: worker must share api image tag",
+    )
+    _assert(
+        services["web"].get("image") == f"fetchnow-web:{revision}",
+        "staging: web image must use full SHA tag",
+    )
+    _assert(
+        services["gateway"].get("image") == f"fetchnow-gateway:{revision}",
+        "staging: gateway image must use full SHA tag",
+    )
+    _assert(
+        str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
+        "staging: postgres image must remain pinned",
+    )
+
     vols = _volume_defs(cfg)
     for key in ("pgdata", "tmp"):
         name = vols[key].get("name") if isinstance(vols[key], dict) else None
@@ -243,6 +285,7 @@ def check_staging_missing_password_fails() -> None:
             "\n".join(
                 [
                     "COMPOSE_PROJECT_NAME=fetchnow-staging",
+                    "FETCHNOW_RELEASE_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "GATEWAY_PORT=127.0.0.1:8091",
                     "APP_ENV=staging",
                     "LOG_LEVEL=INFO",
@@ -280,6 +323,50 @@ def check_staging_missing_password_fails() -> None:
     print("OK: staging fail-closed for missing POSTGRES_PASSWORD")
 
 
+def check_staging_missing_revision_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = Path(tmp) / ".env.staging"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "COMPOSE_PROJECT_NAME=fetchnow-staging",
+                    "GATEWAY_PORT=127.0.0.1:8091",
+                    "APP_ENV=staging",
+                    "PUBLIC_SITE_URL=https://staging.example.test",
+                    "POSTGRES_DB=fetchnow",
+                    "POSTGRES_USER=fetchnow",
+                    "POSTGRES_PASSWORD=staging-contract-check-password-xxxxxxxx",
+                    # FETCHNOW_RELEASE_REVISION intentionally omitted
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cmd = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(env_path),
+            "--project-name",
+            "fetchnow-staging",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.staging.yaml",
+            "config",
+        ]
+        proc = subprocess.run(
+            cmd, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        _assert(proc.returncode != 0, "staging: missing revision must fail closed")
+        blob = (proc.stderr or "") + (proc.stdout or "")
+        _assert(
+            "FETCHNOW_RELEASE_REVISION" in blob,
+            "staging: failure must mention FETCHNOW_RELEASE_REVISION",
+        )
+    print("OK: staging fail-closed for missing FETCHNOW_RELEASE_REVISION")
+
+
 def check_isolation_render() -> None:
     a = _run_compose(
         ["-f", "compose.yaml"],
@@ -313,6 +400,7 @@ def main() -> int:
     check_dev_config()
     check_staging_config()
     check_staging_missing_password_fails()
+    check_staging_missing_revision_fails()
     check_isolation_render()
     print("All Compose contract checks passed.")
     return 0

@@ -2,6 +2,8 @@
 
 Проверки разделены по назначению. Внешний provider никогда не должен определять liveness процесса: его временный сбой иначе вызовет бессмысленные restart и усилит инцидент.
 
+**PRD1C1 operator gate:** перед/после staging операций используйте read-only `make release-health EXPECTED_REVISION=<sha>` (Compose JSON state + loopback live/ready). Подробности: [глава 24](24-release-preflight-health.md). Ниже — ручные curl/smoke уровни.
+
 ## Уровень 1: liveness
 
 ```bash
