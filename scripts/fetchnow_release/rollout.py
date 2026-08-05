@@ -44,10 +44,10 @@ from .journal import (
     JournalError,
     PlanDocument,
     append_event,
+    begin_bootstrap_cleanup_event,
     deployment_dir,
     ensure_rollout_layout,
     find_unresolved_deployments,
-    begin_bootstrap_cleanup_event,
     load_current_state,
     new_deployment_id,
     publish_bootstrap_failed_after_cleanup,
@@ -62,7 +62,12 @@ from .override import OverrideError, write_images_override
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 from .rollout_lock import RolloutLock, RolloutLockError
-from .stabilize import StabilizationPolicy, StabilizeError, stabilize_full_health, wait_services_healthy
+from .stabilize import (
+    StabilizationPolicy,
+    StabilizeError,
+    stabilize_full_health,
+    wait_services_healthy,
+)
 from .verify_release import ReleaseVerifyError, verify_prepared_release
 
 

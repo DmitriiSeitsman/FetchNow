@@ -46,6 +46,8 @@ Internet
 
 **PRD1C3A (deployment transaction):** application-only activation from immutable image IDs, stabilization, journaled rollback and explicit recover are implemented in the repository; no database mutation occurs in this path. См. [главу 26](26-deployment-transaction-rollback.md). This does not claim staging is deployed.
 
+**PRD1C3B1 (migration compatibility + deploy-plan):** strict `deploy/migrations/compatibility.json` contract and read-only `deploy-plan` command are implemented in the repository; no backup, migration, or deployment mutation occurs in this path. См. [главу 27](27-migration-compatibility-deployment-planning.md).
+
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
 ## Как читать
@@ -92,3 +94,4 @@ Internet
 24. [Release identity, preflight & health (PRD1C1)](24-release-preflight-health.md)
 25. [Release materialization & image build (PRD1C2)](25-release-materialization-build.md)
 26. [Deployment transaction & rollback (PRD1C3A)](26-deployment-transaction-rollback.md)
+27. [Migration compatibility & deploy-plan (PRD1C3B1)](27-migration-compatibility-deployment-planning.md)

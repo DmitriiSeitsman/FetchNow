@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from . import OCI_REVISION_LABEL
 from .image_build import ImageBuildError, inspect_image
-from .override import image_ids_from_manifest
 from .manifest import ReleaseManifest
+from .override import image_ids_from_manifest
 from .revision import validate_full_sha
 
 

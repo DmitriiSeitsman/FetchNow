@@ -22,7 +22,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "tests" / "release"))
 
-from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
+from fetchnow_release.prepare import PrepareInput, _chmod_tree_readonly, prepare_release  # noqa: E402
 from fetchnow_release.verify_release import verify_prepared_release  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
 
@@ -36,6 +36,15 @@ def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProce
             f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}"
         )
     return proc
+
+
+def _chmod_writable(path: Path) -> None:
+    import stat
+
+    if path.is_symlink():
+        return
+    mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod(mode | 0o200)
 
 
 def main() -> int:
@@ -59,6 +68,14 @@ def main() -> int:
         # Clean clone of current HEAD (committed tree only).
         run(["git", "clone", "--local", "--no-hardlinks", str(ROOT), str(clone)])
         run(["git", "checkout", "--detach", rev], cwd=clone)
+        compat_src = ROOT / "deploy/migrations/compatibility.json"
+        compat_dst = clone / "deploy/migrations/compatibility.json"
+        if compat_src.is_file() and not compat_dst.is_file():
+            compat_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(compat_src, compat_dst)
+            run(["git", "add", str(compat_dst)], cwd=clone)
+            run(["git", "commit", "-m", "test: ensure compatibility contract in clone"], cwd=clone)
+            rev = run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip()
         # Ensure clone has origin/main pointing at trusted tip.
         run(["git", "update-ref", "refs/remotes/origin/main", rev], cwd=clone)
         # Prove sentinel is not in clone.
@@ -123,7 +140,11 @@ def main() -> int:
         man = json.loads((release_path / "release.json").read_text(encoding="utf-8"))
         if man["revision"] != rev:
             raise RuntimeError("manifest revision mismatch")
-        print("OK: manifest revision")
+        if man.get("source_contract_version") != 2:
+            raise RuntimeError(
+                f"new prepare must emit source_contract_version=2, got {man.get('source_contract_version')!r}"
+            )
+        print("OK: manifest revision and source_contract_version=2")
 
         for svc, ref in (
             ("api", f"fetchnow-api:{rev}"),
@@ -194,6 +215,53 @@ def main() -> int:
         if not verified.ok:
             raise RuntimeError(verified.messages[0])
         print("OK: release verify passed")
+
+        legacy_fixture = Path(tempfile.mkdtemp(prefix="fetchnow-release-legacy-v1-"))
+        try:
+            legacy_release = legacy_fixture / rev
+            shutil.copytree(release_path, legacy_release)
+            legacy_source = legacy_release / "source"
+            legacy_compat = legacy_source / "deploy/migrations/compatibility.json"
+            if legacy_compat.is_file():
+                for parent in (
+                    legacy_compat.parent,
+                    legacy_compat.parent.parent,
+                    legacy_compat.parent.parent.parent,
+                ):
+                    _chmod_writable(parent)
+                _chmod_writable(legacy_compat)
+                legacy_compat.unlink()
+            from fetchnow_release.archive import verify_required_files  # noqa: E402
+            from fetchnow_release.c2_constants import (
+                SOURCE_CONTRACT_VERSION_V1,  # noqa: E402
+            )
+
+            legacy_hashes = verify_required_files(
+                legacy_source, source_contract_version=SOURCE_CONTRACT_VERSION_V1
+            )
+            legacy_man_path = legacy_release / "release.json"
+            _chmod_writable(legacy_release)
+            _chmod_writable(legacy_man_path)
+            legacy_data = json.loads(legacy_man_path.read_text(encoding="utf-8"))
+            legacy_data.pop("source_contract_version", None)
+            legacy_data["contract_hashes"] = legacy_hashes
+            legacy_man_path.write_text(
+                json.dumps(legacy_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            _chmod_tree_readonly(legacy_source)
+            import stat
+
+            if not legacy_man_path.is_symlink():
+                mode = stat.S_IMODE(legacy_man_path.stat().st_mode)
+                legacy_man_path.chmod(mode & ~0o222)
+            legacy_verified = verify_prepared_release(
+                legacy_release, expected_revision=rev, repo_root=clone
+            )
+            if not legacy_verified.ok:
+                raise RuntimeError(legacy_verified.messages[0])
+            print("OK: legacy v1 release fixture verifies under historical contract")
+        finally:
+            shutil.rmtree(legacy_fixture, ignore_errors=True)
 
         # Controlled drift in a *copy* of the release dir (do not mutate published).
         drift = Path(tempfile.mkdtemp(prefix="fetchnow-release-drift-"))

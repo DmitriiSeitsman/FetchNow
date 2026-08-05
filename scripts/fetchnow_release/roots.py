@@ -10,7 +10,10 @@ _SCRIPTS = Path(__file__).resolve().parents[1]
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from fetchnow_pg_backup.fs_safety import PathSafetyError, validate_backup_root  # noqa: E402
+from fetchnow_pg_backup.fs_safety import (  # noqa: E402
+    PathSafetyError,
+    validate_backup_root,
+)
 
 
 class RootPathError(PathSafetyError):

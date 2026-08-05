@@ -6,18 +6,18 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .c3_constants import (
+    BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
+    BOOTSTRAP_FAILURE_TRANSITIONS,
     CURRENT_SCHEMA_VERSION,
     CURRENT_STATE_NAME,
     DEPLOYMENTS_DIRNAME,
     EVENT_SCHEMA_VERSION,
     EVENTS_DIRNAME,
-    BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
-    BOOTSTRAP_FAILURE_TRANSITIONS,
     LEGAL_TRANSITIONS,
     OVERRIDES_DIRNAME,
     PLAN_NAME,
@@ -55,7 +55,7 @@ class JournalError(ValueError):
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_deployment_id() -> str:

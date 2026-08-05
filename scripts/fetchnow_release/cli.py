@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import STAGING_PROJECT, __version__
+from .deploy_plan import DeployPlanInput, emit_deploy_plan, run_deploy_plan
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
 from .preflight import PreflightInput, run_preflight
@@ -39,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fetchnow_release",
         description=(
             "FetchNow release preflight, health, prepare, verify, "
-            "application rollout & recover"
+            "deploy-plan, application rollout & recover"
         ),
     )
     parser.add_argument(
@@ -97,6 +98,20 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--expected-revision", required=True)
     ver.add_argument("--deploy-root", type=Path, required=True)
     ver.add_argument("--repo-root", type=Path, default=None)
+
+    plan = sub.add_parser(
+        "deploy-plan",
+        help="Read-only migration-aware deployment plan (no mutation)",
+    )
+    plan.add_argument("--project-name", default=STAGING_PROJECT)
+    plan.add_argument("--env-file", type=Path, required=True)
+    plan.add_argument(
+        "--compose-file", action="append", dest="compose_files", required=True
+    )
+    plan.add_argument("--expected-revision", required=True)
+    plan.add_argument("--deploy-root", type=Path, required=True)
+    plan.add_argument("--backup-root", type=Path, default=None)
+    plan.add_argument("--repo-root", type=Path, default=None)
 
     roll = sub.add_parser(
         "rollout",
@@ -229,6 +244,24 @@ def main(argv: list[str] | None = None) -> int:
         for line in result.messages:
             print(line, file=sys.stdout if result.ok else sys.stderr)
         return 0 if result.ok else 1
+
+    if args.command == "deploy-plan":
+        result = run_deploy_plan(
+            DeployPlanInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                compose_files=_compose_files(args, repo),
+                expected_revision=args.expected_revision,
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                backup_root=(
+                    args.backup_root.expanduser().resolve()
+                    if args.backup_root is not None
+                    else None
+                ),
+            )
+        )
+        return emit_deploy_plan(result)
 
     if args.command == "rollout":
         base = args.gateway_base_url

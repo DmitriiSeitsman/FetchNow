@@ -11,8 +11,9 @@ from . import (
     POSTGRES_IMAGE_PREFIX,
     STAGING_PROJECT,
 )
-from .rollout_project import RolloutProjectError, assert_rollout_project
+from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .revision import validate_full_sha
+from .rollout_project import RolloutProjectError, assert_rollout_project
 
 
 class ComposeContractError(ValueError):
@@ -64,10 +65,19 @@ def validate_staging_rendered(
         )
     expected_gateway_port = DEFAULT_GATEWAY_PORT
     if expected_project != STAGING_PROJECT:
-        try:
-            assert_rollout_project(expected_project)
-        except RolloutProjectError as exc:
-            raise ComposeContractError(str(exc)) from exc
+        validated = False
+        for checker in (assert_rollout_project, assert_deploy_plan_project):
+            try:
+                checker(expected_project)
+                validated = True
+                break
+            except (RolloutProjectError, DeployPlanProjectError):
+                continue
+        if not validated:
+            raise ComposeContractError(
+                f"refusing unsafe project name {expected_project!r}; "
+                "expected fetchnow-rollout-test-* or fetchnow-deploy-plan-test-*"
+            )
         expected_gateway_port = int(published)
     if published not in {
         str(expected_gateway_port),

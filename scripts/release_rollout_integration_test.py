@@ -38,7 +38,8 @@ from fetchnow_release.bootstrap_cleanup import (  # noqa: E402
     COMPOSE_SERVICE_LABEL,
     discover_owned_bootstrap_containers,
 )
-from fetchnow_release.c2_constants import SOURCE_DIRNAME  # noqa: E402
+from fetchnow_release.c2_constants import SOURCE_CONTRACT_VERSION_V2, SOURCE_DIRNAME  # noqa: E402
+from fetchnow_release.c3b1_constants import COMPATIBILITY_REL_PATH  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
     PLAN_SCHEMA_VERSION,
     PlanDocument,
@@ -61,6 +62,7 @@ from fetchnow_release.db_heads import (  # noqa: E402
 from fetchnow_release.deploy_root import release_dir  # noqa: E402
 from fetchnow_release.image_identity import assert_release_images_present  # noqa: E402
 from fetchnow_release.manifest import load_manifest, manifest_path  # noqa: E402
+from fetchnow_release.migration_compatibility import load_compatibility_contract  # noqa: E402
 from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
 from fetchnow_release.recover import RecoverInput, recover_deployment  # noqa: E402
 from fetchnow_release.rollout import RolloutInput, rollout_release  # noqa: E402
@@ -70,6 +72,63 @@ from fetchnow_release.rollout_project import (  # noqa: E402
 )
 from fetchnow_release.stabilize import StabilizationPolicy  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
+
+
+FIXTURE_POLICY_PATH = ROOT / COMPATIBILITY_REL_PATH
+
+
+def ensure_rollout_fixture_compatibility_policy(clone: Path) -> str:
+    """Ensure the temporary trusted clone contains the tracked B1 policy file."""
+    if not FIXTURE_POLICY_PATH.is_file():
+        raise RuntimeError(f"repository fixture policy missing: {FIXTURE_POLICY_PATH}")
+    load_compatibility_contract(FIXTURE_POLICY_PATH)
+    fixture_bytes = FIXTURE_POLICY_PATH.read_bytes()
+    fixture_sha256 = sha256_file(FIXTURE_POLICY_PATH)
+
+    clone_policy = clone / COMPATIBILITY_REL_PATH
+    if clone_policy.is_file():
+        if clone_policy.is_symlink() or clone_policy.is_dir():
+            raise RuntimeError("clone compatibility policy must be a regular file")
+        if clone_policy.read_bytes() != fixture_bytes:
+            raise RuntimeError(
+                "clone compatibility policy bytes drift from repository fixture"
+            )
+    else:
+        clone_policy.parent.mkdir(parents=True, exist_ok=True)
+        clone_policy.write_bytes(fixture_bytes)
+        run(["git", "add", str(clone_policy)], cwd=clone)
+        run(
+            ["git", "commit", "-m", "test: add migration compatibility contract for rollout"],
+            cwd=clone,
+        )
+        revision = run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip()
+        run(["git", "update-ref", "refs/remotes/origin/main", revision], cwd=clone)
+
+    return fixture_sha256
+
+
+def assert_prepared_release_v2_policy(
+    deploy_root: Path,
+    revision: str,
+    *,
+    fixture_policy_sha256: str,
+) -> None:
+    release = release_dir(deploy_root, revision)
+    manifest = load_manifest(manifest_path(release))
+    if manifest.source_contract_version != SOURCE_CONTRACT_VERSION_V2:
+        raise RuntimeError(
+            f"prepared release {revision} must declare source_contract_version=2, "
+            f"got {manifest.source_contract_version!r}"
+        )
+    policy_path = release / SOURCE_DIRNAME / COMPATIBILITY_REL_PATH
+    if policy_path.is_symlink() or policy_path.is_dir() or not policy_path.is_file():
+        raise RuntimeError(
+            f"prepared release {revision} missing regular compatibility policy file"
+        )
+    if sha256_file(policy_path) != fixture_policy_sha256:
+        raise RuntimeError(
+            f"prepared release {revision} compatibility policy SHA-256 mismatch"
+        )
 
 
 def run(
@@ -445,6 +504,8 @@ def main(argv: list[str] | None = None) -> int:
             cwd=clone,
         )
         run(["git", "config", "user.name", "Rollout Integration"], cwd=clone)
+        fixture_policy_sha256 = ensure_rollout_fixture_compatibility_policy(clone)
+        print("OK: rollout fixture revisions use source contract v2 with exact policy")
         write_env(
             env_file,
             project=project,
@@ -488,6 +549,9 @@ def main(argv: list[str] | None = None) -> int:
             revision=revision_unhealthy,
             clone=clone,
             deploy_root=deploy_root,
+        )
+        assert_prepared_release_v2_policy(
+            deploy_root, revision_unhealthy, fixture_policy_sha256=fixture_policy_sha256
         )
         if running_app_container_ids(compose, clone):
             raise RuntimeError("application containers present before unhealthy bootstrap")
@@ -613,6 +677,9 @@ def main(argv: list[str] | None = None) -> int:
             clone=clone,
             deploy_root=deploy_root,
         )
+        assert_prepared_release_v2_policy(
+            deploy_root, revision_a, fixture_policy_sha256=fixture_policy_sha256
+        )
         boot = rollout_release(
             RolloutInput(
                 project_name=project,
@@ -656,6 +723,9 @@ def main(argv: list[str] | None = None) -> int:
             clone=clone,
             deploy_root=deploy_root,
         )
+        assert_prepared_release_v2_policy(
+            deploy_root, revision_b, fixture_policy_sha256=fixture_policy_sha256
+        )
         deployed_b = rollout_release(
             RolloutInput(
                 project_name=project,
@@ -696,6 +766,9 @@ def main(argv: list[str] | None = None) -> int:
             revision=revision_c,
             clone=clone,
             deploy_root=deploy_root,
+        )
+        assert_prepared_release_v2_policy(
+            deploy_root, revision_c, fixture_policy_sha256=fixture_policy_sha256
         )
         failed_c = rollout_release(
             RolloutInput(

@@ -2,7 +2,8 @@
 	pg-backup-test pg-backup-integration pg-backup-create pg-backup-verify pg-backup-list pg-backup-prune-dry \
 	release-test release-preflight release-health release-health-integration release-ancestry-integration \
 	release-build-test release-prepare release-verify release-build-integration \
-	release-rollout-test release-rollout release-recover release-rollout-integration
+	release-rollout-test release-rollout release-recover release-rollout-integration \
+	release-deploy-plan-test release-deploy-plan-integration
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
@@ -123,7 +124,7 @@ release-health-integration:
 	$(PYTHON) scripts/release_health_integration_test.py
 
 release-build-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_release_build_unit.py
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_release_build_unit.py tests/release/test_source_contract_unit.py
 
 release-prepare:
 	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
@@ -175,6 +176,24 @@ release-recover:
 
 release-rollout-integration:
 	$(PYTHON) scripts/release_rollout_integration_test.py
+
+release-deploy-plan-test:
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/pg_backup/test_alembic_graph.py
+
+release-deploy-plan:
+	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
+	$(RELEASE) deploy-plan \
+		--project-name fetchnow-staging \
+		--env-file .env.staging \
+		--compose-file compose.yaml \
+		--compose-file compose.staging.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)"
+
+release-deploy-plan-integration:
+	$(PYTHON) scripts/release_deploy_plan_integration_test.py
 
 staging-config:
 	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)

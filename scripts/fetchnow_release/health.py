@@ -225,7 +225,7 @@ def run_health(inp: HealthInput) -> HealthResult:
                     raise HealthError(f"{svc_name} has no Docker healthcheck status")
                 if hstate != "healthy":
                     raise HealthError(f"{svc_name} inspect health is {hstate!r}")
-            restarts = int((info.get("RestartCount") or 0))
+            restarts = int(info.get("RestartCount") or 0)
             status = str((info.get("State") or {}).get("Status") or "").lower()
             if status in {"exited", "dead", "restarting"}:
                 raise HealthError(f"{svc_name} container status is {status!r}")
