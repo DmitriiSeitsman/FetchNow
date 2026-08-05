@@ -91,6 +91,16 @@ def run(cmd: list[str], *, cwd: Path, check: bool = True) -> subprocess.Complete
     return proc
 
 
+def configure_fixture_git_identity(clone: Path) -> None:
+    """Repository-local author identity for deterministic fixture commits in CI."""
+    run(["git", "config", "--local", "user.name", "FetchNow Integration Fixture"], cwd=clone)
+    run(
+        ["git", "config", "--local", "user.email", "integration@fetchnow.invalid"],
+        cwd=clone,
+    )
+    run(["git", "config", "--local", "commit.gpgsign", "false"], cwd=clone)
+
+
 def write_env(
     path: Path,
     *,
@@ -324,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         assert_deploy_plan_project(project)
         run(["git", "clone", "--local", "--no-hardlinks", str(ROOT), str(clone)], cwd=ROOT)
+        configure_fixture_git_identity(clone)
         compat_src = ROOT / "deploy" / "migrations" / "compatibility.json"
         compat_dst = clone / "deploy" / "migrations" / "compatibility.json"
         if compat_src.is_file() and not compat_dst.is_file():
