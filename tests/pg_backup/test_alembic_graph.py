@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from fetchnow_pg_backup.alembic_graph import (  # noqa: E402
     AlembicGraphError,
+    build_alembic_graph,
     discover_alembic_head_revisions,
 )
 
@@ -196,3 +197,57 @@ def test_depends_on_does_not_change_heads(tmp_path: Path) -> None:
         'depends_on = ("0001_a",)\n',
     )
     assert discover_alembic_head_revisions(versions) == ("0002_b",)
+
+
+def test_linear_graph_included_revisions(tmp_path: Path) -> None:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    _write(versions, "0001_a.py", 'revision = "0001_a"\ndown_revision = None\n')
+    _write(versions, "0002_b.py", 'revision = "0002_b"\ndown_revision = "0001_a"\n')
+    graph = build_alembic_graph(versions)
+    included = graph.included_revisions(frozenset({"0001_a"}), frozenset({"0002_b"}))
+    assert included == frozenset({"0002_b"})
+    assert graph.classify_transition(frozenset({"0001_a"}), frozenset({"0002_b"})) == "forward"
+
+
+def test_partial_multi_head_advancement(tmp_path: Path) -> None:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    _write(versions, "0001_a.py", 'revision = "0001_a"\ndown_revision = None\n')
+    _write(versions, "0002_b.py", 'revision = "0002_b"\ndown_revision = "0001_a"\n')
+    _write(versions, "0003_c.py", 'revision = "0003_c"\ndown_revision = "0001_a"\n')
+    graph = build_alembic_graph(versions)
+    assert graph.classify_transition(
+        frozenset({"0002_b", "0003_c"}), frozenset({"0002_b"})
+    ) == "downgrade"
+
+
+def test_dropping_one_existing_head_is_downgrade(tmp_path: Path) -> None:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    _write(versions, "0001_a.py", 'revision = "0001_a"\ndown_revision = None\n')
+    _write(versions, "0002_b.py", 'revision = "0002_b"\ndown_revision = "0001_a"\n')
+    _write(versions, "0003_c.py", 'revision = "0003_c"\ndown_revision = "0001_a"\n')
+    graph = build_alembic_graph(versions)
+    assert graph.classify_transition(
+        frozenset({"0002_b", "0003_c"}), frozenset({"0002_b"})
+    ) == "downgrade"
+
+
+def test_unknown_current_db_revision_fails_closed(tmp_path: Path) -> None:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    _write(versions, "0001_a.py", 'revision = "0001_a"\ndown_revision = None\n')
+    graph = build_alembic_graph(versions)
+    with pytest.raises(AlembicGraphError, match="unknown revision"):
+        graph.ancestors(frozenset({"0009_missing"}))
+
+
+def test_divergent_sibling_heads(tmp_path: Path) -> None:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    _write(versions, "0001_a.py", 'revision = "0001_a"\ndown_revision = None\n')
+    _write(versions, "0002_b.py", 'revision = "0002_b"\ndown_revision = "0001_a"\n')
+    _write(versions, "0003_c.py", 'revision = "0003_c"\ndown_revision = "0001_a"\n')
+    graph = build_alembic_graph(versions)
+    assert graph.classify_transition(frozenset({"0002_b"}), frozenset({"0003_c"})) == "divergent"

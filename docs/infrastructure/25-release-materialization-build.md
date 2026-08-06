@@ -10,7 +10,7 @@
 - Safe extraction into an incomplete directory
 - Exclusive release-root locking under an explicit deploy root
 - Build of `api` / `web` / `gateway` images from the snapshot (worker shares API image)
-- Immutable `release.json` (schema 1, status `prepared`)
+- Immutable `release.json` (manifest schema 1, status `prepared`, explicit `source_contract_version`)
 - Atomic rename publication to `releases/<sha>/`
 - Idempotent re-prepare and read-only `verify-release`
 
@@ -74,6 +74,15 @@ make release-verify \
 ```
 
 Second prepare for the same SHA verifies and returns already prepared (no rebuild). Drift (manifest/source/image ID/OCI mismatch) fails closed.
+
+## Source contract versions
+
+| `source_contract_version` | Required snapshot paths |
+|---------------------------|------------------------|
+| **1** (legacy; field omitted on old manifests) | PRD1C2 pinned list — no `deploy/migrations/compatibility.json` |
+| **2** (new prepare) | v1 list + `deploy/migrations/compatibility.json` |
+
+Legacy finalized releases verify under v1 forever. New prepare emits v2. Contract version is declared in the manifest, not inferred from file presence. Re-prepare never upgrades an existing release manifest in place.
 
 ## Boundaries
 

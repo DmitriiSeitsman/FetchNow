@@ -67,7 +67,9 @@ def verify_prepared_release(
         if not source.is_dir():
             raise ReleaseVerifyError("missing source/ directory")
         _assert_readonly_tree(source)
-        hashes = verify_required_files(source)
+        hashes = verify_required_files(
+            source, source_contract_version=manifest.source_contract_version
+        )
         if hashes != manifest.contract_hashes:
             raise ReleaseVerifyError("source contract hash drift vs manifest")
 

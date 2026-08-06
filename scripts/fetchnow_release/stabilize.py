@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from .c3_constants import (
     APPLICATION_SERVICES,

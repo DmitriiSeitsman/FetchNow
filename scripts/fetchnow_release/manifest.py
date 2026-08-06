@@ -14,6 +14,8 @@ from .c2_constants import (
     RELEASE_MANIFEST_NAME,
     RELEASE_SCHEMA_VERSION,
     RELEASE_STATUS_PREPARED,
+    SOURCE_CONTRACT_VERSION_V1,
+    SUPPORTED_SOURCE_CONTRACT_VERSIONS,
 )
 from .revision import validate_full_sha
 
@@ -23,6 +25,26 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 class ManifestError(ValueError):
     """Invalid release manifest."""
+
+
+def parse_source_contract_version(raw: object) -> int:
+    """Parse manifest source_contract_version.
+
+    Legacy finalized releases omit the field; that omission defaults to v1.
+    Contract version is never inferred from source file presence.
+    """
+    if raw is None:
+        return SOURCE_CONTRACT_VERSION_V1
+    if type(raw) is not int or isinstance(raw, bool):
+        raise ManifestError("source_contract_version must be integer")
+    if raw not in SUPPORTED_SOURCE_CONTRACT_VERSIONS:
+        raise ManifestError(f"unsupported source_contract_version: {raw!r}")
+    return raw
+
+
+def validate_source_contract_version(version: int) -> None:
+    if version not in SUPPORTED_SOURCE_CONTRACT_VERSIONS:
+        raise ManifestError(f"unsupported source_contract_version: {version!r}")
 
 
 @dataclass(frozen=True)
@@ -37,6 +59,7 @@ class ImageRecord:
 @dataclass(frozen=True)
 class ReleaseManifest:
     schema_version: int
+    source_contract_version: int
     revision: str
     tree_oid: str
     created_at_utc: str
@@ -101,6 +124,9 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         images_raw = raw["images"]
     except (KeyError, TypeError, ValueError) as exc:
         raise ManifestError(f"manifest missing/invalid fields: {exc}") from exc
+    source_contract_version = parse_source_contract_version(
+        raw.get("source_contract_version")
+    )
     if schema != RELEASE_SCHEMA_VERSION:
         raise ManifestError(f"unsupported schema_version: {schema}")
     if status != RELEASE_STATUS_PREPARED:
@@ -132,6 +158,7 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         images.append(rec)
     manifest = ReleaseManifest(
         schema_version=schema,
+        source_contract_version=source_contract_version,
         revision=revision,
         tree_oid=tree_oid,
         created_at_utc=created,
@@ -159,6 +186,7 @@ def validate_manifest(manifest: ReleaseManifest) -> None:
         raise ManifestError("status must be 'prepared'")
     if manifest.schema_version != RELEASE_SCHEMA_VERSION:
         raise ManifestError("unsupported schema_version")
+    validate_source_contract_version(manifest.source_contract_version)
     services = {img.service for img in manifest.images}
     expected = set(APPLICATION_BUILD_SERVICES)
     if services != expected:

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .c2_constants import SOURCE_DIRNAME
+from .readonly_guard import assert_readonly_subprocess
 from .redact import redact
 
 # Reuse PRD1B file-scan head discovery without importing backup create/restore.
@@ -14,6 +15,7 @@ _SCRIPTS = Path(__file__).resolve().parents[1]
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+from fetchnow_pg_backup.alembic_graph import validate_revision_id  # noqa: E402
 from fetchnow_pg_backup.semantic import discover_alembic_head_revisions  # noqa: E402
 
 
@@ -64,6 +66,7 @@ def database_heads_via_postgres(
             '-tAc "SELECT version_num FROM alembic_version ORDER BY 1"',
         ]
     )
+    assert_readonly_subprocess(argv)
     proc = subprocess.run(
         argv,
         cwd=str(cwd),
@@ -78,8 +81,16 @@ def database_heads_via_postgres(
         )
     lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
     if not lines:
+        detail = redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
+        if "alembic_version" in detail and "does not exist" in detail:
+            raise DbHeadsError(
+                "alembic_version table is missing — database is not initialized"
+            )
         raise DbHeadsError("alembic_version query returned no rows")
-    return frozenset(lines)
+    heads: set[str] = set()
+    for line in lines:
+        heads.add(validate_revision_id(line, field="database head"))
+    return frozenset(heads)
 
 
 def assert_heads_equal(

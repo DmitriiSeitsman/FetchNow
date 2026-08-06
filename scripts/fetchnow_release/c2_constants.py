@@ -11,7 +11,10 @@ LOCK_FILENAME = ".lock"
 SOURCE_DIRNAME = "source"
 
 APPLICATION_BUILD_SERVICES = ("api", "web", "gateway")
-REQUIRED_SOURCE_FILES = (
+
+# Pinned PRD1C2/PRD1C3A legacy source contract (immutable — do not extend).
+SOURCE_CONTRACT_VERSION_V1 = 1
+REQUIRED_SOURCE_FILES_V1 = (
     "compose.yaml",
     "compose.staging.yaml",
     "backend/Dockerfile",
@@ -23,6 +26,21 @@ REQUIRED_SOURCE_FILES = (
     "web/package-lock.json",
     "deploy/nginx/nginx.conf",
 )
+
+# PRD1C3B1 migration compatibility policy (new prepares only).
+SOURCE_CONTRACT_VERSION_V2 = 2
+REQUIRED_SOURCE_FILES_V2 = REQUIRED_SOURCE_FILES_V1 + (
+    "deploy/migrations/compatibility.json",
+)
+
+SUPPORTED_SOURCE_CONTRACT_VERSIONS = frozenset(
+    {SOURCE_CONTRACT_VERSION_V1, SOURCE_CONTRACT_VERSION_V2}
+)
+CURRENT_PREPARE_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V2
+DEPLOY_PLAN_MIN_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V2
+
+# Backward-compatible alias for callers that mean "current prepare contract".
+REQUIRED_SOURCE_FILES = REQUIRED_SOURCE_FILES_V2
 CONTRACT_HASH_FILES = (
     "compose.yaml",
     "compose.staging.yaml",

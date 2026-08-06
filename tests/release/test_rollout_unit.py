@@ -749,3 +749,48 @@ def test_bootstrap_cleanup_rejects_container_id_drift(monkeypatch: pytest.Monkey
             release_revision="a" * 40,
             expected_container_ids=["def456"],
         )
+
+
+def test_rollout_reads_legacy_v1_manifest_without_policy_field() -> None:
+    rev = "a" * 40
+    raw = {
+        "schema_version": 1,
+        "revision": rev,
+        "tree_oid": "b" * 40,
+        "created_at_utc": "2026-01-01T00:00:00Z",
+        "archive_commit_verified": True,
+        "source_repository": "FetchNow",
+        "compose_version": "2",
+        "docker_version": "24",
+        "build_platform": "linux/amd64",
+        "contract_hashes": {"compose.yaml": "c" * 64},
+        "tool_version": "1.1.0",
+        "status": "prepared",
+        "images": [
+            {
+                "service": "api",
+                "reference": f"fetchnow-api:{rev}",
+                "image_id": "sha256:" + ("1" * 64),
+                "oci_revision": rev,
+                "platform": "linux/amd64",
+            },
+            {
+                "service": "web",
+                "reference": f"fetchnow-web:{rev}",
+                "image_id": "sha256:" + ("2" * 64),
+                "oci_revision": rev,
+                "platform": "linux/amd64",
+            },
+            {
+                "service": "gateway",
+                "reference": f"fetchnow-gateway:{rev}",
+                "image_id": "sha256:" + ("3" * 64),
+                "oci_revision": rev,
+                "platform": "linux/amd64",
+            },
+        ],
+    }
+    from fetchnow_release.manifest import parse_manifest
+
+    manifest = parse_manifest(raw)
+    assert manifest.source_contract_version == 1

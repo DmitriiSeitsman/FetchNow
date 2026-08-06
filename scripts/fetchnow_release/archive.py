@@ -13,12 +13,13 @@ from pathlib import Path
 
 from .c2_constants import (
     CONTRACT_HASH_FILES,
+    CURRENT_PREPARE_SOURCE_CONTRACT_VERSION,
     FORBIDDEN_SOURCE_PATHS,
     LFS_POINTER_PREFIX,
-    REQUIRED_SOURCE_FILES,
     SOURCE_DIRNAME,
 )
 from .revision import validate_full_sha
+from .source_contract import required_source_files_for_version
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -227,9 +228,9 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
         )
 
 
-def detect_lfs_pointers(source_dir: Path) -> None:
+def detect_lfs_pointers(source_dir: Path, *, source_contract_version: int) -> None:
     """Fail closed if required build inputs look like Git LFS pointer files."""
-    for rel in REQUIRED_SOURCE_FILES:
+    for rel in required_source_files_for_version(source_contract_version):
         path = source_dir / rel
         if not path.is_file():
             continue
@@ -251,9 +252,11 @@ def detect_gitmodules(source_dir: Path) -> None:
         )
 
 
-def verify_required_files(source_dir: Path) -> dict[str, str]:
+def verify_required_files(
+    source_dir: Path, *, source_contract_version: int
+) -> dict[str, str]:
     abs_source = source_dir.resolve()
-    for rel in REQUIRED_SOURCE_FILES:
+    for rel in required_source_files_for_version(source_contract_version):
         path = source_dir / rel
         if not path.exists():
             raise ArchiveError(f"required source path missing after extract: {rel}")
@@ -282,6 +285,7 @@ def materialize_source(
     repo: Path,
     revision: str,
     incomplete_dir: Path,
+    source_contract_version: int = CURRENT_PREPARE_SOURCE_CONTRACT_VERSION,
 ) -> MaterializedSource:
     """Archive, verify, extract into incomplete_dir/source."""
     rev = validate_full_sha(revision)
@@ -294,8 +298,10 @@ def materialize_source(
         tree_oid = resolve_tree_oid(repo, rev)
         extract_archive(archive_path, source_dir)
         detect_gitmodules(source_dir)
-        detect_lfs_pointers(source_dir)
-        hashes = verify_required_files(source_dir)
+        detect_lfs_pointers(source_dir, source_contract_version=source_contract_version)
+        hashes = verify_required_files(
+            source_dir, source_contract_version=source_contract_version
+        )
     except Exception:
         if archive_path.exists():
             archive_path.unlink(missing_ok=True)

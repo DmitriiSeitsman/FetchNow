@@ -276,7 +276,7 @@ def test_lfs_pointer_detection(tmp_path: Path) -> None:
     src.mkdir()
     (src / "compose.yaml").write_bytes(LFS_POINTER_PREFIX + b"\noid sha256:abc\n")
     with pytest.raises(ArchiveError, match="LFS"):
-        detect_lfs_pointers(src)
+        detect_lfs_pointers(src, source_contract_version=2)
 
 
 def test_unsupported_submodule(tmp_path: Path) -> None:
@@ -291,7 +291,7 @@ def test_missing_required_files(tmp_path: Path) -> None:
     src = tmp_path / "source"
     src.mkdir()
     with pytest.raises(ArchiveError, match="required source path missing"):
-        verify_required_files(src)
+        verify_required_files(src, source_contract_version=2)
 
 
 def test_dirty_worktree_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,6 +407,7 @@ def test_manifest_tag_label_mismatch() -> None:
     )
     man = ReleaseManifest(
         schema_version=1,
+        source_contract_version=1,
         revision=rev,
         tree_oid="c" * 40,
         created_at_utc="2026-01-01T00:00:00Z",

@@ -218,6 +218,51 @@ jobs:
             --project-file "${RUNNER_TEMP}/fetchnow-rollout-project.txt" \
             --repo-root "${GITHUB_WORKSPACE}"
 
+  release-deploy-plan-unit:
+    name: Migration contract and deploy-plan unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.4.1
+      - name: Unit tests
+        run: |
+          python -m pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/pg_backup/test_alembic_graph.py
+
+  release-deploy-plan-integration:
+    name: Migration contract and deploy-plan integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Deploy-plan integration
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_deploy_plan_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-deploy-plan-project.txt"
+      - name: Cleanup deploy-plan integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/release_deploy_plan_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-deploy-plan-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   web:
     name: Web
     runs-on: ubuntu-latest

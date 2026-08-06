@@ -7,7 +7,7 @@ import shutil
 import stat
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
@@ -40,6 +40,7 @@ from .manifest import (
 from .preflight import PreflightInput, run_preflight
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
+from .source_contract import prepare_source_contract_version
 from .verify_release import ReleaseVerifyError, verify_prepared_release
 
 
@@ -151,7 +152,10 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
 
             try:
                 source = materialize_source(
-                    repo=inp.repo_root, revision=rev, incomplete_dir=incomplete
+                    repo=inp.repo_root,
+                    revision=rev,
+                    incomplete_dir=incomplete,
+                    source_contract_version=prepare_source_contract_version(),
                 )
                 messages.append(f"OK: source materialized tree={source.tree_oid}")
 
@@ -167,9 +171,10 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                 if source.archive_path.exists():
                     source.archive_path.unlink()
 
-                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 manifest = ReleaseManifest(
                     schema_version=1,
+                    source_contract_version=prepare_source_contract_version(),
                     revision=rev,
                     tree_oid=source.tree_oid,
                     created_at_utc=now,

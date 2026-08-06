@@ -11,6 +11,7 @@ from . import (
     STAGING_PROJECT,
 )
 from .compose_validate import ComposeContractError, validate_staging_rendered
+from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .docker_checks import (
     DockerCheckError,
     compose_config_json,
@@ -26,21 +27,27 @@ from .git_checks import (
 from .password import PasswordError, validate_staging_password
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
-from .roots import RootPathError, validate_operator_root
 from .rollout_project import RolloutProjectError, assert_rollout_project
+from .roots import RootPathError, validate_operator_root
 
 
 def _assert_allowed_project(name: str) -> None:
-    """Allow production staging or validated rollout integration projects."""
+    """Allow production staging or validated integration test projects."""
     if name == STAGING_PROJECT:
         return
-    try:
-        assert_rollout_project(name)
-    except RolloutProjectError as exc:
-        raise PreflightError(
-            f"project name must be {STAGING_PROJECT!r} or a validated "
-            f"fetchnow-rollout-test-* name, got {name!r}"
-        ) from exc
+    for checker, label in (
+        (assert_rollout_project, "fetchnow-rollout-test-*"),
+        (assert_deploy_plan_project, "fetchnow-deploy-plan-test-*"),
+    ):
+        try:
+            checker(name)
+            return
+        except (RolloutProjectError, DeployPlanProjectError):
+            continue
+    raise PreflightError(
+        f"project name must be {STAGING_PROJECT!r} or a validated "
+        f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* name, got {name!r}"
+    )
 
 
 class PreflightError(ValueError):
