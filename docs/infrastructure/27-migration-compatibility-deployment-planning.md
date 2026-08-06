@@ -5,9 +5,12 @@ compatibility contract**. It does **not** create backups, run Alembic
 upgrade/downgrade/stamp, mutate PostgreSQL, recreate containers, write
 deployment journals, or deploy to staging.
 
-PRD1C3B2 will repeat every check under the shared deployment lock and
-perform verified backup + migration orchestration. PRD1D remains the first
-real staging deployment.
+PRD1C3B2A adds dual application/database current state and a compatibility
+envelope so application rollback can remain honest when the database is ahead
+(see [chapter 28](28-dual-application-database-state.md)). PRD1C3B2B will
+repeat every check under the shared deployment lock and perform verified
+backup + migration orchestration. PRD1C3B2C unifies migrate→rollout. PRD1D
+remains the first real staging deployment.
 
 ## Compatibility contract
 
@@ -94,15 +97,15 @@ make release-deploy-plan EXPECTED_REVISION=<sha> DEPLOY_ROOT=/srv/fetchnow-stagi
 ### Planner sequence
 
 1. Validate inputs and env permissions
-2. Verify target prepared release
-3. Read `state/current.json`
-4. Verify current release and immutable previous images
-5. Read current DB heads (read-only `SELECT` via postgres container env)
-6. Discover target heads from exact target release source
-7. Load and validate `compatibility.json` from target release source
-8. Validate graph transition and policy match
-9. Validate deploy and backup roots
-10. Set `verified_backup_required` (true when migration required)
+2. Verify target prepared release (source contract v2+)
+3. Resolve `state/current.json` (v1→in-memory dual state or v2)
+4. Verify current application release and database schema release
+5. Read live DB heads (read-only `SELECT` via postgres container env)
+6. Assert live heads equal **saved** `current.database.heads`
+7. Discover target heads from exact target release source
+8. Load and validate `compatibility.json` from target release source
+9. Validate graph transition and policy match
+10. Set `verified_backup_required` / `application_rollout_required`
 11. Emit canonical redacted JSON plan to **stdout** (diagnostics to stderr)
 
 The planner does **not** acquire the rollout mutation lock.
@@ -116,7 +119,7 @@ The planner does **not** acquire the rollout mutation lock.
 - `verified_backup_required`
 - `previous_application_rollback_allowed`
 - `database_downgrade_allowed` (always `false`)
-
+- `application_rollout_required` (target application revision differs)
 Stdout is deterministic canonical JSON (stable key order, sorted arrays, no
 timestamps, no secrets, no absolute paths).
 
@@ -140,7 +143,7 @@ The planner also rejects:
 
 - a missing `alembic_version` table (uninitialized database)
 - an empty `alembic_version` result without treating it as valid empty heads
-- live database heads that drift from the current release's expected heads
+- live database heads that drift from saved `current.database.heads`
 
 There is no `--bootstrap`, adoption bypass, or implicit empty-head baseline.
 
@@ -199,6 +202,8 @@ checks.
 | Phase | Responsibility |
 |-------|----------------|
 | PRD1C3B1 | Contract + read-only `deploy-plan` |
-| PRD1C3B2 | Verified backup + migration orchestration under lock |
-| PRD1C3A | Application rollout when DB heads already match |
+| PRD1C3B2A | Dual state + compatibility envelope (no DB mutation) |
+| PRD1C3B2B | Verified backup + migration orchestration under lock |
+| PRD1C3B2C | Unified deploy orchestration |
+| PRD1C3A | Application rollout when compatibility envelope permits |
 | PRD1D | First real staging deployment |

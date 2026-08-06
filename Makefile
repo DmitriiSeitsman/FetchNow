@@ -149,7 +149,7 @@ release-build-integration:
 	$(PYTHON) scripts/release_build_integration_test.py
 
 release-rollout-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py
 
 release-rollout:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
@@ -178,7 +178,7 @@ release-rollout-integration:
 	$(PYTHON) scripts/release_rollout_integration_test.py
 
 release-deploy-plan-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/pg_backup/test_alembic_graph.py
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/release/test_current_state_unit.py tests/pg_backup/test_alembic_graph.py
 
 release-deploy-plan:
 	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)

@@ -14,9 +14,15 @@ from .activate import (
 )
 from .bootstrap_cleanup import BootstrapCleanupError, remove_owned_bootstrap_containers
 from .c2_constants import SOURCE_DIRNAME
+from .application_compatibility import (
+    CompatibilityError,
+    DatabaseDriftError,
+    assert_application_compatible_with_database,
+    assert_live_matches_saved_database_heads,
+    assert_resolved_application_compatible,
+)
 from .c3_constants import (
     APP_SERVICES_BEFORE_GATEWAY,
-    CURRENT_SCHEMA_VERSION,
     OVERRIDES_DIRNAME,
     PLAN_SCHEMA_VERSION,
     STATUS_ACTIVATING_APP,
@@ -30,6 +36,15 @@ from .c3_constants import (
     STATUS_ROLLED_BACK,
     STATUS_STABILIZING,
 )
+from .current_state import (
+    ApplicationState,
+    CurrentStateError,
+    ResolvedCurrentState,
+    build_bootstrap_database_state,
+    build_committed_current_state,
+    load_and_resolve_current_state,
+    next_database_state_after_app_commit,
+)
 from .db_heads import (
     DbHeadsError,
     assert_heads_equal,
@@ -40,7 +55,6 @@ from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput
 from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import (
-    CurrentState,
     JournalError,
     PlanDocument,
     append_event,
@@ -48,7 +62,6 @@ from .journal import (
     deployment_dir,
     ensure_rollout_layout,
     find_unresolved_deployments,
-    load_current_state,
     new_deployment_id,
     publish_bootstrap_failed_after_cleanup,
     sha256_file,
@@ -177,8 +190,46 @@ def _perform_rollback(
     messages.append("OK: rollback_started")
     try:
         prev_release = release_dir(inp.deploy_root, previous_revision)
+        verified = verify_prepared_release(
+            prev_release,
+            expected_revision=previous_revision,
+            repo_root=inp.repo_root,
+        )
+        if not verified.ok:
+            raise RolloutError(
+                "previous release failed verification during rollback: "
+                + verified.messages[0]
+            )
         prev_manifest = load_manifest(manifest_path(prev_release))
         assert_release_images_present(prev_manifest)
+
+        # Authority + compatibility before any rollback container mutation.
+        current = load_and_resolve_current_state(
+            inp.deploy_root, repo_root=inp.repo_root
+        )
+        if current is None:
+            raise RolloutError(
+                "automatic rollback requires resolved current.json with database state"
+            )
+        base_compose = _release_compose_files(prev_release)
+        live_heads = database_heads_via_postgres(
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=base_compose,
+            cwd=prev_release / SOURCE_DIRNAME,
+        )
+        assert_live_matches_saved_database_heads(
+            live_heads=live_heads,
+            saved_heads=current.database.heads,
+        )
+        prev_heads = target_heads_from_release_source(prev_release)
+        assert_application_compatible_with_database(
+            target_revision=previous_revision,
+            target_source_heads=prev_heads,
+            database=current.database,
+        )
+        messages.append("OK: rollback previous release compatible with database state")
+
         override = write_images_override(
             dep_dir / OVERRIDES_DIRNAME,
             previous_ids,
@@ -268,9 +319,9 @@ def _verify_already_active(
     inp: RolloutInput,
     deploy: Path,
     rev: str,
-    current: CurrentState,
+    current: ResolvedCurrentState,
 ) -> RolloutResult:
-    """Idempotent path: manifest hash, release verify, and full stabilization."""
+    """Idempotent path: dual-state drift + compatibility + health."""
     target_release = release_dir(deploy, rev)
     man_path = manifest_path(target_release)
     man_hash = sha256_file(man_path)
@@ -283,13 +334,31 @@ def _verify_already_active(
     )
     if not verified.ok:
         raise RolloutError(verified.messages[0])
+    base_compose = _release_compose_files(target_release)
+    cwd = target_release / SOURCE_DIRNAME
+    live_heads = database_heads_via_postgres(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        compose_files=base_compose,
+        cwd=cwd,
+    )
+    assert_live_matches_saved_database_heads(
+        live_heads=live_heads,
+        saved_heads=current.database.heads,
+    )
+    app_heads = target_heads_from_release_source(target_release)
+    assert_resolved_application_compatible(
+        current=current,
+        target_revision=rev,
+        target_source_heads=app_heads,
+        live_heads=live_heads,
+    )
     override_ids = current.image_ids
     health_dep = deployment_dir(deploy, current.deployment_id)
     override = health_dep / OVERRIDES_DIRNAME / "images.yaml"
     if not override.is_file():
         write_images_override(health_dep / OVERRIDES_DIRNAME, override_ids)
     compose_files = _compose_with_override(target_release, override)
-    cwd = target_release / SOURCE_DIRNAME
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -308,6 +377,8 @@ def _verify_already_active(
         messages=(
             "OK: release already active",
             f"revision={rev}",
+            "OK: live database heads match saved state",
+            "OK: application compatible with database state",
             "OK: health verified (no recreate)",
         ),
         deployment_id=current.deployment_id,
@@ -340,7 +411,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
             raise RolloutError(verified.messages[0])
         messages.append("OK: target release verified")
 
-        current = load_current_state(deploy)
+        current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
         if current is not None and current.revision == rev:
             return _verify_already_active(inp, deploy, rev, current)
 
@@ -374,7 +445,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 )
 
             # Re-check current under lock for races.
-            current = load_current_state(deploy)
+            current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
             if current is not None and current.revision == rev:
                 return _verify_already_active(inp, deploy, rev, current)
 
@@ -412,10 +483,23 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 compose_files=base_compose,
                 cwd=cwd,
             )
-            assert_heads_equal(database_heads=db_heads, target_heads=target_heads)
-            messages.append(
-                f"OK: database heads equal target {sorted(target_heads)}"
-            )
+            if inp.bootstrap or current is None:
+                assert_heads_equal(database_heads=db_heads, target_heads=target_heads)
+                messages.append(
+                    f"OK: bootstrap database heads equal target {sorted(target_heads)}"
+                )
+            else:
+                assert_live_matches_saved_database_heads(
+                    live_heads=db_heads,
+                    saved_heads=current.database.heads,
+                )
+                decision = assert_application_compatible_with_database(
+                    target_revision=rev,
+                    target_source_heads=target_heads,
+                    database=current.database,
+                )
+                messages.append("OK: live database heads match saved state")
+                messages.append(f"OK: application compatibility ({decision.reason})")
 
             previous_ids = None if current is None else dict(current.image_ids)
             if current is not None:
@@ -490,16 +574,30 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 )
                 stabilize_full_health(health_inp, policy=inp.policy)
 
-                # Atomic current.json only after stabilized success.
+                # Atomic current.json (schema v2) only after stabilized success.
+                application = ApplicationState(
+                    revision=rev,
+                    release_manifest_sha256=man_hash,
+                    image_ids=dict(target_ids),
+                    deployment_id=deployment_id,
+                )
+                if current is None:
+                    database = build_bootstrap_database_state(
+                        heads=db_heads,
+                        schema_release_revision=rev,
+                    )
+                else:
+                    database = next_database_state_after_app_commit(
+                        previous=current.database,
+                        target_revision=rev,
+                        target_source_heads=target_heads,
+                    )
                 write_current_state(
                     deploy,
-                    CurrentState(
-                        schema_version=CURRENT_SCHEMA_VERSION,
-                        revision=rev,
-                        release_manifest_sha256=man_hash,
-                        image_ids=target_ids,
+                    build_committed_current_state(
+                        application=application,
+                        database=database,
                         updated_at_utc=utc_now(),
-                        deployment_id=deployment_id,
                     ),
                 )
                 append_event(dep_dir, STATUS_COMMITTED, "current.json published")
@@ -643,6 +741,9 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
         RolloutLockError,
         ReleaseVerifyError,
         RevisionError,
+        CurrentStateError,
+        CompatibilityError,
+        DatabaseDriftError,
         OSError,
         ValueError,
     ) as exc:

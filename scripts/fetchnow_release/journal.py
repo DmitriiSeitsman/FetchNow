@@ -13,8 +13,6 @@ from typing import Any
 from .c3_constants import (
     BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
     BOOTSTRAP_FAILURE_TRANSITIONS,
-    CURRENT_SCHEMA_VERSION,
-    CURRENT_STATE_NAME,
     DEPLOYMENTS_DIRNAME,
     EVENT_SCHEMA_VERSION,
     EVENTS_DIRNAME,
@@ -41,6 +39,26 @@ from .c3_constants import (
     STATUS_ROLLBACK_FAILED,
     STATUS_ROLLED_BACK,
     TERMINAL_RESULT_STATUSES,
+)
+from .current_state import (  # noqa: F401 — re-export for callers
+    ApplicationState,
+    CurrentState,
+    CurrentStateError,
+    CurrentStateV2,
+    DatabaseState,
+    LegacyCurrentStateV1,
+    ResolvedCurrentState,
+    build_bootstrap_database_state,
+    build_committed_current_state,
+    current_path,
+    load_and_resolve_current_state,
+    load_current_state,
+    load_parsed_current_state,
+    next_database_state_after_app_commit,
+    parse_current_state_document,
+    resolve_current_state,
+    write_current_state,
+    write_legacy_v1_fixture_for_tests,
 )
 from .deploy_root import DeployRootError, ensure_deploy_layout
 from .journal_io import atomic_write_json, read_json
@@ -76,10 +94,6 @@ def assert_legal_transition(current: str, nxt: str) -> None:
 
 def state_dir(deploy_root: Path) -> Path:
     return deploy_root / STATE_DIRNAME
-
-
-def current_path(deploy_root: Path) -> Path:
-    return state_dir(deploy_root) / CURRENT_STATE_NAME
 
 
 def deployments_dir(deploy_root: Path) -> Path:
@@ -124,68 +138,6 @@ def validate_image_id_map(ids: dict[str, str]) -> dict[str, str]:
     if ids["api"] != ids["worker"]:
         raise JournalError("api and worker image IDs must match")
     return dict(ids)
-
-
-@dataclass(frozen=True)
-class CurrentState:
-    schema_version: int
-    revision: str
-    release_manifest_sha256: str
-    image_ids: dict[str, str]
-    updated_at_utc: str
-    deployment_id: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "revision": self.revision,
-            "release_manifest_sha256": self.release_manifest_sha256,
-            "image_ids": dict(self.image_ids),
-            "updated_at_utc": self.updated_at_utc,
-            "deployment_id": self.deployment_id,
-        }
-
-
-def parse_current_state(raw: dict[str, Any]) -> CurrentState:
-    try:
-        schema = int(raw["schema_version"])
-        revision = validate_full_sha(str(raw["revision"]))
-        man_hash = str(raw["release_manifest_sha256"])
-        updated = str(raw["updated_at_utc"])
-        dep_id = str(raw["deployment_id"])
-        ids = validate_image_id_map({str(k): str(v) for k, v in raw["image_ids"].items()})
-    except (KeyError, TypeError, ValueError) as exc:
-        raise JournalError(f"invalid current.json: {exc}") from exc
-    if schema != CURRENT_SCHEMA_VERSION:
-        raise JournalError(f"unsupported current schema: {schema}")
-    if not re.fullmatch(r"^[0-9a-f]{64}$", man_hash):
-        raise JournalError("release_manifest_sha256 must be 64 hex chars")
-    if not _DEPLOYMENT_ID_RE.fullmatch(dep_id):
-        raise JournalError("current.deployment_id malformed")
-    return CurrentState(
-        schema_version=schema,
-        revision=revision,
-        release_manifest_sha256=man_hash,
-        image_ids=ids,
-        updated_at_utc=updated,
-        deployment_id=dep_id,
-    )
-
-
-def load_current_state(deploy_root: Path) -> CurrentState | None:
-    path = current_path(deploy_root)
-    if not path.exists():
-        return None
-    return parse_current_state(read_json(path))
-
-
-def write_current_state(deploy_root: Path, state: CurrentState) -> None:
-    if state.schema_version != CURRENT_SCHEMA_VERSION:
-        raise JournalError("unsupported current schema")
-    validate_full_sha(state.revision)
-    validate_image_id_map(state.image_ids)
-    ensure_rollout_layout(deploy_root)
-    atomic_write_json(current_path(deploy_root), state.to_dict(), mode=0o600)
 
 
 @dataclass(frozen=True)

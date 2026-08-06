@@ -26,7 +26,13 @@ from fetchnow_release.c2_constants import (  # noqa: E402
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_DIRNAME,
 )
-from fetchnow_release.c3_constants import CURRENT_SCHEMA_VERSION  # noqa: E402
+from fetchnow_release.current_state import (  # noqa: E402
+    ApplicationState,
+    build_bootstrap_database_state,
+    build_committed_current_state,
+    write_current_state,
+)
+from fetchnow_release.db_heads import target_heads_from_release_source  # noqa: E402
 from fetchnow_release.deploy_plan import DeployPlanInput, run_deploy_plan  # noqa: E402
 from fetchnow_release.deploy_plan_project import (  # noqa: E402
     assert_deploy_plan_project,
@@ -34,12 +40,7 @@ from fetchnow_release.deploy_plan_project import (  # noqa: E402
 )
 from fetchnow_release.deploy_root import release_dir  # noqa: E402
 from fetchnow_release.image_identity import assert_release_images_present  # noqa: E402
-from fetchnow_release.journal import (  # noqa: E402
-    CurrentState,
-    deployments_dir,
-    sha256_file,
-    write_current_state,
-)
+from fetchnow_release.journal import deployments_dir, sha256_file  # noqa: E402
 from fetchnow_release.manifest import load_manifest, manifest_path  # noqa: E402
 from fetchnow_release.prepare import (  # noqa: E402
     PrepareInput,
@@ -226,15 +227,21 @@ def prepare_revision(
 def seed_current_state(deploy_root: Path, release_path: Path, revision: str) -> None:
     manifest = load_manifest(manifest_path(release_path))
     ids = assert_release_images_present(manifest)
+    heads = target_heads_from_release_source(release_path)
     write_current_state(
         deploy_root,
-        CurrentState(
-            schema_version=CURRENT_SCHEMA_VERSION,
-            revision=revision,
-            release_manifest_sha256=sha256_file(manifest_path(release_path)),
-            image_ids=ids,
+        build_committed_current_state(
+            application=ApplicationState(
+                revision=revision,
+                release_manifest_sha256=sha256_file(manifest_path(release_path)),
+                image_ids=ids,
+                deployment_id=str(uuid.uuid4()),
+            ),
+            database=build_bootstrap_database_state(
+                heads=heads,
+                schema_release_revision=revision,
+            ),
             updated_at_utc="2026-01-01T00:00:00Z",
-            deployment_id=str(uuid.uuid4()),
         ),
     )
 
@@ -442,6 +449,10 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"unexpected included revisions: {plan3['included_revisions']}")
         if plan3["verified_backup_required"] is not True:
             raise RuntimeError("expected verified_backup_required=true")
+        if plan3.get("application_rollout_required") is not True:
+            raise RuntimeError(
+                "expected application_rollout_required=true for A→B application change"
+            )
         print("OK: legacy v1 current + v2 target forward migration deploy plan")
 
         run(["git", "checkout", "--detach", migrate_rev], cwd=clone)
@@ -771,6 +782,10 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("expected empty included_revisions for equal heads")
         if plan["verified_backup_required"] is not False:
             raise RuntimeError("expected verified_backup_required=false")
+        if plan.get("application_rollout_required") is not False:
+            raise RuntimeError(
+                "expected application_rollout_required=false when target equals current"
+            )
         print("OK: no-migration deploy plan")
 
         ok2, plan_json2, _ = invoke_plan(
