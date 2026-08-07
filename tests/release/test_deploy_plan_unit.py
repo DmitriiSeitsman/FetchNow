@@ -140,12 +140,16 @@ def test_canonical_plan_is_deterministic() -> None:
         "verified_backup_required": False,
         "previous_application_rollback_allowed": True,
         "database_downgrade_allowed": False,
+        "application_rollout_required": False,
     }
     first = _canonical_plan(payload)
     second = _canonical_plan(payload)
     assert first == second
     assert first.endswith("\n")
     assert "POSTGRES_PASSWORD" not in first
+    assert '"application_rollout_required"' in _canonical_plan(
+        {**payload, "application_rollout_required": True}
+    )
 
 
 def test_redaction_removes_secrets() -> None:

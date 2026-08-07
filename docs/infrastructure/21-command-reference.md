@@ -63,7 +63,7 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=... [BOOTSTRAP=1]` | application-only image-ID rollout | modifying app containers | нет* | high; stabilized commit or rollback |
 | Release | `make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback\|accept-target ENV_FILE=... DEPLOY_ROOT=...` | explicit unresolved-journal recovery | modifying app containers | нет* | high; explicit terminal action |
 | Release | `make release-rollout-integration` | isolated rollout/rollback IT | unique test project only | нет* | high; `fetchnow-rollout-test-*` only |
-| Release | `make release-deploy-plan EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only migration-aware deploy plan | read-only | нет* | low; canonical JSON plan on stdout |
+| Release | `make release-deploy-plan EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only migration-aware deploy plan (dual-state aware; emits `application_rollout_required`) | read-only | нет* | low; canonical JSON plan on stdout |
 | Release | `make release-deploy-plan-test` | migration contract + deploy-plan unit tests | read-only | нет | low; pytest |
 | Release | `make release-deploy-plan-integration` | isolated deploy-plan IT | unique test project only | нет* | medium; `fetchnow-deploy-plan-test-*` only |
 | Release | `make release-test` | preflight/health unit tests | read-only | нет | low; pytest |

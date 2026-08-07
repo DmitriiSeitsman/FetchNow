@@ -6,10 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .activate import activate_app_tier, activate_gateway
+from .application_compatibility import (
+    CompatibilityError,
+    DatabaseDriftError,
+    assert_application_compatible_with_database,
+    assert_live_matches_saved_database_heads,
+)
 from .c2_constants import SOURCE_DIRNAME
 from .c3_constants import (
     APP_SERVICES_BEFORE_GATEWAY,
-    CURRENT_SCHEMA_VERSION,
     OVERRIDES_DIRNAME,
     RECOVERY_PLAN_SCHEMA_VERSION,
     RESOLUTION_OUTCOME_ACCEPT_TARGET,
@@ -22,12 +27,19 @@ from .c3_constants import (
     STATUS_ROLLED_BACK,
     STATUS_STABILIZING,
 )
-from .db_heads import assert_heads_equal, database_heads_via_postgres
+from .current_state import (
+    ApplicationState,
+    CurrentStateError,
+    build_bootstrap_database_state,
+    build_committed_current_state,
+    load_and_resolve_current_state,
+    next_database_state_after_app_commit,
+)
+from .db_heads import assert_heads_equal, database_heads_via_postgres, target_heads_from_release_source
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput
 from .image_identity import assert_release_images_present
 from .journal import (
-    CurrentState,
     JournalError,
     RecoveryPlanDocument,
     ResolutionDocument,
@@ -36,7 +48,6 @@ from .journal import (
     deployment_dir,
     ensure_rollout_layout,
     latest_event_status,
-    load_current_state,
     load_plan,
     load_resolution,
     load_result,
@@ -141,10 +152,38 @@ def _execute_accept_target(
         compose_files=base_compose,
         cwd=cwd,
     )
+    # Plan snapshot must still match live DB (C3A plan heads).
     assert_heads_equal(
         database_heads=db_heads,
         target_heads=frozenset(plan.database_heads),
     )
+    target_heads = target_heads_from_release_source(release)
+    current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
+    if current is None:
+        if not plan.bootstrap:
+            raise RecoverError(
+                "accept-target requires current.json unless recovering a bootstrap plan"
+            )
+        assert_heads_equal(database_heads=db_heads, target_heads=target_heads)
+        database = build_bootstrap_database_state(
+            heads=db_heads,
+            schema_release_revision=plan.target_revision,
+        )
+    else:
+        assert_live_matches_saved_database_heads(
+            live_heads=db_heads,
+            saved_heads=current.database.heads,
+        )
+        assert_application_compatible_with_database(
+            target_revision=plan.target_revision,
+            target_source_heads=target_heads,
+            database=current.database,
+        )
+        database = next_database_state_after_app_commit(
+            previous=current.database,
+            target_revision=plan.target_revision,
+            target_source_heads=target_heads,
+        )
     override = write_images_override(
         compose_override_dir,
         plan.target_image_ids,
@@ -164,13 +203,15 @@ def _execute_accept_target(
     stabilize_full_health(health_inp, policy=inp.policy)
     write_current_state(
         deploy,
-        CurrentState(
-            schema_version=CURRENT_SCHEMA_VERSION,
-            revision=plan.target_revision,
-            release_manifest_sha256=plan.release_manifest_sha256,
-            image_ids=dict(plan.target_image_ids),
+        build_committed_current_state(
+            application=ApplicationState(
+                revision=plan.target_revision,
+                release_manifest_sha256=plan.release_manifest_sha256,
+                image_ids=dict(plan.target_image_ids),
+                deployment_id=plan.deployment_id,
+            ),
+            database=database,
             updated_at_utc=utc_now(),
-            deployment_id=plan.deployment_id,
         ),
     )
     return plan.target_revision
@@ -203,6 +244,32 @@ def _execute_rollback(
             raise RecoverError(
                 f"previous immutable image missing for {svc}: {image_id}"
             )
+    # Compatibility gate before any container mutation.
+    pre_heads = target_heads_from_release_source(prev_release)
+    pre_compose = (
+        (prev_release / SOURCE_DIRNAME / "compose.yaml").resolve(),
+        (prev_release / SOURCE_DIRNAME / "compose.staging.yaml").resolve(),
+    )
+    pre_live = database_heads_via_postgres(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        compose_files=pre_compose,
+        cwd=prev_release / SOURCE_DIRNAME,
+    )
+    pre_current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
+    if pre_current is None:
+        raise RecoverError(
+            "rollback recover requires resolved current.json with database state"
+        )
+    assert_live_matches_saved_database_heads(
+        live_heads=pre_live,
+        saved_heads=pre_current.database.heads,
+    )
+    assert_application_compatible_with_database(
+        target_revision=prev,
+        target_source_heads=pre_heads,
+        database=pre_current.database,
+    )
     override = write_images_override(
         compose_override_dir,
         plan.previous_image_ids,
@@ -241,17 +308,43 @@ def _execute_rollback(
         expected_image_ids=plan.previous_image_ids,
     )
     stabilize_full_health(health_inp, policy=inp.policy)
-    cur = load_current_state(deploy)
-    if cur is None or cur.revision != prev:
+    prev_heads = target_heads_from_release_source(prev_release)
+    base_compose = (
+        (prev_release / SOURCE_DIRNAME / "compose.yaml").resolve(),
+        (prev_release / SOURCE_DIRNAME / "compose.staging.yaml").resolve(),
+    )
+    live_heads = database_heads_via_postgres(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        compose_files=base_compose,
+        cwd=prev_release / SOURCE_DIRNAME,
+    )
+    current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
+    if current is None:
+        raise RecoverError(
+            "rollback recover requires resolved current.json with database state"
+        )
+    assert_live_matches_saved_database_heads(
+        live_heads=live_heads,
+        saved_heads=current.database.heads,
+    )
+    assert_application_compatible_with_database(
+        target_revision=prev,
+        target_source_heads=prev_heads,
+        database=current.database,
+    )
+    if current.revision != prev:
         write_current_state(
             deploy,
-            CurrentState(
-                schema_version=CURRENT_SCHEMA_VERSION,
-                revision=prev,
-                release_manifest_sha256=sha256_file(manifest_path(prev_release)),
-                image_ids=dict(plan.previous_image_ids),
+            build_committed_current_state(
+                application=ApplicationState(
+                    revision=prev,
+                    release_manifest_sha256=sha256_file(manifest_path(prev_release)),
+                    image_ids=dict(plan.previous_image_ids),
+                    deployment_id=plan.deployment_id,
+                ),
+                database=current.database,
                 updated_at_utc=utc_now(),
-                deployment_id=plan.deployment_id,
             ),
         )
     return prev
@@ -416,7 +509,12 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
             messages.append(f"OK: recover {inp.action} completed deployment journal")
             messages.append(f"revision={final_rev}")
             return RecoverResult(ok=True, messages=tuple(messages))
-    except RecoverError as exc:
+    except (
+        RecoverError,
+        CurrentStateError,
+        CompatibilityError,
+        DatabaseDriftError,
+    ) as exc:
         return RecoverResult(
             ok=False,
             messages=(f"FAIL: {redact(str(exc))}",),

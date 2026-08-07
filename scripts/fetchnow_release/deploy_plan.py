@@ -22,8 +22,10 @@ from .db_heads import (
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .env_file import EnvFileError, load_env_file, require_keys
+from .application_compatibility import DatabaseDriftError
+from .current_state import CurrentStateError, load_and_resolve_current_state
 from .image_identity import ImageIdentityError, assert_release_images_present
-from .journal import JournalError, load_current_state, sha256_file
+from .journal import JournalError, sha256_file
 from .manifest import ManifestError, load_manifest, manifest_path
 from .migration_compatibility import (
     CompatibilityError,
@@ -140,21 +142,26 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         except ValueError as exc:
             raise DeployPlanError(str(exc)) from exc
 
-        current = load_current_state(deploy_root)
+        current = load_and_resolve_current_state(
+            deploy_root, repo_root=inp.repo_root
+        )
         if current is None:
             raise DeployPlanError(
                 "current.json is absent — initial deployment/bootstrap planning is "
                 "PRD1D; deploy-plan supports upgrade planning only when current "
                 "application state is already published"
             )
-        current_revision = validate_full_sha(current.revision)
+        current_revision = validate_full_sha(current.application.revision)
         current_release = release_dir(deploy_root, current_revision)
         if not current_release.is_dir():
             raise DeployPlanError(
                 f"current release directory missing: {current_release}"
             )
         current_manifest = load_manifest(manifest_path(current_release))
-        if sha256_file(manifest_path(current_release)) != current.release_manifest_sha256:
+        if (
+            sha256_file(manifest_path(current_release))
+            != current.application.release_manifest_sha256
+        ):
             raise DeployPlanError("current.json manifest hash mismatch")
         assert_release_images_present(current_manifest)
         current_target_release = verify_prepared_release(
@@ -165,6 +172,17 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         if not current_target_release.ok:
             raise DeployPlanError(current_target_release.messages[0])
 
+        schema_release = release_dir(
+            deploy_root, current.database.schema_release_revision
+        )
+        schema_verified = verify_prepared_release(
+            schema_release,
+            expected_revision=current.database.schema_release_revision,
+            repo_root=inp.repo_root,
+        )
+        if not schema_verified.ok:
+            raise DeployPlanError(schema_verified.messages[0])
+
         cwd = target_release / SOURCE_DIRNAME
         database_heads = database_heads_via_postgres(
             project_name=inp.project_name,
@@ -172,19 +190,19 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             compose_files=inp.compose_files,
             cwd=cwd,
         )
-        current_release_heads = target_heads_from_release_source(current_release)
-        if database_heads != current_release_heads:
+        saved_heads = frozenset(current.database.heads)
+        if database_heads != saved_heads:
             raise DeployPlanError(
                 "live database Alembic heads "
-                f"{sorted(database_heads)} drift from current release expected heads "
-                f"{sorted(current_release_heads)}"
+                f"{sorted(database_heads)} drift from saved current.database.heads "
+                f"{sorted(saved_heads)}"
             )
         target_heads = target_heads_from_release_source(target_release)
         versions_dir = cwd / "backend" / "migrations" / "versions"
-        current_versions_dir = (
-            current_release / SOURCE_DIRNAME / "backend" / "migrations" / "versions"
+        schema_versions_dir = (
+            schema_release / SOURCE_DIRNAME / "backend" / "migrations" / "versions"
         )
-        current_graph = build_alembic_graph(current_versions_dir)
+        current_graph = build_alembic_graph(schema_versions_dir)
         graph = build_alembic_graph(versions_dir)
         planning_graph = merge_alembic_graphs(current_graph, graph)
 
@@ -231,6 +249,8 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         elif relation != "equal":
             raise DeployPlanError(f"unexpected head relation: {relation}")
 
+        application_rollout_required = target_revision != current_revision
+
         plan = {
             "schema_version": DEPLOY_PLAN_SCHEMA_VERSION,
             "project": inp.project_name,
@@ -244,6 +264,7 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             "verified_backup_required": migration_required,
             "previous_application_rollback_allowed": previous_application_rollback_allowed,
             "database_downgrade_allowed": False,
+            "application_rollout_required": application_rollout_required,
         }
         plan_json = _canonical_plan(plan)
         diagnostics.append("OK: deploy plan computed")
@@ -260,6 +281,8 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         ImageIdentityError,
         DbHeadsError,
         CompatibilityError,
+        CurrentStateError,
+        DatabaseDriftError,
         AlembicGraphError,
         ReleaseVerifyError,
         OSError,

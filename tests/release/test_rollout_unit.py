@@ -37,7 +37,6 @@ from fetchnow_release.cli import build_parser  # noqa: E402
 from fetchnow_release.db_heads import assert_heads_equal, DbHeadsError  # noqa: E402
 from fetchnow_release.image_build import image_exists  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
-    CurrentState,
     JournalError,
     PlanDocument,
     RecoveryPlanDocument,
@@ -58,7 +57,6 @@ from fetchnow_release.journal import (  # noqa: E402
     result_path,
     sha256_file,
     validate_bootstrap_failed_result,
-    write_current_state,
     write_plan,
     write_recovery_plan,
     write_recovery_result,
@@ -115,30 +113,54 @@ def test_planned_to_committed_is_illegal() -> None:
 
 
 def test_atomic_current_json(tmp_path: Path) -> None:
+    from fetchnow_release.current_state import (
+        ApplicationState,
+        CurrentStateError,
+        build_bootstrap_database_state,
+        build_committed_current_state,
+        load_parsed_current_state,
+        write_current_state,
+    )
+
     deploy = tmp_path / "deploy"
     deploy.mkdir()
-    state = CurrentState(
-        schema_version=1,
-        revision="a" * 40,
-        release_manifest_sha256="d" * 64,
-        image_ids=_ids(),
+    rev = "a" * 40
+    state = build_committed_current_state(
+        application=ApplicationState(
+            revision=rev,
+            release_manifest_sha256="d" * 64,
+            image_ids=_ids(),
+            deployment_id="12345678-1234-1234-1234-123456789abc",
+        ),
+        database=build_bootstrap_database_state(
+            heads=frozenset({"0001_baseline"}),
+            schema_release_revision=rev,
+        ),
         updated_at_utc="2026-01-01T00:00:00Z",
-        deployment_id="12345678-1234-1234-1234-123456789abc",
     )
     write_current_state(deploy, state)
     loaded = load_current_state(deploy)
     assert loaded is not None
-    assert loaded.revision == "a" * 40
-    with pytest.raises(JournalError):
+    assert loaded.revision == rev
+    assert loaded.database.heads == ("0001_baseline",)
+    parsed = load_parsed_current_state(deploy)
+    assert parsed is not None
+    assert getattr(parsed, "schema_version", None) == 2
+    with pytest.raises(CurrentStateError):
         write_current_state(
             deploy,
-            CurrentState(
-                schema_version=1,
-                revision="a" * 40,
-                release_manifest_sha256="d" * 64,
-                image_ids={"api": "bad"},
+            build_committed_current_state(
+                application=ApplicationState(
+                    revision=rev,
+                    release_manifest_sha256="d" * 64,
+                    image_ids={"api": "bad"},
+                    deployment_id="12345678-1234-1234-1234-123456789abc",
+                ),
+                database=build_bootstrap_database_state(
+                    heads=frozenset({"0001_baseline"}),
+                    schema_release_revision=rev,
+                ),
                 updated_at_utc="2026-01-01T00:00:00Z",
-                deployment_id="12345678-1234-1234-1234-123456789abc",
             ),
         )
 
@@ -794,3 +816,294 @@ def test_rollout_reads_legacy_v1_manifest_without_policy_field() -> None:
 
     manifest = parse_manifest(raw)
     assert manifest.source_contract_version == 1
+
+
+def test_incompatible_target_rejected_before_activation_and_state_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compatibility rejection must happen before plan write / activate / current write."""
+    from fetchnow_release.application_compatibility import CompatibilityError
+    from fetchnow_release.current_state import (
+        ApplicationState,
+        DatabaseState,
+        ResolvedCurrentState,
+    )
+    from contextlib import nullcontext
+
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+    from fetchnow_release.verify_release import VerifyResult
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    (deploy / "releases").mkdir()
+    rev_current = "a" * 40
+    rev_target = "c" * 40
+    target_release = deploy / "releases" / rev_target
+    current_release = deploy / "releases" / rev_current
+    (target_release / "source").mkdir(parents=True)
+    (current_release / "source").mkdir(parents=True)
+    for release in (target_release, current_release):
+        (release / "source" / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        (release / "source" / "compose.staging.yaml").write_text(
+            "services: {}\n", encoding="utf-8"
+        )
+
+    current = ResolvedCurrentState(
+        schema_version=2,
+        application=ApplicationState(
+            revision=rev_current,
+            release_manifest_sha256="d" * 64,
+            image_ids=_ids(),
+            deployment_id="12345678-1234-1234-1234-123456789abc",
+        ),
+        database=DatabaseState(
+            heads=("0001_baseline",),
+            schema_release_revision=rev_current,
+            last_migration_id=None,
+            compatibility_contract_sha256=None,
+            compatible_application_revisions=(rev_current,),
+        ),
+        updated_at_utc="2026-01-01T00:00:00Z",
+        legacy_v1=False,
+    )
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.validate_deploy_root",
+        lambda path, repo_root=None: path,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.ensure_rollout_layout",
+        lambda _deploy: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.verify_prepared_release",
+        lambda *_a, **_k: VerifyResult(ok=True, messages=("OK",)),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_and_resolve_current_state",
+        lambda *_a, **_k: current,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.find_unresolved_deployments",
+        lambda *_a, **_k: [],
+    )
+
+    def _release_dir(_deploy: Path, rev: str) -> Path:
+        return deploy / "releases" / rev
+
+    monkeypatch.setattr("fetchnow_release.rollout.release_dir", _release_dir)
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_manifest",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_release_images_present",
+        lambda _manifest: _ids(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.sha256_file",
+        lambda _path: "e" * 64,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.manifest_path",
+        lambda release: release / "release.json",
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.target_heads_from_release_source",
+        lambda _release: frozenset({"0002_incompatible_rollout"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.database_heads_via_postgres",
+        lambda **_k: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_live_matches_saved_database_heads",
+        lambda **_k: None,
+    )
+
+    def _reject(**_kwargs: object) -> None:
+        raise CompatibilityError(
+            "application revision is not compatible with current database state"
+        )
+
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_application_compatible_with_database",
+        _reject,
+    )
+
+    def _track_plan(*_a: object, **_k: object) -> None:
+        calls.append("write_plan")
+
+    def _track_activate(*_a: object, **_k: object) -> None:
+        calls.append("activate")
+
+    def _track_write_state(*_a: object, **_k: object) -> None:
+        calls.append("write_current_state")
+
+    monkeypatch.setattr("fetchnow_release.rollout.write_plan", _track_plan)
+    monkeypatch.setattr("fetchnow_release.rollout.activate_app_tier", _track_activate)
+    monkeypatch.setattr("fetchnow_release.rollout.write_current_state", _track_write_state)
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.RolloutLock",
+        lambda *a, **k: nullcontext(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout_project.assert_rollout_project",
+        lambda _name: None,
+    )
+
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev_target,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+        )
+    )
+    assert result.ok is False
+    assert any(
+        "not compatible" in msg.lower() or "compatible" in msg.lower()
+        for msg in result.messages
+    )
+    assert calls == []
+
+
+def test_automatic_rollback_checks_compatibility_before_activate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-rollback must gate live/saved + compatibility before activate_app_tier."""
+    from fetchnow_release.application_compatibility import CompatibilityError
+    from fetchnow_release.current_state import (
+        ApplicationState,
+        DatabaseState,
+        ResolvedCurrentState,
+    )
+    from fetchnow_release.journal import append_event, deployment_dir, write_plan, PlanDocument
+    from fetchnow_release.rollout import RolloutInput, _perform_rollback
+    from fetchnow_release.verify_release import VerifyResult
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "deployments").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "releases").mkdir()
+    prev = "a" * 40
+    target = "b" * 40
+    prev_release = deploy / "releases" / prev
+    (prev_release / "source").mkdir(parents=True)
+    (prev_release / "source" / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (prev_release / "source" / "compose.staging.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+
+    dep_id = "12345678-1234-1234-1234-123456789abc"
+    dep_dir = deployment_dir(deploy, dep_id)
+    write_plan(
+        dep_dir,
+        PlanDocument(
+            schema_version=1,
+            deployment_id=dep_id,
+            target_revision=target,
+            previous_revision=prev,
+            bootstrap=False,
+            target_image_ids=_ids(),
+            previous_image_ids=_ids(),
+            release_manifest_sha256="d" * 64,
+            database_heads=("0001_baseline",),
+            created_at_utc="2026-01-01T00:00:00Z",
+            project_name="fetchnow-rollout-test-abcd1234",
+        ),
+    )
+    append_event(dep_dir, "planned")
+    append_event(dep_dir, "activating_app")
+
+    current = ResolvedCurrentState(
+        schema_version=2,
+        application=ApplicationState(
+            revision=prev,
+            release_manifest_sha256="d" * 64,
+            image_ids=_ids(),
+            deployment_id=dep_id,
+        ),
+        database=DatabaseState(
+            heads=("0001_baseline",),
+            schema_release_revision=prev,
+            last_migration_id=None,
+            compatibility_contract_sha256=None,
+            compatible_application_revisions=(prev,),
+        ),
+        updated_at_utc="2026-01-01T00:00:00Z",
+        legacy_v1=False,
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.verify_prepared_release",
+        lambda *_a, **_k: VerifyResult(ok=True, messages=("OK",)),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_manifest",
+        lambda _p: object(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_release_images_present",
+        lambda _m: _ids(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_and_resolve_current_state",
+        lambda *_a, **_k: current,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.database_heads_via_postgres",
+        lambda **_k: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_live_matches_saved_database_heads",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.target_heads_from_release_source",
+        lambda _r: frozenset({"0009_other"}),
+    )
+
+    def _reject(**_k: object) -> None:
+        calls.append("compat")
+        raise CompatibilityError("previous application is not compatible")
+
+    def _activate(**_k: object) -> None:
+        calls.append("activate")
+
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_application_compatible_with_database",
+        _reject,
+    )
+    monkeypatch.setattr("fetchnow_release.rollout.activate_app_tier", _activate)
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.write_images_override",
+        lambda *_a, **_k: prev_release / "override.yaml",
+    )
+
+    result = _perform_rollback(
+        inp=RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=target,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+        ),
+        dep_dir=dep_dir,
+        deployment_id=dep_id,
+        previous_revision=prev,
+        previous_ids=_ids(),
+        messages=[],
+        mutation_began=True,
+    )
+    assert result.ok is False
+    assert result.status == "rollback_failed"
+    assert calls == ["compat"]

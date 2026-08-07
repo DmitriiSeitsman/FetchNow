@@ -4,9 +4,14 @@
 
 ## Scope
 
-PRD1C3A activates only `api`, `worker`, `web`, and then `gateway`, using immutable image IDs recorded by PRD1C2. PostgreSQL is neither recreated nor migrated by `rollout`; the Alembic-head gate is read-only and fails closed when database and target heads differ.
+PRD1C3A activates only `api`, `worker`, `web`, and then `gateway`, using immutable image IDs recorded by PRD1C2. PostgreSQL is neither recreated nor migrated by `rollout`. The read-only database gate requires live Alembic heads to match saved `current.database.heads`, then allows the target application only when its source heads equal those DB heads **or** its revision is listed in the explicit compatibility envelope (see [chapter 28](28-dual-application-database-state.md)). Bootstrap still requires live heads to equal the target release source heads.
 
-`current.json` is written atomically only after the target passes stabilization. Each attempt has a deployment journal with a plan, events, image override, and terminal result. Journals redact password and `DATABASE_URL` values.
+`current.json` is written atomically only after the target passes stabilization.
+As of PRD1C3B2A it is schema v2: nested application identity plus database
+heads/compatibility envelope (see [chapter 28](28-dual-application-database-state.md)).
+Application-only rollback never rolls back database state. Each attempt has a
+deployment journal with a plan, events, image override, and terminal result.
+Journals redact password and `DATABASE_URL` values.
 
 ## Normal activation
 
@@ -52,7 +57,14 @@ Target Alembic heads are discovered via static AST parsing of migration files (n
 
 ## Automatic rollback and recovery
 
-After application activation begins, an unhealthy target causes an attempt to restore the previous application's immutable image IDs. `current.json` remains on the previous release unless the new target stabilizes successfully. A successful repeat of the current revision is idempotent: it verifies health without recreating services.
+After application activation begins, an unhealthy target causes an attempt to
+restore the previous application's immutable image IDs. Before that restore
+mutation, live database heads must still match saved `current.database.heads`
+and the previous application must pass the compatibility envelope gate.
+`current.json` remains on the previous release unless the new target stabilizes
+successfully (application section is not rewritten on automatic rollback).
+A successful repeat of the current revision is idempotent: it verifies health
+without recreating services.
 
 If automatic rollback itself cannot complete, inspect the deployment journal and choose an explicit action:
 
@@ -71,6 +83,7 @@ make release-recover \
 | Milestone | Responsibility |
 |---|---|
 | PRD1C3A (this chapter) | application image-ID activation, health stabilization, journaled rollback/recover; no DB mutation |
+| PRD1C3B2A | Dual application/database `current.json` + compatibility envelope (no DB mutation) |
 | PRD1C3B | migration orchestration and any explicitly approved schema-change transaction |
 | PRD1D | host Nginx/TLS/public publish and production operationalization |
 

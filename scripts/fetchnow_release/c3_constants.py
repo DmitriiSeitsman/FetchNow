@@ -13,7 +13,10 @@ EVENTS_DIRNAME = "events"
 OVERRIDES_DIRNAME = "overrides"
 IMAGES_OVERRIDE_NAME = "images.yaml"
 
-CURRENT_SCHEMA_VERSION = 1
+# Legacy current.json schema (read-only resolution). Writers publish v2
+# via c3b2a_constants.CURRENT_SCHEMA_VERSION_V2 / CURRENT_SCHEMA_VERSION.
+CURRENT_SCHEMA_VERSION_V1 = 1
+CURRENT_SCHEMA_VERSION = 1  # historical alias for plan-era docs/tests
 PLAN_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 EVENT_SCHEMA_VERSION = 1

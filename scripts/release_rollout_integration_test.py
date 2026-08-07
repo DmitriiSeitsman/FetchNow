@@ -232,7 +232,27 @@ def prepare(
 
 def current_revision(deploy_root: Path) -> str:
     path = deploy_root / "state" / "current.json"
-    return str(json.loads(path.read_text(encoding="utf-8"))["revision"])
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if int(data.get("schema_version", 1)) >= 2:
+        return str(data["application"]["revision"])
+    return str(data["revision"])
+
+
+def assert_current_state_v2(deploy_root: Path, *, application_revision: str) -> dict:
+    path = deploy_root / "state" / "current.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("schema_version") != 2:
+        raise RuntimeError(f"expected current.json schema_version=2, got {data!r}")
+    if data["application"]["revision"] != application_revision:
+        raise RuntimeError(
+            f"application.revision {data['application']['revision']!r} != "
+            f"{application_revision!r}"
+        )
+    if not data["database"]["heads"]:
+        raise RuntimeError("database.heads empty")
+    if application_revision not in data["database"]["compatible_application_revisions"]:
+        raise RuntimeError("application revision missing from compatibility envelope")
+    return data
 
 
 def container_image_ids(compose: list[str], clone: Path) -> dict[str, str]:
@@ -424,6 +444,54 @@ def project_networks(project: str) -> set[str]:
     if proc.returncode != 0:
         raise RuntimeError(f"failed to list project networks: {proc.stderr.strip()}")
     return {ln.strip() for ln in proc.stdout.splitlines() if ln.strip()}
+
+
+INCOMPATIBLE_MIGRATION = '''"""Test-only incompatible Alembic head (not applied to PostgreSQL)."""
+
+revision = "0002_incompatible_rollout"
+down_revision = "0001_baseline"
+
+
+def upgrade() -> None:
+    pass
+
+
+def downgrade() -> None:
+    pass
+'''
+
+
+def app_container_ids(compose: list[str], clone: Path) -> dict[str, str]:
+    ids: dict[str, str] = {}
+    for svc in ("api", "worker", "web", "gateway"):
+        cid = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+        if not cid:
+            raise RuntimeError(f"missing running container for {svc}")
+        ids[svc] = cid
+    return ids
+
+
+def deployment_dir_names(deploy_root: Path) -> set[str]:
+    deployments = deploy_root / "deployments"
+    if not deployments.is_dir():
+        return set()
+    return {p.name for p in deployments.iterdir() if p.is_dir()}
+
+
+def live_db_heads(
+    *, project: str, env_file: Path, clone: Path, revision: str, deploy_root: Path
+) -> frozenset[str]:
+    release = release_dir(deploy_root, revision)
+    source = release / SOURCE_DIRNAME
+    return database_heads_via_postgres(
+        project_name=project,
+        env_file=env_file,
+        compose_files=(
+            (source / "compose.yaml").resolve(),
+            (source / "compose.staging.yaml").resolve(),
+        ),
+        cwd=source,
+    )
 
 
 def container_exists(container_id: str) -> bool:
@@ -702,6 +770,8 @@ def main(argv: list[str] | None = None) -> int:
         if api_labels.get(LABEL_RELEASE_REVISION) != revision_a:
             raise RuntimeError("bootstrap api container missing release-revision label")
         print("OK: healthy bootstrap after terminal failure succeeded with ownership labels")
+        assert_current_state_v2(deploy_root, application_revision=revision_a)
+        print("OK: bootstrap published current.json schema v2")
 
         readme = clone / "README.md"
         readme.write_text(
@@ -740,8 +810,200 @@ def main(argv: list[str] | None = None) -> int:
         if not deployed_b.ok or current_revision(deploy_root) != revision_b:
             raise RuntimeError(f"revision B did not commit: {deployed_b.messages}")
         print("OK: revision B committed and current.json points to B")
+        state_b = assert_current_state_v2(deploy_root, application_revision=revision_b)
+        envelope = frozenset(state_b["database"]["compatible_application_revisions"])
+        if revision_a not in envelope or revision_b not in envelope:
+            raise RuntimeError("compatibility envelope missing A or B after same-head rollout")
+        # Same-head app bump keeps database heads and schema_release_revision.
+        if not state_b["database"]["heads"]:
+            raise RuntimeError("database heads lost after application-only rollout")
+        print("OK: application-only rollout preserved DB state and extended envelope")
         b_image_ids = container_image_ids(compose, clone)
         b_manifest_ids = release_image_ids(deploy_root, revision_b)
+
+        # --- Incompatible application outside envelope: pre-mutation rejection ---
+        mig_versions = clone / "backend" / "migrations" / "versions"
+        incompatible_path = mig_versions / "0002_incompatible_rollout.py"
+        incompatible_path.write_text(INCOMPATIBLE_MIGRATION, encoding="utf-8")
+        revision_incompatible = commit(
+            clone, "test: incompatible application outside compatibility envelope"
+        )
+        if revision_incompatible in frozenset(
+            state_b["database"]["compatible_application_revisions"]
+        ):
+            raise RuntimeError(
+                "incompatible fixture revision unexpectedly already in envelope"
+            )
+        write_env(
+            env_file,
+            project=project,
+            revision=revision_incompatible,
+            gateway_port=gateway_port,
+            deploy_root=deploy_root,
+        )
+        prepare(
+            project=project,
+            env_file=env_file,
+            revision=revision_incompatible,
+            clone=clone,
+            deploy_root=deploy_root,
+        )
+        assert_prepared_release_v2_policy(
+            deploy_root,
+            revision_incompatible,
+            fixture_policy_sha256=fixture_policy_sha256,
+        )
+        incompatible_release = release_dir(deploy_root, revision_incompatible)
+        incompatible_heads = target_heads_from_release_source(incompatible_release)
+        saved_heads = frozenset(state_b["database"]["heads"])
+        if incompatible_heads == saved_heads:
+            raise RuntimeError(
+                "incompatible fixture must have different Alembic heads than current DB"
+            )
+        if "0002_incompatible_rollout" not in incompatible_heads:
+            raise RuntimeError(
+                f"expected incompatible head in fixture, got {sorted(incompatible_heads)}"
+            )
+        if revision_incompatible in frozenset(
+            state_b["database"]["compatible_application_revisions"]
+        ):
+            raise RuntimeError("incompatible revision must be outside envelope")
+
+        current_path = deploy_root / "state" / "current.json"
+        before_bytes = current_path.read_bytes()
+        before_mtime = current_path.stat().st_mtime_ns
+        before_state = json.loads(before_bytes.decode("utf-8"))
+        before_app_ids = app_container_ids(compose, clone)
+        before_app_images = container_image_ids(compose, clone)
+        before_postgres = run(
+            compose + ["ps", "-q", "postgres"], cwd=clone
+        ).stdout.strip()
+        before_live_heads = live_db_heads(
+            project=project,
+            env_file=env_file,
+            clone=clone,
+            revision=revision_b,
+            deploy_root=deploy_root,
+        )
+        before_sentinel = read_db_sentinel(compose, clone, marker)
+        before_networks = project_networks(project)
+        before_volumes = project_volumes(project)
+        before_envelope = list(
+            before_state["database"]["compatible_application_revisions"]
+        )
+        before_deps = deployment_dir_names(deploy_root)
+        incompatible_image_ids = release_image_ids(deploy_root, revision_incompatible)
+
+        rejected = rollout_release(
+            RolloutInput(
+                project_name=project,
+                env_file=env_file,
+                expected_revision=revision_incompatible,
+                repo_root=clone,
+                deploy_root=deploy_root,
+                gateway_base_url=f"http://{gateway_port}",
+                policy=policy,
+            )
+        )
+        if rejected.ok:
+            raise RuntimeError(
+                f"incompatible rollout unexpectedly succeeded: {rejected.messages}"
+            )
+        diag = " ".join(rejected.messages).lower()
+        if not any(
+            token in diag
+            for token in (
+                "not compatible",
+                "compatibility",
+                "compatible_application_revisions",
+                "envelope",
+            )
+        ):
+            raise RuntimeError(
+                "incompatible rejection diagnostics missing compatibility signal: "
+                f"{rejected.messages}"
+            )
+        for needle in ("DATABASE_URL", "POSTGRES_PASSWORD", valid_test_password()):
+            if any(needle in msg for msg in rejected.messages):
+                raise RuntimeError(f"secret leaked in rejection diagnostics: {needle}")
+        print(
+            "OK: incompatible application outside compatibility envelope "
+            "rejected before container mutation"
+        )
+
+        if current_path.read_bytes() != before_bytes:
+            raise RuntimeError("rejected incompatible rollout mutated current.json bytes")
+        if current_path.stat().st_mtime_ns != before_mtime:
+            raise RuntimeError("rejected incompatible rollout touched current.json mtime")
+        after_state = json.loads(current_path.read_text(encoding="utf-8"))
+        if after_state != before_state:
+            raise RuntimeError("rejected incompatible rollout changed parsed current state")
+        if after_state["application"] != before_state["application"]:
+            raise RuntimeError("rejected incompatible rollout changed application state")
+        if after_state["database"] != before_state["database"]:
+            raise RuntimeError("rejected incompatible rollout changed database state")
+        if after_state["database"]["compatible_application_revisions"] != before_envelope:
+            raise RuntimeError("rejected incompatible rollout changed compatibility envelope")
+        after_app_ids = app_container_ids(compose, clone)
+        if after_app_ids != before_app_ids:
+            raise RuntimeError(
+                f"rejected incompatible rollout changed app container IDs: "
+                f"{before_app_ids} -> {after_app_ids}"
+            )
+        after_postgres = run(compose + ["ps", "-q", "postgres"], cwd=clone).stdout.strip()
+        if after_postgres != before_postgres:
+            raise RuntimeError("rejected incompatible rollout recreated postgres")
+        after_live_heads = live_db_heads(
+            project=project,
+            env_file=env_file,
+            clone=clone,
+            revision=revision_b,
+            deploy_root=deploy_root,
+        )
+        if after_live_heads != before_live_heads:
+            raise RuntimeError("rejected incompatible rollout changed live DB heads")
+        if read_db_sentinel(compose, clone, marker) != before_sentinel:
+            raise RuntimeError("rejected incompatible rollout changed DB sentinel")
+        if project_networks(project) != before_networks:
+            raise RuntimeError("rejected incompatible rollout changed networks")
+        if project_volumes(project) != before_volumes:
+            raise RuntimeError("rejected incompatible rollout changed named volumes")
+        if current_revision(deploy_root) != revision_b:
+            raise RuntimeError("rejected incompatible rollout changed application revision")
+        after_images = container_image_ids(compose, clone)
+        if after_images != before_app_images:
+            raise RuntimeError("rejected incompatible rollout changed running image IDs")
+        for svc, image_id in after_images.items():
+            if image_id == incompatible_image_ids[svc]:
+                raise RuntimeError(
+                    f"rejected incompatible target image is running for {svc}"
+                )
+        after_deps = deployment_dir_names(deploy_root)
+        new_deps = after_deps - before_deps
+        if new_deps:
+            # Pre-mutation rejection must not create journals; if any appear, fail closed.
+            raise RuntimeError(
+                "incompatible rejection created new deployment journal(s) "
+                f"before mutation: {sorted(new_deps)}"
+            )
+        if find_unresolved_deployments(deploy_root):
+            raise RuntimeError(
+                "incompatible rejection left unresolved journals blocking rollout"
+            )
+        print(
+            "OK: rejected incompatible rollout preserved current.json and all container IDs"
+        )
+
+        # Restore clone to revision B so subsequent C/rollback scenarios keep same heads.
+        run(["git", "checkout", "--detach", revision_b], cwd=clone)
+        run(["git", "update-ref", "refs/remotes/origin/main", revision_b], cwd=clone)
+        write_env(
+            env_file,
+            project=project,
+            revision=revision_b,
+            gateway_port=gateway_port,
+            deploy_root=deploy_root,
+        )
 
         if (
             run(compose + ["ps", "-q", "postgres"], cwd=clone).stdout.strip()
