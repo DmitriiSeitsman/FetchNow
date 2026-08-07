@@ -354,3 +354,42 @@ def psql_on_database(
             result=result,
         )
     return result.stdout_text
+
+
+def read_alembic_version_heads(
+    target: ComposeTarget,
+    database: str,
+    *,
+    source_database: str,
+    runner: RunFn = run_command,
+) -> frozenset[str]:
+    """Read every Alembic head row from alembic_version in the given database."""
+    from . import ALEMBIC_VERSION_TABLE
+    from .alembic_graph import validate_revision_id
+
+    assert_safe_temp_database_name(database, source_database=source_database)
+    argv = build_exec_argv(
+        target,
+        "sh",
+        "-c",
+        f'psql -U "$POSTGRES_USER" -d {database} -v ON_ERROR_STOP=1 -Atc '
+        f'"SELECT version_num FROM {ALEMBIC_VERSION_TABLE} ORDER BY version_num;"',
+    )
+    result = runner(
+        argv,
+        cwd=str(target.repo_root) if target.repo_root else None,
+    )
+    if result.returncode != 0:
+        detail = redact(result.stderr_text.strip() or result.stdout_text.strip())
+        if "alembic_version" in detail and "does not exist" in detail:
+            raise CommandError(
+                "alembic_version table is missing in restored database"
+            )
+        raise CommandError(f"alembic_version query failed: {detail}", result=result)
+    lines = [ln.strip() for ln in result.stdout_text.splitlines() if ln.strip()]
+    if not lines:
+        raise CommandError("alembic_version query returned no rows")
+    heads: set[str] = set()
+    for line in lines:
+        heads.add(validate_revision_id(line, field="restored Alembic head"))
+    return frozenset(heads)

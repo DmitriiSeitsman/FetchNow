@@ -1,0 +1,24 @@
+{
+  "backup_id": "20260101T000000Z_legacy",
+  "backup_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "cleanup": {
+    "dropped_database": "fetchnow_restore_verify_legacy",
+    "ok": true
+  },
+  "failure_reason": null,
+  "pg_restore_version": "16.9",
+  "postgres_version": "16.9",
+  "restore_duration_seconds": 1.0,
+  "result": "passed",
+  "schema_version": 1,
+  "semantic_checks": [
+    {
+      "detail": "ok",
+      "name": "connection",
+      "ok": true
+    }
+  ],
+  "temporary_database": "fetchnow_restore_verify_legacy",
+  "tool_version": "1.0.0",
+  "verified_at_utc": "2026-01-01T00:00:00Z"
+}

@@ -51,7 +51,7 @@ Risk: low — чтение; medium — контролируемое измене
 | Disk | `df -ih` | inodes | read-only | нет | low; inode table |
 | Disk | `sudo du -xhd1 PATH` | directory sizes | read-only/heavy | да | medium; sizes |
 | Backup | `make pg-backup-create BACKUP_ROOT=...` | logical DB dump + manifest | modifying file | нет* | medium; backup id/sha |
-| Backup | `make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...` | restore drill + attestation | modifying temp DB | нет* | medium; passed/failed |
+| Backup | `make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...` | restore drill + attestation (v2 on pass with exact heads when `--expected-alembic-head` / `--migrations-versions-dir` supplied; CLI may infer heads from worktree migrations dir) | modifying temp DB | нет* | medium; typed passed/failed + attestation path/sha |
 | Backup | `make pg-backup-list BACKUP_ROOT=...` | inventory | read-only | нет | low; backup rows |
 | Backup | `make pg-backup-prune-dry BACKUP_ROOT=...` | retention dry-run | read-only | нет | low; keep/delete plan |
 | Release | `make release-preflight EXPECTED_REVISION=<sha>` | staging deployment preflight | read-only | нет* | low; OK/FAIL messages (no secrets) |

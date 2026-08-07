@@ -2,7 +2,7 @@
 
 Backup — отдельная восстанавливаемая копия данных; snapshot фиксирует состояние volume/VM на момент времени, но может зависеть от того же provider/account и без DB coordination быть неконсистентным. Backup, для которого никогда не проверяли restore, — разновидность оптимизма, а не стратегия.
 
-## Scope (PRD1B)
+## Scope (PRD1B + PRD1C3B2B1 foundation)
 
 Репозиторий предоставляет **database-level logical backup** PostgreSQL (custom-format `pg_dump`) для staging Compose project:
 
@@ -13,7 +13,9 @@ Backup — отдельная восстанавливаемая копия да
 - application/schema checks (Alembic);
 - list / count-based prune (default dry-run).
 
-**Не входит в PRD1B:** volume filesystem copy, backup `tmp`/media, restore поверх live DB, automatic rollback, cron/systemd, S3/off-host, encryption, `pg_basebackup`, WAL/PITR, host Nginx/TLS, deploy automation.
+**PRD1C3B2B1 (foundation only):** один непрерывный `BackupRootLock` на backup root для create→verify в одной сессии; **exact set equality** между explicit expected Alembic heads, static heads из явно указанного migrations/versions каталога schema release, и **всеми** строками `alembic_version` после restore; immutable attestation schema **v2** для успешных проверок; legacy v1 attestations остаются неизменными историческими артефактами. **Не выполняет** production Alembic upgrade/downgrade/stamp, migration transaction, deploy/rollout, изменения `state/current.json`, retention holds.
+
+**Не входит в PRD1B/PRD1C3B2B1:** volume filesystem copy, backup `tmp`/media, restore поверх live DB, automatic rollback, cron/systemd, S3/off-host, encryption, `pg_basebackup`, WAL/PITR, host Nginx/TLS, deploy automation, unified migrate→rollout (PRD1C3B2C).
 
 Локальный backup root (например `/srv/fetchnow-staging/backups`) **не** является off-host защитой. Scheduling и off-host copy — отдельная последующая работа. Recovery ≠ automatic application rollback.
 
@@ -44,6 +46,22 @@ python3.12 scripts/fetchnow_pg_backup_cli.py create \
 ```
 
 ### Verify / list / prune
+
+Operator CLI `verify` accepts explicit schema authority (repeatable for multi-head graphs):
+
+```bash
+python3.12 scripts/fetchnow_pg_backup_cli.py verify \
+  --project-name fetchnow-staging \
+  --env-file .env.staging \
+  --compose-file compose.yaml \
+  --compose-file compose.staging.yaml \
+  --backup-root /srv/fetchnow-staging/backups \
+  --backup-id 20260804T012345Z_d26d920 \
+  --expected-alembic-head <revision> \
+  --migrations-versions-dir /path/to/schema-release/migrations/versions
+```
+
+When `--expected-alembic-head` is omitted, heads are inferred only at the CLI boundary from `--migrations-versions-dir` (default: repository worktree `backend/migrations/versions`). **Lower authority** than the strict session API used by future PRD1C3B2B2 migration transaction callers, which must pass both explicit expected heads and explicit migrations directory.
 
 ```bash
 make pg-backup-verify BACKUP_ROOT=/srv/fetchnow-staging/backups BACKUP_ID=20260804T012345Z_d26d920
@@ -78,17 +96,46 @@ Manifest schema v1 фиксирует project, DB name, Postgres/`pg_dump` versi
 
 ## Restore verification
 
-`verify` пересчитывает SHA-256, снова вызывает `pg_restore -l`, создаёт DB только с префиксом `fetchnow_restore_verify_`, восстанавливает с `--exit-on-error --no-owner --no-privileges`, проверяет:
+`verify` пересчитывает SHA-256, снова вызывает `pg_restore -l`, создаёт DB только с префиксом `fetchnow_restore_verify_`, восстанавливает с `--exit-on-error --no-owner --no-privileges`, затем проверяет:
 
-- соединение;
-- таблицу `alembic_version` (создаётся Alembic, не изобретена инструментом);
-- revision ∈ discovered Alembic heads репозитория (`version_num`);
-- required tables for the **current empty baseline** (`alembic_version` only — no invented application tables yet);
-- отсутствие invalid indexes.
+1. explicit expected Alembic heads (non-empty sorted unique revision IDs);
+2. static head set from the explicit migrations/versions directory (fail closed on malformed/cyclic/duplicate-parent graphs; reject symlink leaf directory);
+3. **exact set equality** `expected == static == all rows in restored alembic_version` (multi-head supported; never “last row” semantics);
+4. semantic checks (connection, required tables for current baseline, invalid indexes);
+5. cleanup of the temporary database in `finally` (cleanup failure ⇒ verification failure; no passed v2 attestation).
 
-When real application tables appear in future migrations, extend semantic checks without changing the backup archive format.
+### Backup-root session (PRD1C3B2B1)
 
-Temporary DB всегда удаляется в `finally`. Attestation пишется отдельно; published `manifest.json` не мутируется.
+Programmatic callers use one continuous lock:
+
+```python
+from fetchnow_pg_backup.session import open_backup_root_session
+
+with open_backup_root_session(backup_root=..., repo_root=...) as session:
+    created = session.create_backup(target=...)
+    verified = session.verify_backup(
+        target=...,
+        backup_dir=created.backup_dir,
+        expected_alembic_heads=(...),
+        migrations_versions_dir=Path(".../migrations/versions"),
+    )
+```
+
+Public `create_backup()` / `verify_backup()` remain available and acquire their own session when called independently. No `skip_lock` / `assume_locked` bypass exists.
+
+Source application database is never restored over, dropped, or renamed. Temporary DB name remains constrained to the verification prefix.
+
+### Attestation v1 vs v2
+
+| Schema | When written | Exact-head proof |
+| --- | --- | --- |
+| v1 | historical PRD1B passed/failed records only | no — legacy semantic-only evidence |
+| v2 passed | successful verifications after PRD1C3B2B1 | yes — binds expected, static, restored head sets and `migrations_graph_sha256` |
+| v2 failed | modern failed verifications (authority/archive/restore/semantic/cleanup failures) | no — records expected/static authority and optional restored heads without claiming equality |
+
+v2 passed attestations require semantic success, cleanup success, and exact equality between `expected_alembic_heads`, `static_alembic_heads`, and `verified_restored_heads`. v2 failed attestations never claim `exact_head_proof`; they bind the selected migrations authority via content SHA-256 (`migrations_graph_sha256`) rather than host paths. New failures after B2B1 use schema v2 — v1 is not written for new verification attempts.
+
+Typed `VerifyResult` exposes attestation schema version, path, SHA-256, expected/static/restored heads, `migrations_graph_sha256`, semantic/cleanup flags, and `exact_head_proof` for PRD1C3B2B2 orchestration (no stdout parsing required).
 
 ## Password URL caveat
 

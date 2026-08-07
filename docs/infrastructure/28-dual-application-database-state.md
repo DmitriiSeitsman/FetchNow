@@ -81,8 +81,11 @@ C3A recover/rollout concern, not forward deploy planning.
 
 | PR | Scope |
 | --- | --- |
-| PRD1C3B2B | Verified backup + migration execution transaction |
+| PRD1C3B2B1 | Backup verification foundation: one-lock session, exact Alembic head proof, attestation v2 (implemented; no migration execution) |
+| PRD1C3B2B2 | Verified backup + migration execution transaction (consumes typed verify evidence) |
 | PRD1C3B2C | Unified deploy orchestration (migrate → application rollout) |
+
+PRD1C3B2B1 does **not** change `state/current.json`, rollout/recover behavior, retention holds, or staging deployment. Future migration callers must use the strict session API with explicit expected heads and explicit schema-release migrations directory — not silent worktree inference.
 
 ## Operator notes
 
