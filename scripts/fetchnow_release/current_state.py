@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .c2_constants import SOURCE_DIRNAME
 from .c3_constants import CURRENT_STATE_NAME, STATE_DIRNAME
 from .c3b2a_constants import (
     APPLICATION_STATE_KEYS,
@@ -538,6 +539,110 @@ def build_bootstrap_database_state(
         last_migration_id=None,
         compatibility_contract_sha256=None,
         compatible_application_revisions=(rev,),
+    )
+
+
+def schema_release_migrations_versions_dir(
+    deploy_root: Path,
+    schema_release_revision: str,
+    *,
+    repo_root: Path,
+) -> Path:
+    """Return the authoritative migrations/versions directory for a schema release."""
+    rev = validate_full_sha(schema_release_revision)
+    release = release_dir(deploy_root, rev)
+    verified = verify_prepared_release(
+        release, expected_revision=rev, repo_root=repo_root
+    )
+    if not verified.ok:
+        raise CurrentStateError(verified.messages[0])
+    versions = release / SOURCE_DIRNAME / "backend" / "migrations" / "versions"
+    if not versions.is_dir():
+        raise CurrentStateError(
+            f"schema release migrations directory missing: {versions}"
+        )
+    return versions
+
+
+def migrations_graph_sha256_for_schema_release(
+    deploy_root: Path,
+    schema_release_revision: str,
+    *,
+    repo_root: Path,
+) -> str:
+    """Recompute migrations graph SHA from an immutable prepared release snapshot."""
+    import sys
+
+    scripts = Path(__file__).resolve().parents[1]
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from fetchnow_pg_backup.migrations_authority import (  # noqa: E402
+        migrations_graph_content_sha256,
+    )
+
+    versions = schema_release_migrations_versions_dir(
+        deploy_root, schema_release_revision, repo_root=repo_root
+    )
+    return migrations_graph_content_sha256(versions)
+
+
+def assert_schema_release_graph_sha256(
+    deploy_root: Path,
+    schema_release_revision: str,
+    expected_graph_sha256: str,
+    *,
+    repo_root: Path,
+) -> None:
+    """Require attestation/plan graph SHA to match the schema release authority."""
+    if not _CONTRACT_HASH_RE.fullmatch(expected_graph_sha256):
+        raise CurrentStateError("expected migrations graph SHA must be 64 hex chars")
+    actual = migrations_graph_sha256_for_schema_release(
+        deploy_root, schema_release_revision, repo_root=repo_root
+    )
+    if actual != expected_graph_sha256:
+        raise CurrentStateError(
+            "migrations graph SHA mismatch for schema release "
+            f"{schema_release_revision}: attestation/plan binding "
+            f"{expected_graph_sha256} != recomputed {actual} from prepared release"
+        )
+
+
+def next_database_state_after_migration(
+    *,
+    previous: DatabaseState,
+    target_revision: str,
+    target_heads: frozenset[str] | tuple[str, ...],
+    migration_id: str,
+    compatibility_contract_sha256: str,
+) -> DatabaseState:
+    """Publish database state after a verified forward migration transaction.
+
+    ``database.schema_release_revision`` is the sole persisted migrations-graph
+    authority in schema v2. Graph SHA-256 is recomputed from the verified prepared
+    release at that revision during migration gates; it is not stored in
+    ``current.json``.
+    """
+    target = validate_full_sha(target_revision)
+    sorted_heads = tuple(sorted(frozenset(target_heads)))
+    if not sorted_heads:
+        raise CurrentStateError("target database heads must be non-empty")
+    mig_id = _parse_deployment_id(migration_id, field="last_migration_id")
+    contract = _parse_optional_contract_hash(
+        compatibility_contract_sha256, field="compatibility_contract_sha256"
+    )
+    if contract is None:
+        raise CurrentStateError("migration requires compatibility_contract_sha256")
+    envelope = set(previous.compatible_application_revisions)
+    envelope.add(previous.schema_release_revision)
+    for rev in previous.compatible_application_revisions:
+        envelope.add(rev)
+    envelope.add(target)
+    return DatabaseState(
+        heads=sorted_heads,
+        schema_release_revision=target,
+        last_migration_id=mig_id,
+        compatibility_contract_sha256=contract,
+        compatible_application_revisions=tuple(sorted(envelope)),
     )
 
 

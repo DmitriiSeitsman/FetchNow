@@ -13,6 +13,7 @@ from . import (
 )
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .revision import validate_full_sha
+from .migration_project import MigrationProjectError, assert_migration_project
 from .rollout_project import RolloutProjectError, assert_rollout_project
 
 
@@ -66,17 +67,26 @@ def validate_staging_rendered(
     expected_gateway_port = DEFAULT_GATEWAY_PORT
     if expected_project != STAGING_PROJECT:
         validated = False
-        for checker in (assert_rollout_project, assert_deploy_plan_project):
+        for checker in (
+            assert_rollout_project,
+            assert_deploy_plan_project,
+            assert_migration_project,
+        ):
             try:
                 checker(expected_project)
                 validated = True
                 break
-            except (RolloutProjectError, DeployPlanProjectError):
+            except (
+                RolloutProjectError,
+                DeployPlanProjectError,
+                MigrationProjectError,
+            ):
                 continue
         if not validated:
             raise ComposeContractError(
                 f"refusing unsafe project name {expected_project!r}; "
-                "expected fetchnow-rollout-test-* or fetchnow-deploy-plan-test-*"
+                "expected fetchnow-rollout-test-*, fetchnow-deploy-plan-test-*, "
+                "or fetchnow-migration-test-*"
             )
         expected_gateway_port = int(published)
     if published not in {

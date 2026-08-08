@@ -16,6 +16,7 @@ INCOMPLETE_PREFIX = ".incomplete-"
 RESTORE_DB_PREFIX = "fetchnow_restore_verify_"
 DEFAULT_KEEP_COUNT = 7
 DEFAULT_COMPRESSION = "gzip:6"
+HOLD_SCHEMA_VERSION = 1
 ARCHIVE_FORMAT = "custom"
 # Alembic metadata table created by Alembic itself (not invented).
 ALEMBIC_VERSION_TABLE = "alembic_version"

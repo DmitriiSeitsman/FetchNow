@@ -84,7 +84,8 @@ make release-recover \
 |---|---|
 | PRD1C3A (this chapter) | application image-ID activation, health stabilization, journaled rollback/recover; no DB mutation |
 | PRD1C3B2A | Dual application/database `current.json` + compatibility envelope (no DB mutation) |
-| PRD1C3B | migration orchestration and any explicitly approved schema-change transaction |
+| PRD1C3B2B2 | verified forward migration transaction (database state only; no application activation) — см. [главу 29](29-verified-migration-transaction.md) |
+| PRD1C3B2C | unified migrate→rollout orchestration |
 | PRD1D | host Nginx/TLS/public publish and production operationalization |
 
 Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, or `fetchnow-prod`.

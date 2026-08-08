@@ -15,6 +15,8 @@ Backup — отдельная восстанавливаемая копия да
 
 **PRD1C3B2B1 (foundation only):** один непрерывный `BackupRootLock` на backup root для create→verify в одной сессии; **exact set equality** между explicit expected Alembic heads, static heads из явно указанного migrations/versions каталога schema release, и **всеми** строками `alembic_version` после restore; immutable attestation schema **v2** для успешных проверок; legacy v1 attestations остаются неизменными историческими артефактами. **Не выполняет** production Alembic upgrade/downgrade/stamp, migration transaction, deploy/rollout, изменения `state/current.json`, retention holds.
 
+**PRD1C3B2B2 (verified migration transaction):** retention holds under `holds/<hold-id>/` protect migration backups from prune; holds bind backup identity, migration ID, and v2 attestation SHA-256. Holds are acquired under `BackupRootLock` and released after terminal migration commit or explicit recovery. См. [главу 29](29-verified-migration-transaction.md).
+
 **Не входит в PRD1B/PRD1C3B2B1:** volume filesystem copy, backup `tmp`/media, restore поверх live DB, automatic rollback, cron/systemd, S3/off-host, encryption, `pg_basebackup`, WAL/PITR, host Nginx/TLS, deploy automation, unified migrate→rollout (PRD1C3B2C).
 
 Локальный backup root (например `/srv/fetchnow-staging/backups`) **не** является off-host защитой. Scheduling и off-host copy — отдельная последующая работа. Recovery ≠ automatic application rollback.

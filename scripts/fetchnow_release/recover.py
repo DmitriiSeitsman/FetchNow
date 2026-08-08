@@ -359,6 +359,15 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
         ensure_rollout_layout(deploy)
         with RolloutLock(deploy, wait=inp.wait_lock):
+            from .migration_journal import find_unresolved_migrations
+
+            unresolved_migrations = find_unresolved_migrations(deploy)
+            if unresolved_migrations:
+                raise RecoverError(
+                    "unresolved migration journal(s) block application recovery: "
+                    + ", ".join(unresolved_migrations)
+                    + "; use recover-migration …"
+                )
             dep_dir = deployment_dir(deploy, inp.deployment_id)
             if not dep_dir.is_dir():
                 raise RecoverError(f"deployment journal not found: {inp.deployment_id}")

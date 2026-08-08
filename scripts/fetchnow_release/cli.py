@@ -12,6 +12,8 @@ from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
 from .preflight import PreflightInput, run_preflight
 from .prepare import PrepareInput, prepare_release
+from .migrate import MigrationInput, run_migration
+from .migration_recover import MigrationRecoverInput, recover_migration
 from .recover import RecoverInput, recover_deployment
 from .rollout import RolloutInput, rollout_release
 from .verify_release import verify_prepared_release
@@ -156,6 +158,49 @@ def build_parser() -> argparse.ArgumentParser:
         default="http://127.0.0.1:8091",
     )
     rec.add_argument("--wait-lock", action="store_true")
+
+    mig = sub.add_parser(
+        "migrate",
+        help="Verified database migration transaction (no application activation)",
+    )
+    mig.add_argument("--project-name", default=STAGING_PROJECT)
+    mig.add_argument("--env-file", type=Path, required=True)
+    mig.add_argument(
+        "--compose-file", action="append", dest="compose_files", required=True
+    )
+    mig.add_argument("--expected-revision", required=True)
+    mig.add_argument("--deploy-root", type=Path, required=True)
+    mig.add_argument("--backup-root", type=Path, default=None)
+    mig.add_argument("--repo-root", type=Path, default=None)
+    mig.add_argument(
+        "--gateway-base-url",
+        default="http://127.0.0.1:8091",
+    )
+    mig.add_argument("--wait-lock", action="store_true")
+
+    mrec = sub.add_parser(
+        "recover-migration",
+        help="Recover an unresolved migration journal (explicit action)",
+    )
+    mrec.add_argument("--project-name", default=STAGING_PROJECT)
+    mrec.add_argument("--env-file", type=Path, required=True)
+    mrec.add_argument(
+        "--compose-file", action="append", dest="compose_files", required=True
+    )
+    mrec.add_argument("--deploy-root", type=Path, required=True)
+    mrec.add_argument("--backup-root", type=Path, default=None)
+    mrec.add_argument("--migration-id", required=True)
+    mrec.add_argument(
+        "--action",
+        required=True,
+        choices=("accept_source", "accept_target", "release_hold"),
+    )
+    mrec.add_argument("--repo-root", type=Path, default=None)
+    mrec.add_argument(
+        "--gateway-base-url",
+        default="http://127.0.0.1:8091",
+    )
+    mrec.add_argument("--wait-lock", action="store_true")
     return parser
 
 
@@ -300,6 +345,65 @@ def main(argv: list[str] | None = None) -> int:
                 deploy_root=args.deploy_root.expanduser().resolve(),
                 repo_root=repo,
                 deployment_id=args.deployment_id,
+                action=args.action,
+                gateway_base_url=base,
+                wait_lock=bool(args.wait_lock),
+            )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        return 0 if result.ok else 1
+
+    if args.command == "migrate":
+        base = args.gateway_base_url
+        if not base.startswith("http://127.0.0.1:") and not base.startswith(
+            "http://localhost:"
+        ):
+            print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
+            return 1
+        result = run_migration(
+            MigrationInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                compose_files=_compose_files(args, repo),
+                expected_revision=args.expected_revision,
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                backup_root=(
+                    args.backup_root.expanduser().resolve()
+                    if args.backup_root is not None
+                    else None
+                ),
+                gateway_base_url=base,
+                wait_lock=bool(args.wait_lock),
+            )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        if result.already_migrated:
+            print("OK: already migrated (read-only verify)")
+        return 0 if result.ok else 1
+
+    if args.command == "recover-migration":
+        base = args.gateway_base_url
+        if not base.startswith("http://127.0.0.1:") and not base.startswith(
+            "http://localhost:"
+        ):
+            print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
+            return 1
+        result = recover_migration(
+            MigrationRecoverInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                compose_files=_compose_files(args, repo),
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                backup_root=(
+                    args.backup_root.expanduser().resolve()
+                    if args.backup_root is not None
+                    else None
+                ),
+                migration_id=args.migration_id,
                 action=args.action,
                 gateway_base_url=base,
                 wait_lock=bool(args.wait_lock),

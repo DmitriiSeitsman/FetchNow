@@ -4,6 +4,9 @@
 Uses a clean temporary clone of the trusted revision (so a dirty developer
 worktree cannot affect the result), a unique temporary deploy root, and a
 test-only env. Does not start containers or touch shared volumes.
+
+Exit status: inspect the Python process exit code directly. Piping output
+through ``| tail`` returns the pipe's exit code, not Python's.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ sys.path.insert(0, str(ROOT / "tests" / "release"))
 from fetchnow_release.prepare import PrepareInput, _chmod_tree_readonly, prepare_release  # noqa: E402
 from fetchnow_release.verify_release import verify_prepared_release  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
+
+INTEGRATION_SUCCESS_MARKER = "OK: release-build integration passed"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -300,7 +305,7 @@ def main() -> int:
             raise RuntimeError(f"unexpected build containers: {ps.stdout!r}")
         print("OK: no release-build containers created")
 
-        print("OK: release-build integration passed")
+        print(INTEGRATION_SUCCESS_MARKER)
         rc = 0
     except Exception:  # noqa: BLE001
         traceback.print_exc()

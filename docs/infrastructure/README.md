@@ -52,6 +52,8 @@ Internet
 
 **PRD1C3B2A (dual application/database state):** `current.json` schema v2 separates application identity from database schema identity and enforces an explicit compatibility envelope across rollout/recover/already-active and deploy-plan. No database mutation. См. [главу 28](28-dual-application-database-state.md).
 
+**PRD1C3B2B2 (verified migration transaction):** journaled forward migration under rollout lock with B2B1 backup proof, retention holds, Alembic from target release image, atomic database-side `current.json` commit, and explicit recovery — without application activation. См. [главу 29](29-verified-migration-transaction.md).
+
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
 ## Как читать
@@ -100,3 +102,4 @@ Internet
 26. [Deployment transaction & rollback (PRD1C3A)](26-deployment-transaction-rollback.md)
 27. [Migration compatibility & deploy-plan (PRD1C3B1)](27-migration-compatibility-deployment-planning.md)
 28. [Dual application/database state (PRD1C3B2A)](28-dual-application-database-state.md)
+29. [Verified migration transaction (PRD1C3B2B2)](29-verified-migration-transaction.md)

@@ -259,8 +259,57 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          python3 scripts/release_deploy_plan_ci_cleanup.py \
+            python3 scripts/release_deploy_plan_ci_cleanup.py \
             --project-file "${RUNNER_TEMP}/fetchnow-deploy-plan-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
+  release-migration-unit:
+    name: Migration transaction unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.4.1
+      - name: Unit tests
+        run: |
+          python -m pytest -q \
+            tests/release/test_migration_journal_unit.py \
+            tests/release/test_migrate_unit.py \
+            tests/release/test_migration_recover_unit.py \
+            tests/pg_backup/test_retention_hold_unit.py
+
+  release-migration-integration:
+    name: Migration transaction integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Migration transaction integration
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_migration_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-migration-project.txt"
+      - name: Cleanup migration integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/release_migration_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-migration-project.txt" \
             --repo-root "${GITHUB_WORKSPACE}"
 
   web:

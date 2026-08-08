@@ -16,6 +16,7 @@ from .fs_safety import (
 from .list_backups import list_backups
 from .locking import BackupRootLock
 from .manifest import ManifestError, ManifestV1
+from .retention_hold import RetentionHoldError, active_hold_for_backup
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,26 @@ def select_prune_candidates(
                 )
             )
             continue
+        try:
+            held = active_hold_for_backup(backup_root, item.backup_id)
+        except RetentionHoldError:
+            decisions.append(
+                PruneDecision(
+                    item.backup_id,
+                    "skip",
+                    reason="malformed retention hold (fail closed)",
+                )
+            )
+            continue
+        if held is not None:
+            decisions.append(
+                PruneDecision(
+                    item.backup_id,
+                    "keep",
+                    f"active retention hold {held.hold_id}",
+                )
+            )
+            continue
         if item.backup_id in deletable_ids:
             decisions.append(
                 PruneDecision(
@@ -127,6 +148,11 @@ def prune_backups(
                     raise PathSafetyError("refusing non-directory or symlink delete")
                 # Must still have a valid manifest at delete time.
                 ManifestV1.load(path / MANIFEST_FILENAME)
+                held = active_hold_for_backup(root, decision.backup_id)
+                if held is not None:
+                    raise PathSafetyError(
+                        f"refusing to delete backup with active hold {held.hold_id}"
+                    )
                 att = latest_attestation(path)
                 # Re-affirm protections.
                 if decision.reason.startswith("newest"):

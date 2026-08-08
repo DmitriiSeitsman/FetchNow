@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Isolated PRD1C3B1 deploy-plan integration (read-only planner path)."""
+"""Isolated PRD1C3B1 deploy-plan integration (read-only planner path).
+
+Exit status: callers must inspect the process exit code directly. Piping
+stdout/stderr through ``| tail`` or similar returns the pipe's exit code,
+not Python's (use ``PIPESTATUS`` in bash when filtering output).
+"""
 
 from __future__ import annotations
 
@@ -49,6 +54,8 @@ from fetchnow_release.prepare import (  # noqa: E402
 )
 from fetchnow_release.verify_release import verify_prepared_release  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
+
+INTEGRATION_SUCCESS_MARKER = "OK: deploy-plan integration passed"
 
 MIGRATION_FILE = """\"\"\"Online expand migration for deploy-plan integration.\"\"\"
 
@@ -813,9 +820,11 @@ def main(argv: list[str] | None = None) -> int:
 
         run(compose + ["down", "-v", "--remove-orphans"], cwd=clone)
         print(f"OK: isolated Compose project cleanup completed ({project})")
+        print(INTEGRATION_SUCCESS_MARKER)
         rc = 0
     except Exception:
         traceback.print_exc()
+        rc = 1
         try:
             assert_deploy_plan_project(project)
             compose = compose_cmd(project, env_dir / ".env.deploy-plan", clone)
