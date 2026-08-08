@@ -66,7 +66,19 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make release-deploy-plan EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only migration-aware deploy plan (dual-state aware; emits `application_rollout_required`) | read-only | нет* | low; canonical JSON plan on stdout |
 | Release | `make release-deploy-plan-test` | migration contract + deploy-plan unit tests | read-only | нет | low; pytest |
 | Release | `make release-deploy-plan-integration` | isolated deploy-plan IT | unique test project only | нет* | medium; `fetchnow-deploy-plan-test-*` only |
+| Release | `make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=... BACKUP_ROOT=...` | verified DB migration (no app activation) | database + backup root | нет* | high; journaled commit or recovery |
+| Release | `make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source\|accept_target\|release_hold ...` | resolve `migration_requires_recovery` or release a stuck post-commit hold | deploy + backup root | нет* | high; explicit recovery only |
+| Release | `make release-migration-test` | migration journal + hold + Alembic helper unit tests | read-only | нет | low; pytest |
+| Release | `make release-migration-integration` | isolated migration transaction IT | unique test project only | нет* | high; `fetchnow-migration-test-*` only |
 | Release | `make release-test` | preflight/health unit tests | read-only | нет | low; pytest |
+
+**`release_hold` recovery action:** use only when migration `result.json` is
+already `committed` but the B2B1 retention hold is still active (for example
+after a post-commit hold-release WARN). Requires matching migration journal,
+active hold, and rollout lock; idempotent when already resolved. Success:
+`OK: retention hold released (<hold_id>)`. A repeated hold-release failure
+returns `FAIL:` and leaves the hold active (backup still prune-protected).
+See [Verified migration transaction](29-verified-migration-transaction.md).
 
 | Release | `make release-health-integration` | isolated health integration | modifying test project | нет* | medium; unique `fetchnow-health-test-*` only |
 

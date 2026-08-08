@@ -29,11 +29,13 @@ from fetchnow_release.current_state import (  # noqa: E402
     CurrentStateError,
     DatabaseState,
     LegacyCurrentStateV1,
+    assert_schema_release_graph_sha256,
     build_bootstrap_database_state,
     build_committed_current_state,
     current_path,
     load_parsed_current_state,
     next_database_state_after_app_commit,
+    next_database_state_after_migration,
     parse_current_state_bytes,
     parse_current_state_document,
     parse_current_state_v2,
@@ -387,3 +389,36 @@ def test_application_must_be_in_envelope() -> None:
     raw["application"] = application
     with pytest.raises(CurrentStateError, match="compatible_application_revisions"):
         parse_current_state_v2(raw)
+
+
+def test_next_database_state_after_migration_uses_schema_release_authority() -> None:
+    previous = build_bootstrap_database_state(
+        heads=frozenset({"0001_baseline"}),
+        schema_release_revision="a" * 40,
+    )
+    nxt = next_database_state_after_migration(
+        previous=previous,
+        target_revision="b" * 40,
+        target_heads=("0002_expand",),
+        migration_id="12345678-1234-1234-1234-123456789abc",
+        compatibility_contract_sha256="e" * 64,
+    )
+    assert "migrations_graph_sha256" not in nxt.to_dict()
+    assert nxt.schema_release_revision == "b" * 40
+    assert nxt.heads == ("0002_expand",)
+
+
+def test_assert_schema_release_graph_sha256_mismatch(tmp_path: Path) -> None:
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    with mock.patch(
+        "fetchnow_release.current_state.migrations_graph_sha256_for_schema_release",
+        return_value="a" * 64,
+    ):
+        with pytest.raises(CurrentStateError, match="migrations graph SHA mismatch"):
+            assert_schema_release_graph_sha256(
+                deploy,
+                "b" * 40,
+                "c" * 64,
+                repo_root=tmp_path,
+            )

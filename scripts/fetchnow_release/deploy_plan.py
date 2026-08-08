@@ -123,6 +123,15 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         deploy_root = validate_deploy_root(
             inp.deploy_root.expanduser().resolve(), repo_root=inp.repo_root
         )
+        from .migration_journal import find_unresolved_migrations
+
+        unresolved_migrations = find_unresolved_migrations(deploy_root)
+        if unresolved_migrations:
+            raise DeployPlanError(
+                "unresolved migration journal(s) block deployment mutation: "
+                + ", ".join(unresolved_migrations)
+                + "; resolve with recover-migration before rollout"
+            )
         backup_root = Path(inp.backup_root or env["FETCHNOW_BACKUP_ROOT"])
         validate_operator_root(
             backup_root, repo_root=inp.repo_root, label="backup root"

@@ -27,6 +27,7 @@ from .git_checks import (
 from .password import PasswordError, validate_staging_password
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
+from .migration_project import MigrationProjectError, assert_migration_project
 from .rollout_project import RolloutProjectError, assert_rollout_project
 from .roots import RootPathError, validate_operator_root
 
@@ -38,15 +39,17 @@ def _assert_allowed_project(name: str) -> None:
     for checker, label in (
         (assert_rollout_project, "fetchnow-rollout-test-*"),
         (assert_deploy_plan_project, "fetchnow-deploy-plan-test-*"),
+        (assert_migration_project, "fetchnow-migration-test-*"),
     ):
         try:
             checker(name)
             return
-        except (RolloutProjectError, DeployPlanProjectError):
+        except (RolloutProjectError, DeployPlanProjectError, MigrationProjectError):
             continue
     raise PreflightError(
         f"project name must be {STAGING_PROJECT!r} or a validated "
-        f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* name, got {name!r}"
+        f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
+        f"fetchnow-migration-test-* name, got {name!r}"
     )
 
 

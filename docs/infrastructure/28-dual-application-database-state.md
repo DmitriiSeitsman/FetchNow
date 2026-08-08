@@ -37,6 +37,19 @@ application mutation or already-active verification. Application release
 source is **not** DB authority when it differs from
 `database.schema_release_revision`.
 
+### Migrations graph authority (schema v2)
+
+`current.json` schema v2 does **not** store `migrations_graph_sha256`.
+The sole persisted migrations-graph authority is
+`database.schema_release_revision`: the immutable prepared release whose
+`backend/migrations/versions` directory defines the Alembic graph.
+
+Migration journals, backup v2 attestations, and retention holds bind a
+graph SHA-256 for B2B1/B2B2 cross-checks. At every commit/recovery gate
+the release tooling recomputes that SHA from the verified prepared release
+at `schema_release_revision` and requires equality with the journaled
+binding. There is no separate graph field in `current.json`.
+
 ## Compatibility envelope
 
 An application target may run against the current database when **either**:

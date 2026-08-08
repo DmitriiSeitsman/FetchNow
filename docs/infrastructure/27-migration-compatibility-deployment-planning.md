@@ -197,13 +197,16 @@ operations are filesystem reads, release verification reads, read-only Compose
 ps/config/inspect, read-only `psql SELECT`, image inspect, and free-space
 checks.
 
+When an unresolved migration journal exists, `deploy-plan` fails closed with a
+clear diagnostic (mutation blocked until `recover-migration` resolves it).
+
 ## Scope boundary
 
 | Phase | Responsibility |
 |-------|----------------|
 | PRD1C3B1 | Contract + read-only `deploy-plan` |
 | PRD1C3B2A | Dual state + compatibility envelope (no DB mutation) |
-| PRD1C3B2B | Verified backup + migration orchestration under lock |
+| PRD1C3B2B2 | Verified migration transaction (`release-migrate`); see [chapter 29](29-verified-migration-transaction.md) |
 | PRD1C3B2C | Unified deploy orchestration |
 | PRD1C3A | Application rollout when compatibility envelope permits |
 | PRD1D | First real staging deployment |

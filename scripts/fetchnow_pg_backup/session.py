@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import DEFAULT_COMPRESSION
+from . import DEFAULT_COMPRESSION, HOLD_SCHEMA_VERSION
 from .compose_target import ComposeTarget
 from .fs_safety import validate_backup_root
 from .locking import BackupRootLock
@@ -17,6 +18,7 @@ from .process_util import run_command
 
 if TYPE_CHECKING:
     from .create import CreateResult
+    from .retention_hold import RetentionHoldAcquired
     from .verify import VerifyResult
 
 
@@ -94,6 +96,80 @@ class BackupRootSession:
             migrations_versions_dir=migrations_versions_dir,
             runner=runner,
         )
+
+    def acquire_retention_hold(
+        self,
+        *,
+        backup_dir: Path,
+        migration_id: str,
+        verified: VerifyResult,
+    ) -> RetentionHoldAcquired:
+        self._require_active()
+        from . import MANIFEST_FILENAME, VERIFICATIONS_DIRNAME, __version__
+        from .manifest import ManifestV1
+        from .retention_hold import (
+            RetentionHoldAcquired,
+            RetentionHoldError,
+            new_hold_id,
+            publish_acquired_hold,
+        )
+
+        if not verified.passed or not verified.exact_head_proof:
+            raise RetentionHoldError(
+                "retention hold requires passed v2 exact-head verification"
+            )
+        if verified.attestation_schema_version != 2:
+            raise RetentionHoldError("retention hold requires attestation schema v2")
+        if verified.attestation_path is None or verified.attestation_sha256 is None:
+            raise RetentionHoldError("retention hold requires attestation identity")
+        if verified.expected_alembic_heads is None:
+            raise RetentionHoldError("retention hold requires expected heads")
+        if verified.static_alembic_heads is None:
+            raise RetentionHoldError("retention hold requires static heads")
+        if verified.verified_restored_heads is None:
+            raise RetentionHoldError("retention hold requires restored heads")
+        if verified.migrations_graph_sha256 is None:
+            raise RetentionHoldError("retention hold requires migrations graph SHA-256")
+
+        directory = backup_dir.resolve()
+        manifest = ManifestV1.load(directory / MANIFEST_FILENAME)
+        rel_attestation = verified.attestation_path.relative_to(directory)
+        if VERIFICATIONS_DIRNAME not in rel_attestation.parts:
+            raise RetentionHoldError("attestation must live under verifications/")
+        hold_id = new_hold_id()
+        acquired = RetentionHoldAcquired(
+            schema_version=HOLD_SCHEMA_VERSION,
+            hold_id=hold_id,
+            backup_id=manifest.backup_id,
+            backup_manifest_sha256=manifest.sha256,
+            backup_dump_sha256=manifest.sha256,
+            migration_id=migration_id,
+            attestation_schema_version=2,
+            attestation_path=str(rel_attestation),
+            attestation_sha256=verified.attestation_sha256,
+            expected_alembic_heads=verified.expected_alembic_heads,
+            static_alembic_heads=verified.static_alembic_heads,
+            verified_restored_heads=verified.verified_restored_heads,
+            migrations_graph_sha256=verified.migrations_graph_sha256,
+            acquired_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            tool_version=__version__,
+        )
+        publish_acquired_hold(backup_root=self.backup_root, acquired=acquired)
+        return acquired
+
+    def release_retention_hold(self, *, hold_id: str, reason: str) -> None:
+        self._require_active()
+        from . import __version__
+        from .retention_hold import RetentionHoldReleased, publish_released_hold
+
+        released = RetentionHoldReleased(
+            schema_version=HOLD_SCHEMA_VERSION,
+            hold_id=hold_id,
+            released_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            reason=reason,
+            tool_version=__version__,
+        )
+        publish_released_hold(backup_root=self.backup_root, released=released)
 
 
 @contextmanager

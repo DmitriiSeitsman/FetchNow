@@ -395,9 +395,33 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
         if inp.project_name == STAGING_PROJECT:
             pass
         else:
-            from .rollout_project import assert_rollout_project
+            from .deploy_plan_project import (
+                DeployPlanProjectError,
+                assert_deploy_plan_project,
+            )
+            from .migration_project import MigrationProjectError, assert_migration_project
+            from .rollout_project import RolloutProjectError, assert_rollout_project
 
-            assert_rollout_project(inp.project_name)
+            for checker in (
+                assert_rollout_project,
+                assert_deploy_plan_project,
+                assert_migration_project,
+            ):
+                try:
+                    checker(inp.project_name)
+                    break
+                except (
+                    RolloutProjectError,
+                    DeployPlanProjectError,
+                    MigrationProjectError,
+                ):
+                    continue
+            else:
+                raise RolloutError(
+                    f"project name must be {STAGING_PROJECT!r} or a validated "
+                    f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
+                    f"fetchnow-migration-test-* name, got {inp.project_name!r}"
+                )
 
         rev = validate_full_sha(inp.expected_revision)
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
@@ -412,9 +436,6 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
         messages.append("OK: target release verified")
 
         current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
-        if current is not None and current.revision == rev:
-            return _verify_already_active(inp, deploy, rev, current)
-
         if current is None and not inp.bootstrap:
             raise RolloutError(
                 "no current.json — pass --bootstrap for first application rollout"
@@ -442,6 +463,15 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     "unresolved deployment journal(s) block new rollout: "
                     + ", ".join(unresolved)
                     + "; use recover --deployment-id …"
+                )
+            from .migration_journal import find_unresolved_migrations
+
+            unresolved_migrations = find_unresolved_migrations(deploy)
+            if unresolved_migrations:
+                raise RolloutError(
+                    "unresolved migration journal(s) block application rollout: "
+                    + ", ".join(unresolved_migrations)
+                    + "; use recover-migration …"
                 )
 
             # Re-check current under lock for races.
