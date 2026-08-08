@@ -7,6 +7,7 @@ __version__ = "1.0.0"
 TOOL_NAME = "fetchnow_pg_backup"
 MANIFEST_SCHEMA_VERSION = 1
 VERIFICATION_SCHEMA_VERSION = 1
+VERIFICATION_SCHEMA_VERSION_V2 = 2
 DUMP_FILENAME = "database.dump"
 MANIFEST_FILENAME = "manifest.json"
 VERIFICATIONS_DIRNAME = "verifications"

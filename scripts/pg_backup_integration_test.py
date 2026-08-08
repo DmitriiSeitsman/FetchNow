@@ -26,6 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from fetchnow_pg_backup.attestation import (  # noqa: E402
+    VerificationAttestationV2,
+    attestation_sha256,
+    parse_attestation_file,
+)
 from fetchnow_pg_backup.checksums import sha256_file  # noqa: E402
 from fetchnow_pg_backup.cli import main as cli_main  # noqa: E402
 from fetchnow_pg_backup.compose_target import (  # noqa: E402
@@ -38,8 +43,14 @@ from fetchnow_pg_backup.integration_project import (  # noqa: E402
     assert_safe_project,
     make_project_name,
 )
+from fetchnow_pg_backup.locking import BackupRootLock, LockError  # noqa: E402
+from fetchnow_pg_backup.migrations_authority import (  # noqa: E402
+    migrations_graph_content_sha256,
+    static_alembic_heads_from_migrations_dir,
+)
 from fetchnow_pg_backup.postgres_ops import read_database_name  # noqa: E402
 from fetchnow_pg_backup.process_util import require_ok, run_command  # noqa: E402
+from fetchnow_pg_backup.session import open_backup_root_session  # noqa: E402
 
 
 def cleanup_project(target: ComposeTarget) -> None:
@@ -159,50 +170,84 @@ def main(argv: list[str] | None = None) -> int:
         )
         require_ok(marker, context="read alembic_version")
         source_marker = marker.stdout_text.strip()
+        print("OK: database sentinel inserted before backup scenarios")
 
-        create_argv = [
-            "create",
-            "--project-name",
-            project,
-            "--env-file",
-            str(env_path),
-            "--compose-file",
-            str(ROOT / "compose.yaml"),
-            "--backup-root",
-            str(backup_root),
-        ]
-        if cli_main(create_argv) != 0:
-            raise RuntimeError("backup create failed")
-        print("OK: created backup (pg_dump custom-format + manifest/checksum)")
+        postgres_id = run_command(
+            build_compose_argv(target, "ps", "-q", "postgres"),
+            cwd=str(ROOT),
+        )
+        require_ok(postgres_id, context="postgres container id")
+        source_postgres_id = postgres_id.stdout_text.strip().splitlines()[0]
+        if not source_postgres_id:
+            raise RuntimeError("missing postgres container id")
 
-        published = [
-            p
-            for p in backup_root.iterdir()
-            if p.is_dir() and not p.name.startswith(".")
-        ]
-        if len(published) != 1:
-            raise RuntimeError(f"expected one backup, found {published}")
-        backup_id = published[0].name
-        dump = published[0] / "database.dump"
-        digest = sha256_file(dump)
-        print(f"OK: manifest/checksum validation path ready sha256={digest}")
+        migrations_dir = ROOT / "backend" / "migrations" / "versions"
+        expected_heads = static_alembic_heads_from_migrations_dir(migrations_dir)
+        graph_sha = migrations_graph_content_sha256(migrations_dir)
 
-        verify_argv = [
-            "verify",
-            "--project-name",
-            project,
-            "--env-file",
-            str(env_path),
-            "--compose-file",
-            str(ROOT / "compose.yaml"),
-            "--backup-root",
-            str(backup_root),
-            "--backup-id",
-            backup_id,
-        ]
-        if cli_main(verify_argv) != 0:
-            raise RuntimeError("backup verify failed")
-        print("OK: verified backup (temporary database restore + semantic checks)")
+        with open_backup_root_session(
+            backup_root=backup_root,
+            repo_root=ROOT,
+        ) as session:
+            created = session.create_backup(target=target)
+            backup_id = created.backup_id
+            dump = created.backup_dir / "database.dump"
+            digest = sha256_file(dump)
+            print(f"OK: created backup {backup_id} under single backup-root session")
+            print(f"OK: manifest/checksum validation path ready sha256={digest}")
+            try:
+                BackupRootLock(backup_root, wait=False).acquire()
+            except LockError:
+                print("OK: backup-root lock continuously held during session")
+            else:
+                raise RuntimeError("backup-root lock was not held during session")
+
+            verified = session.verify_backup(
+                target=target,
+                backup_dir=created.backup_dir,
+                expected_alembic_heads=expected_heads,
+                migrations_versions_dir=migrations_dir,
+            )
+        if not verified.passed:
+            raise RuntimeError(
+                f"backup verify failed: {verified.failure_reason or 'unknown'}"
+            )
+        if verified.attestation_schema_version != 2:
+            raise RuntimeError(
+                f"expected attestation schema v2, got {verified.attestation_schema_version}"
+            )
+        if not verified.exact_head_proof:
+            raise RuntimeError("verify result missing exact-head proof")
+        if verified.expected_alembic_heads != expected_heads:
+            raise RuntimeError("expected heads mismatch in typed verify result")
+        if verified.static_alembic_heads != expected_heads:
+            raise RuntimeError("static heads mismatch in typed verify result")
+        if verified.migrations_graph_sha256 != graph_sha:
+            raise RuntimeError("migrations graph SHA-256 mismatch in typed verify result")
+        if verified.verified_restored_heads != expected_heads:
+            raise RuntimeError("restored heads mismatch in typed verify result")
+        if verified.attestation_path is None or verified.attestation_sha256 is None:
+            raise RuntimeError("verify result missing attestation identity")
+        file_digest = attestation_sha256(verified.attestation_path)
+        if file_digest != verified.attestation_sha256:
+            raise RuntimeError("attestation SHA-256 mismatch between result and file")
+        parsed = parse_attestation_file(verified.attestation_path)
+        if parsed.schema_version != 2:
+            raise RuntimeError("parsed attestation is not schema v2")
+        if not isinstance(parsed, VerificationAttestationV2):
+            raise RuntimeError("parsed attestation is not v2 typed record")
+        if tuple(parsed.static_alembic_heads) != expected_heads:
+            raise RuntimeError("static heads mismatch in attestation bytes")
+        if parsed.migrations_graph_sha256 != graph_sha:
+            raise RuntimeError("migrations graph SHA-256 mismatch in attestation bytes")
+        if tuple(parsed.verified_restored_heads or ()) != expected_heads:
+            raise RuntimeError("restored heads mismatch in attestation bytes")
+        if not parsed.exact_head_proof:
+            raise RuntimeError("attestation bytes missing exact-head proof")
+        print("OK: attestation schema is v2")
+        print("OK: expected, static, and restored head sets are exactly equal")
+        print("OK: returned attestation SHA-256 matches file bytes")
+        print("OK: verified backup (single-session create + restore verification)")
 
         dbs = run_command(
             build_exec_argv(
@@ -224,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         corrupt_root = Path(tempfile.mkdtemp(prefix="fetchnow-pg-backup-corrupt-"))
         try:
             corrupt_dir = corrupt_root / backup_id
-            shutil.copytree(published[0], corrupt_dir)
+            shutil.copytree(backup_root / backup_id, corrupt_dir)
             cdump = corrupt_dir / "database.dump"
             cdump.write_bytes(cdump.read_bytes() + b"\x00CORRUPT")
             print(
@@ -275,6 +320,64 @@ def main(argv: list[str] | None = None) -> int:
         if after.stdout_text.strip() != source_marker:
             raise RuntimeError("source database changed during verify")
         print(f"OK: source database preserved ({source_db})")
+
+        postgres_after = run_command(
+            build_compose_argv(target, "ps", "-q", "postgres"),
+            cwd=str(ROOT),
+        )
+        require_ok(postgres_after, context="postgres container id after verify")
+        after_postgres_id = postgres_after.stdout_text.strip().splitlines()[0]
+        if after_postgres_id != source_postgres_id:
+            raise RuntimeError("postgres container ID changed during verify")
+        print("OK: source Postgres container ID unchanged")
+
+        wrong_heads_argv = [
+            "verify",
+            "--project-name",
+            project,
+            "--env-file",
+            str(env_path),
+            "--compose-file",
+            str(ROOT / "compose.yaml"),
+            "--backup-root",
+            str(backup_root),
+            "--backup-id",
+            backup_id,
+            "--expected-alembic-head",
+            "0000_nonexistent_head",
+            "--migrations-versions-dir",
+            str(migrations_dir),
+        ]
+        err = StringIO()
+        out = StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            wrong_rc = cli_main(wrong_heads_argv)
+        if wrong_rc == 0:
+            raise RuntimeError("wrong expected heads were incorrectly accepted")
+        attestation_files = list(
+            (backup_root / backup_id / "verifications").glob("verify_*_passed*.json")
+        )
+        v2_passed = [
+            p
+            for p in attestation_files
+            if parse_attestation_file(p).schema_version == 2
+        ]
+        if len(v2_passed) != 1:
+            raise RuntimeError(
+                "wrong-heads rejection must not create additional passed v2 attestations"
+            )
+        print("OK: wrong expected heads rejected without false passed attestation")
+
+        legacy_fixture = ROOT / "tests" / "pg_backup" / "fixtures" / "attestation_v1.json"
+        if legacy_fixture.is_file():
+            before_bytes = legacy_fixture.read_bytes()
+            before_mtime = legacy_fixture.stat().st_mtime
+            parse_attestation_file(legacy_fixture)
+            if legacy_fixture.read_bytes() != before_bytes:
+                raise RuntimeError("legacy v1 fixture bytes changed")
+            if legacy_fixture.stat().st_mtime != before_mtime:
+                raise RuntimeError("legacy v1 fixture mtime changed")
+            print("OK: legacy v1 fixture remains readable without rewrite")
 
         list_rc = cli_main(["list", "--backup-root", str(backup_root)])
         if list_rc != 0:

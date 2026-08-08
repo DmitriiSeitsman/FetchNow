@@ -46,6 +46,8 @@ Internet
 
 **PRD1C3A (deployment transaction):** application-only activation from immutable image IDs, stabilization, journaled rollback and explicit recover are implemented in the repository; no database mutation occurs in this path. См. [главу 26](26-deployment-transaction-rollback.md). This does not claim staging is deployed.
 
+**PRD1C3B2B1 (backup verification foundation):** exact-head restore verification, attestation schema v2, and one-lock backup-root session API are implemented; no production migration execution or deployment-state mutation. См. [главу 15](15-backups-and-restore.md).
+
 **PRD1C3B1 (migration compatibility + deploy-plan):** strict `deploy/migrations/compatibility.json` contract and read-only `deploy-plan` command are implemented in the repository; no backup, migration, or deployment mutation occurs in this path. См. [главу 27](27-migration-compatibility-deployment-planning.md).
 
 **PRD1C3B2A (dual application/database state):** `current.json` schema v2 separates application identity from database schema identity and enforces an explicit compatibility envelope across rollout/recover/already-active and deploy-plan. No database mutation. См. [главу 28](28-dual-application-database-state.md).

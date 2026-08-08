@@ -25,6 +25,20 @@ def discover_alembic_head_revisions(migrations_versions_dir: Path) -> tuple[str,
     return _discover(migrations_versions_dir)
 
 
+def build_table_semantic_sql() -> str:
+    """SQL script for non-head semantic checks (tables, invalid indexes)."""
+    table_checks = "\n".join(
+        f"SELECT 'table_{t}=' || CASE WHEN to_regclass('public.{t}') IS NOT NULL "
+        f"THEN 'ok' ELSE 'missing' END;"
+        for t in REQUIRED_PUBLIC_TABLES
+    )
+    return f"""
+SELECT 'connection=ok';
+{table_checks}
+SELECT 'invalid_indexes=' || COUNT(*)::text FROM pg_index WHERE NOT indisvalid;
+"""
+
+
 def build_semantic_sql(*, expected_revisions: tuple[str, ...]) -> str:
     """SQL script that exits on first error (ON_ERROR_STOP)."""
     if not expected_revisions:
@@ -54,6 +68,42 @@ def _kv(lines: list[str]) -> dict[str, str]:
             key, val = ln.split("=", 1)
             out[key.strip()] = val.strip()
     return out
+
+
+def run_table_semantic_checks(
+    target: ComposeTarget,
+    *,
+    database: str,
+    source_database: str,
+    runner: RunFn = run_command,
+) -> list[SemanticCheckResult]:
+    """Run semantic checks excluding Alembic head equality (handled separately)."""
+    sql = build_table_semantic_sql()
+    output = psql_on_database(
+        target,
+        database,
+        sql,
+        source_database=source_database,
+        runner=runner,
+    )
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    kv = _kv(lines)
+    results: list[SemanticCheckResult] = [
+        SemanticCheckResult(
+            "connection", kv.get("connection") == "ok", kv.get("connection", "")
+        ),
+    ]
+    for table in REQUIRED_PUBLIC_TABLES:
+        key = f"table_{table}"
+        results.append(SemanticCheckResult(key, kv.get(key) == "ok", kv.get(key, "")))
+    results.append(
+        SemanticCheckResult(
+            "invalid_indexes",
+            kv.get("invalid_indexes") == "0",
+            kv.get("invalid_indexes", ""),
+        )
+    )
+    return results
 
 
 def run_semantic_checks(
