@@ -62,6 +62,7 @@ services:
       OUTBOUND_PROBE_BODY_BYTES: ${OUTBOUND_PROBE_BODY_BYTES:-131072}
       OUTBOUND_USER_AGENT: ${OUTBOUND_USER_AGENT:-FetchNow/1.0}
       OUTBOUND_ALLOWED_CONTENT_TYPES: ${OUTBOUND_ALLOWED_CONTENT_TYPES:-text/html,application/json,text/plain}
+      WRAPPER_RESOLUTION_MAX_DEPTH: ${WRAPPER_RESOLUTION_MAX_DEPTH:-3}
     volumes:
       - tmp:/var/lib/fetchnow/tmp
     networks:

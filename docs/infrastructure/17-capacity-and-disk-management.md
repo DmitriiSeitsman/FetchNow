@@ -31,6 +31,7 @@ Disk capacity измеряет bytes, inode — количество filesystem 
 | Response | `OUTBOUND_ALLOWED_CONTENT_TYPES` | `text/html,application/json,text/plain` | runtime MIME allowlist |
 | Response | `OUTBOUND_MAX_RESPONSE_BYTES` | `1048576` | runtime hard response ceiling |
 | Probe | `OUTBOUND_PROBE_BODY_BYTES` | `131072` | runtime soft bounded-GET stop |
+| Wrapper | `WRAPPER_RESOLUTION_MAX_DEPTH` | `3` | max wrapper hops (1–8); foundation only |
 | Worker/capacity | `WORKER_POLL_INTERVAL_SECONDS` | `5` | runtime heartbeat interval |
 | Worker/capacity | `WORKER_CONCURRENCY` | `2` | Settings/logged only; media jobs absent |
 | Worker/capacity | `API_CONCURRENCY_LIMIT` | `32` | Settings only; enforcement absent |

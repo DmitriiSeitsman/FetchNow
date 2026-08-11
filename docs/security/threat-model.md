@@ -37,6 +37,16 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Residual risk | Misconfigured custom allow exceptions in future ops |
 | Planned PR | **PR1** + **PR2** redirect hops |
 
+### Wrapper resolution abuse (foundation)
+
+| Field | Detail |
+|---|---|
+| Attack | Nested wrappers, loops, private redirect targets, HTTP downgrade, arbitrary CDN/manifest candidates |
+| Impact | SSRF, resource exhaustion, unsupported media destinations |
+| Mitigation | Provider-first classification; sealed exact-host registry with immutable registration snapshots (live `exact_hostnames` ignored after build); HTTPS-only wrapper policy; depth/loop fingerprints; orchestration-scoped document allowlists (initial + redirect hosts); typed fail-closed outcomes; error/hop repr redaction ([ADR 0006](../adr/0006-wrapper-resolution-foundation.md)) |
+| Residual risk | First production resolver extraction bugs (future PR) |
+| Planned PR | Foundation: **PR3A**; first production wrapper: later |
+
 ### IPv4 and IPv6 private ranges
 
 | Field | Detail |

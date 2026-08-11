@@ -24,6 +24,14 @@ Do not write:
 - response bodies;
 - unsanitized filenames that embed secrets or full URLs.
 
+Wrapper resolution (PR3A) additionally forbids logging resolution fingerprints,
+submitted/candidate query strings, document bodies, and hop metadata.
+`ResolutionError` / `ResolutionHop` `repr` omit `internal_reason` and metadata;
+resolver-controlled strings are not accepted as hop metadata. Metadata that is
+retained uses deterministic sorted `(key, value)` tuples of `int|bool` only.
+Public chain hops carry only query-stripped canonicals and token-shaped audit
+identifiers taken from immutable registry registration snapshots.
+
 Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 
 Debug overrides that print the above are forbidden in production (`APP_ENV=production`).

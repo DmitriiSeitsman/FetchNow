@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from ipaddress import IPv4Address, IPv6Address
 from urllib.parse import urljoin, urlsplit
 
@@ -14,6 +15,8 @@ from fetchnow.core.config import Settings
 from fetchnow.network.models import (
     HttpMethod,
     RedirectHop,
+    SafeDocumentResponse,
+    SafeDocumentTarget,
     SafeHTTPRequest,
     SafeHTTPResponse,
 )
@@ -25,9 +28,14 @@ from fetchnow.url.validate import URLValidator
 
 logger = logging.getLogger("fetchnow.network.http")
 
+DocumentRevalidator = Callable[[str], Awaitable[SafeDocumentTarget]]
+
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _GET_ACCEPT = (
     "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.1"
+)
+_DOCUMENT_CONTENT_TYPES = frozenset(
+    {"text/html", "application/xhtml+xml", "application/json"}
 )
 
 # Typed internal reasons (never sent to API clients).
@@ -165,6 +173,215 @@ class SafeHTTPClient:
                 body_bytes=result.body_bytes_read,
             )
             return result
+
+    async def fetch_document(
+        self,
+        validated: SafeDocumentTarget,
+        *,
+        allowed_hostnames: frozenset[str],
+        revalidate: DocumentRevalidator,
+    ) -> SafeDocumentResponse:
+        """Bounded GET document fetch for wrapper resolvers.
+
+        ``allowed_hostnames`` must be derived by orchestration from the active
+        resolver's exact host set (never caller-supplied by the resolver). The
+        initial hostname is checked against that set before any DNS lookup or
+        HTTP request. Redirects are permitted only within the same set.
+        """
+        started = time.perf_counter()
+        hostname: str | None = validated.hostname
+        error_code: str | None = None
+        redirect_count = 0
+        body_bytes = 0
+        try:
+            result = await asyncio.wait_for(
+                self._fetch_document_inner(
+                    validated,
+                    allowed_hostnames=allowed_hostnames,
+                    revalidate=revalidate,
+                ),
+                timeout=self._settings.outbound_total_timeout_seconds,
+            )
+        except TimeoutError:
+            error_code = "SOURCE_TIMEOUT"
+            self._log_document(
+                started,
+                hostname=hostname,
+                error_code=error_code,
+                redirect_count=redirect_count,
+                body_bytes=body_bytes,
+            )
+            raise_network_error("SOURCE_TIMEOUT")
+        except URLValidationError as exc:
+            error_code = exc.code
+            self._log_document(
+                started,
+                hostname=hostname,
+                error_code=error_code,
+                redirect_count=redirect_count,
+                body_bytes=body_bytes,
+                internal_reason=exc.internal_reason,
+            )
+            raise
+        except Exception:
+            error_code = "INTERNAL_ERROR"
+            self._log_document(
+                started,
+                hostname=hostname,
+                error_code=error_code,
+                redirect_count=redirect_count,
+                body_bytes=body_bytes,
+            )
+            raise_network_error("INTERNAL_ERROR")
+        else:
+            self._log_document(
+                started,
+                hostname=result.final_hostname,
+                error_code=None,
+                redirect_count=result.redirect_count,
+                body_bytes=result.body_bytes_read,
+            )
+            return result
+
+    def _log_document(
+        self,
+        started: float,
+        *,
+        hostname: str | None,
+        error_code: str | None,
+        redirect_count: int,
+        body_bytes: int,
+        internal_reason: str | None = None,
+    ) -> None:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        extra: dict[str, object] = {
+            "outcome": "error" if error_code else "allow",
+            "hostname": hostname,
+            "error_code": error_code,
+            "duration_ms": duration_ms,
+            "redirect_count": redirect_count,
+            "body_bytes_read": body_bytes,
+            "http_method": "GET",
+        }
+        if internal_reason is not None:
+            extra["internal_reason"] = internal_reason
+        logger.info("outbound_document_fetch_complete", extra=extra)
+
+    async def _fetch_document_inner(
+        self,
+        initial: SafeDocumentTarget,
+        *,
+        allowed_hostnames: frozenset[str],
+        revalidate: DocumentRevalidator,
+    ) -> SafeDocumentResponse:
+        allowed = frozenset(h.lower().rstrip(".") for h in allowed_hostnames)
+        if not allowed:
+            raise_network_error("INVALID_REDIRECT", internal_reason="EMPTY_ALLOWLIST")
+
+        initial_host = initial.hostname.lower().rstrip(".")
+        # Fail closed before DNS or HTTP when the initial target is outside the
+        # orchestration-derived host set (malicious resolver cannot pivot).
+        if initial_host not in allowed:
+            raise_network_error("INVALID_REDIRECT", internal_reason="HOST_NOT_ALLOWED")
+
+        current = initial
+        hops: list[RedirectHop] = []
+        seen_urls: set[str] = set()
+        max_redirects = min(self._settings.url_max_redirects, 20)
+
+        while True:
+            hop_host = current.hostname.lower().rstrip(".")
+            if hop_host not in allowed:
+                raise_network_error(
+                    "INVALID_REDIRECT", internal_reason="HOST_NOT_ALLOWED"
+                )
+
+            request_url = current.request_url
+            if request_url in seen_urls:
+                raise_network_error("REDIRECT_LIMIT_EXCEEDED")
+            seen_urls.add(request_url)
+
+            await self._connect_time_dns_check(current.hostname)
+
+            response = await self._send(SafeHTTPRequest(method="GET", url=request_url))
+            try:
+                status = response.status_code
+                if status in _REDIRECT_STATUSES:
+                    if len(hops) >= max_redirects:
+                        raise_network_error("REDIRECT_LIMIT_EXCEEDED")
+                    location = response.headers.get("location")
+                    next_raw = self._resolve_redirect(
+                        current_url=request_url,
+                        location=location,
+                        current_scheme=current.scheme,
+                    )
+                    # Reject out-of-scope redirect host before revalidation/DNS.
+                    try:
+                        next_host = urlsplit(next_raw).hostname
+                    except ValueError:
+                        raise_network_error("INVALID_REDIRECT")
+                    if next_host is None:
+                        raise_network_error("INVALID_REDIRECT")
+                    if next_host.lower().rstrip(".") not in allowed:
+                        raise_network_error(
+                            "INVALID_REDIRECT", internal_reason="HOST_NOT_ALLOWED"
+                        )
+                    try:
+                        nxt = await revalidate(next_raw)
+                    except URLValidationError:
+                        raise
+                    except Exception:
+                        # Revalidators may raise domain errors (e.g. wrapper
+                        # safety). Treat as fail-closed invalid redirect without
+                        # importing higher-level packages.
+                        raise_network_error(
+                            "INVALID_REDIRECT", internal_reason="REVALIDATE_FAILED"
+                        )
+                    if nxt.hostname.lower().rstrip(".") not in allowed:
+                        raise_network_error(
+                            "INVALID_REDIRECT", internal_reason="HOST_NOT_ALLOWED"
+                        )
+                    hops.append(
+                        RedirectHop(
+                            from_hostname=current.hostname,
+                            to_hostname=nxt.hostname,
+                            status_code=status,
+                        )
+                    )
+                    logger.info(
+                        "outbound_redirect_hop",
+                        extra={
+                            "hostname": current.hostname,
+                            "redirect_count": len(hops),
+                            "http_status": status,
+                        },
+                    )
+                    current = nxt
+                    continue
+
+                content_type = normalize_content_type(
+                    response.headers.get("content-type")
+                )
+                if content_type is None or content_type not in _DOCUMENT_CONTENT_TYPES:
+                    raise_network_error("UNSUPPORTED_CONTENT_TYPE")
+                if status < 200 or status >= 300:
+                    raise_network_error("SOURCE_UNAVAILABLE")
+
+                body = await self._read_document_body(response)
+                return SafeDocumentResponse(
+                    status_code=status,
+                    content_type=content_type,
+                    body=body,
+                    body_bytes_read=len(body),
+                    final_scheme=current.scheme,
+                    final_hostname=current.hostname,
+                    final_path=current.path,
+                    final_canonical=current.canonical_without_query,
+                    redirect_count=len(hops),
+                    redirect_hops=tuple(hops),
+                )
+            finally:
+                await response.aclose()
 
     def _log_probe(
         self,
@@ -360,6 +577,10 @@ class SafeHTTPClient:
             )
         except httpx.TimeoutException:
             raise_network_error("SOURCE_TIMEOUT")
+        except httpx.InvalidURL:
+            # httpx may raise while inspecting a malformed Location even when
+            # follow_redirects=False.
+            raise_network_error("INVALID_REDIRECT")
         except httpx.RemoteProtocolError as exc:
             # httpx may reject malformed Location before we can inspect it.
             if "location" in str(exc).lower():
@@ -385,14 +606,22 @@ class SafeHTTPClient:
         # with a non-empty authority; reject javascript:, :::garbage, etc.
         authority_candidate = loc.split("/", 1)[0]
         if ":" in authority_candidate:
-            abs_parts = urlsplit(loc)
+            try:
+                abs_parts = urlsplit(loc)
+            except ValueError:
+                raise_network_error("INVALID_REDIRECT")
             if abs_parts.scheme.lower() not in {"http", "https"}:
                 raise_network_error("INVALID_REDIRECT")
             if not abs_parts.netloc:
                 raise_network_error("INVALID_REDIRECT")
-        joined = urljoin(current_url, loc)
-        parts = urlsplit(joined)
+        try:
+            joined = urljoin(current_url, loc)
+            parts = urlsplit(joined)
+        except ValueError:
+            raise_network_error("INVALID_REDIRECT")
         if not parts.scheme or not parts.netloc:
+            raise_network_error("INVALID_REDIRECT")
+        if parts.username is not None or parts.password is not None:
             raise_network_error("INVALID_REDIRECT")
         if current_scheme == "https" and parts.scheme.lower() == "http":
             raise_network_error("INVALID_REDIRECT")
@@ -458,3 +687,35 @@ class SafeHTTPClient:
         except httpx.HTTPError:
             raise_network_error("SOURCE_UNAVAILABLE")
         return total
+
+    async def _read_document_body(self, response: httpx.Response) -> bytes:
+        """Read a full document body up to the hard outbound byte ceiling.
+
+        The ceiling applies to bytes yielded by ``aiter_bytes`` after httpx
+        content decoding (e.g. gzip decompression), i.e. the payload a
+        resolver would observe — not the on-wire compressed size alone.
+        ``Content-Length`` is only an early reject when the declared size
+        already exceeds the hard cap.
+        """
+        hard = self._settings.outbound_max_response_bytes
+        content_length = self._parse_content_length(
+            response.headers.get("content-length")
+        )
+        if content_length is not None and content_length > hard:
+            raise_network_error("RESPONSE_TOO_LARGE")
+        chunk_size = min(16_384, hard)
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            async for chunk in response.aiter_bytes(chunk_size):
+                total += len(chunk)
+                if total > hard:
+                    raise_network_error("RESPONSE_TOO_LARGE")
+                chunks.append(chunk)
+        except URLValidationError:
+            raise
+        except httpx.TimeoutException:
+            raise_network_error("SOURCE_TIMEOUT")
+        except httpx.HTTPError:
+            raise_network_error("SOURCE_UNAVAILABLE")
+        return b"".join(chunks)

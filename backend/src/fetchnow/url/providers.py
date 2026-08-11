@@ -99,17 +99,19 @@ class ProviderRegistry:
         )
         return self.with_extra_provider(extra)
 
-    def resolve(self, hostname: str) -> ProviderDescriptor:
-        """Resolve a normalized hostname to a provider or raise."""
+    def find(self, hostname: str) -> ProviderDescriptor | None:
+        """Soft exact-host lookup; None when unknown or disabled."""
         host = hostname.lower().rstrip(".")
-        match: ProviderDescriptor | None = None
         for provider in self.providers:
             if host in provider.exact_hostnames:
-                match = provider
-                break
+                if not provider.enabled:
+                    return None
+                return provider
+        return None
+
+    def resolve(self, hostname: str) -> ProviderDescriptor:
+        """Resolve a normalized hostname to a provider or raise."""
+        match = self.find(hostname)
         if match is None:
             raise_validation_error("UNSUPPORTED_PROVIDER")
-        resolved = match
-        if not resolved.enabled:
-            raise_validation_error("UNSUPPORTED_PROVIDER")
-        return resolved
+        return match
