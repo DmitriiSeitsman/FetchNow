@@ -396,7 +396,7 @@ def test_health_unhealthy_and_duplicate(
     env.write_text("X=1\n")
     result = run_health(
         HealthInput(
-            project_name="p",
+            project_name="fetchnow-health-test-bbbbbbbb",
             env_file=env,
             compose_files=(tmp_path / "c.yaml",),
             expected_revision=rev,
@@ -456,7 +456,7 @@ def test_health_wrong_project_label(
     env.write_text("X=1\n")
     result = run_health(
         HealthInput(
-            project_name="expected-project",
+            project_name="fetchnow-health-test-cccccccc",
             env_file=env,
             compose_files=(tmp_path / "c.yaml",),
             expected_revision=rev,
@@ -494,10 +494,12 @@ def test_health_wrong_oci_and_exited(
         ]
 
     def inspect(cid: str) -> dict:
+        svc = cid.removeprefix("cid-")
         return {
             "Config": {
                 "Labels": {
-                    "com.docker.compose.project": "p",
+                    "com.docker.compose.project": "fetchnow-health-test-dddddddd",
+                    "com.docker.compose.service": svc,
                     "org.opencontainers.image.revision": rev,
                 },
                 "Image": "img",
@@ -513,7 +515,7 @@ def test_health_wrong_oci_and_exited(
     env.write_text("X=1\n")
     result = run_health(
         HealthInput(
-            project_name="p",
+            project_name="fetchnow-health-test-dddddddd",
             env_file=env,
             compose_files=(tmp_path / "c.yaml",),
             expected_revision=rev,

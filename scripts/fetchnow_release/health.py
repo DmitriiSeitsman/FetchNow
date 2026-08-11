@@ -9,8 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from . import EXPECTED_SERVICES, OCI_REVISION_LABEL
+from .current_state import CurrentStateError, CurrentStateV2, load_parsed_current_state
+from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .docker_checks import DockerCheckError, require_compose_v2, require_docker_daemon
+from .health_project import HealthProjectError, assert_isolated_tag_health_project
 from .http_health import HttpCheckResult, HttpHealthError, check_endpoint
+from .image_identity import ImageIdentityError, assert_release_images_present
+from .journal import sha256_file
+from .journal_io import JournalIOError
+from .manifest import ManifestError, load_manifest, manifest_path
+from .override import OverrideError, image_ids_from_manifest
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 
@@ -27,8 +35,12 @@ class HealthInput:
     expected_revision: str
     repo_root: Path
     gateway_base_url: str = "http://127.0.0.1:8091"
+    # Supplying a deploy root selects managed mode. Image IDs are then derived
+    # exclusively from validated schema-v2 current state and its release manifest.
+    deploy_root: Path | None = None
     # When set (PRD1C3A image-ID activation), require exact inspect IDs for
-    # api/worker/web/gateway instead of tag-string matching alone.
+    # api/worker/web/gateway instead of tag-string matching alone. This internal
+    # field is used by rollout/recovery; managed standalone health must not set it.
     expected_image_ids: dict[str, str] | None = None
 
 
@@ -97,6 +109,46 @@ def _inspect(container_id: str) -> dict[str, Any]:
     return data[0]
 
 
+def _managed_image_ids(inp: HealthInput, revision: str) -> dict[str, str]:
+    """Resolve managed health identity without mutating deploy or Docker state."""
+    if inp.deploy_root is None:
+        raise HealthError("managed health requires deploy root")
+    if inp.expected_image_ids is not None:
+        raise HealthError("managed health refuses caller-supplied image IDs")
+
+    deploy_root = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
+    parsed = load_parsed_current_state(deploy_root)
+    if parsed is None:
+        raise HealthError("managed current.json is missing")
+    if not isinstance(parsed, CurrentStateV2):
+        raise HealthError("managed health requires current.json schema_version 2")
+
+    application = parsed.application
+    if application.revision != revision:
+        raise HealthError("current application revision does not match expected revision")
+
+    release = release_dir(deploy_root, revision)
+    if release.is_symlink() or not release.is_dir():
+        raise HealthError("managed prepared release is missing or unsafe")
+    man_path = manifest_path(release)
+    if man_path.is_symlink() or not man_path.is_file():
+        raise HealthError("managed release manifest is missing or unsafe")
+    if sha256_file(man_path) != application.release_manifest_sha256:
+        raise HealthError("current application release-manifest hash mismatch")
+
+    manifest = load_manifest(man_path)
+    if manifest.revision != revision:
+        raise HealthError("managed release manifest revision mismatch")
+    manifest_ids = image_ids_from_manifest(manifest)
+    if manifest_ids != application.image_ids:
+        raise HealthError("current application image IDs do not match release manifest")
+
+    inspected_ids = assert_release_images_present(manifest)
+    if inspected_ids != application.image_ids:
+        raise HealthError("local image IDs do not match managed current state")
+    return dict(application.image_ids)
+
+
 def run_health(inp: HealthInput) -> HealthResult:
     messages: list[str] = []
     http_results: list[HttpCheckResult] = []
@@ -104,6 +156,14 @@ def run_health(inp: HealthInput) -> HealthResult:
         rev = validate_full_sha(inp.expected_revision, allow_local=False)
         require_compose_v2()
         require_docker_daemon()
+
+        expected_ids = inp.expected_image_ids
+        if inp.deploy_root is not None:
+            expected_ids = _managed_image_ids(inp, rev)
+        elif expected_ids is None:
+            # Standalone CLI/tag path: never allow protected managed projects to
+            # silently fall back to revision-tag matching of Config.Image.
+            assert_isolated_tag_health_project(inp.project_name)
 
         rows = _ps_services(inp)
         by_service: dict[str, list[dict[str, Any]]] = {}
@@ -156,6 +216,11 @@ def run_health(inp: HealthInput) -> HealthResult:
                 raise HealthError(
                     f"{svc_name} project label {project_label!r} != {inp.project_name!r}"
                 )
+            service_label = labels.get("com.docker.compose.service")
+            if service_label != svc_name:
+                raise HealthError(
+                    f"{svc_name} service label {service_label!r} != {svc_name!r}"
+                )
             image = str(
                 (info.get("Config") or {}).get("Image") or info.get("Image") or ""
             )
@@ -170,7 +235,6 @@ def run_health(inp: HealthInput) -> HealthResult:
                     raise HealthError(
                         f"{svc_name} OCI revision label {oci!r} != {rev!r}"
                     )
-                expected_ids = inp.expected_image_ids
                 if expected_ids is not None:
                     # Worker shares the API image ID contract.
                     key = "api" if svc_name == "worker" else svc_name
@@ -249,7 +313,14 @@ def run_health(inp: HealthInput) -> HealthResult:
         return HealthResult(ok=True, messages=tuple(messages), http=tuple(http_results))
     except (
         HealthError,
+        CurrentStateError,
+        DeployRootError,
+        HealthProjectError,
         HttpHealthError,
+        ImageIdentityError,
+        JournalIOError,
+        ManifestError,
+        OverrideError,
         RevisionError,
         DockerCheckError,
         OSError,

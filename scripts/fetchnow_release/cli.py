@@ -70,6 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--expected-revision", required=True)
     health.add_argument("--repo-root", type=Path, default=None)
     health.add_argument(
+        "--deploy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Managed mode: derive authoritative image IDs from schema-v2 "
+            "state/current.json (omit only for isolated tag-based health tests)"
+        ),
+    )
+    health.add_argument(
         "--gateway-base-url",
         default="http://127.0.0.1:8091",
         help="Loopback gateway base URL (staging default 127.0.0.1:8091)",
@@ -254,6 +263,11 @@ def main(argv: list[str] | None = None) -> int:
                 expected_revision=args.expected_revision,
                 repo_root=repo,
                 gateway_base_url=base,
+                deploy_root=(
+                    args.deploy_root.expanduser().resolve()
+                    if args.deploy_root is not None
+                    else None
+                ),
             )
         )
         for line in result.messages:
