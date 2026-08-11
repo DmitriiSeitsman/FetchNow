@@ -107,14 +107,18 @@ Do not return raw resolver internals, exception strings, or internal IPs to clie
 
 ## Wrapper resolution foundation (PR3A)
 
-Domain-only (`fetchnow.resolution`): provider-first classification, sealed
-exact-host wrapper registry with immutable registration snapshots (host
-ownership frozen at build time), HTTPS-only wrapper policy, orchestration-owned
-document-fetch host allowlists (initial request and every redirect), bounded
-document fetch reuse of the PR2 client (body cap on decompressed bytes), and
-typed lower-case resolution outcomes. **No production wrapper ships in PR3A.**
-`/media/validate` and `/media/probe` are unchanged.
-See [ADR 0006](../adr/0006-wrapper-resolution-foundation.md).
+Domain-only foundation (`fetchnow.resolution`, ADR 0006) plus the PR3B Yandex
+Video Preview resolver (ADR 0007): exact
+`https://yandex.ru/video/preview/<digits>` only; orchestration-owned document
+allowlists (**Yandex document host only** — iframe `yastatic.net` is parsed
+locally and never fetched); preview-page binding via `data-state` `location`
+and/or matching viewer id; extraction from `dups[id].player.videoUrl` or
+trusted VK player iframe fragment `counters.videoUrl`; never `embedUrl` /
+`/video_ext.php` / page-wide URL harvest; optional local HTTP→HTTPS string
+upgrade for stable provider identities (no HTTP fetch); terminal candidates
+must pass the existing ProviderRegistry. **Yandex is not a media provider.**
+Public wiring is `POST /api/v1/media/resolve`. `/media/validate` and
+`/media/probe` are unchanged.
 
 ## Test vectors
 

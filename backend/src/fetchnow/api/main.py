@@ -15,6 +15,8 @@ from fetchnow.core.logging import configure_logging
 from fetchnow.core.middleware import RequestIdMiddleware
 from fetchnow.db.session import create_engine
 from fetchnow.network.client import SafeHTTPClient
+from fetchnow.resolution.defaults import build_wrapper_registry
+from fetchnow.resolution.service import ResolutionService
 from fetchnow.url.dns import SystemDnsResolver
 from fetchnow.url.providers import ProviderRegistry
 from fetchnow.url.validate import URLValidator
@@ -31,17 +33,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolver = SystemDnsResolver(
             timeout_seconds=settings.dns_resolution_timeout_seconds
         )
-        registry = ProviderRegistry.from_settings(settings)
-        validator = URLValidator(settings, registry=registry, resolver=resolver)
+        provider_registry = ProviderRegistry.from_settings(settings)
+        validator = URLValidator(
+            settings, registry=provider_registry, resolver=resolver
+        )
         http_client = SafeHTTPClient(
             settings,
             validator=validator,
             resolver=resolver,
         )
+        wrapper_registry = build_wrapper_registry(settings, provider_registry)
+        resolution_service = ResolutionService(
+            settings,
+            provider_registry=provider_registry,
+            wrapper_registry=wrapper_registry,
+            validator=validator,
+            http_client=http_client,
+            dns_resolver=resolver,
+        )
         app.state.engine = engine
         app.state.settings = settings
+        app.state.dns_resolver = resolver
+        app.state.provider_registry = provider_registry
         app.state.url_validator = validator
         app.state.safe_http_client = http_client
+        app.state.wrapper_registry = wrapper_registry
+        app.state.resolution_service = resolution_service
         try:
             yield
         finally:

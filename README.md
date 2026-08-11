@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) with manual redirects and response limits + **wrapper resolution foundation** (domain library only; no production wrappers and no public resolve endpoint). **FetchNow still does not download or process media.** There is no yt-dlp/ffmpeg pipeline, job queue, or download delivery. Probe returns diagnostic HTTP metadata only — not media extraction.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver. **FetchNow still does not download or process media.** There is no yt-dlp/ffmpeg pipeline, job queue, or download delivery. Probe returns diagnostic HTTP metadata only — not media extraction.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ Security and product boundaries are documented **before** media processing ships
 
 - User URLs are untrusted input; only `http`/`https` with a provider hostname allowlist are accepted (`POST /api/v1/media/validate`; policy: [URL validation](docs/security/url-validation-policy.md), [ADR 0004](docs/adr/0004-provider-registry-and-dns-validation.md)).
 - Outbound HTTP uses a safe client with manual redirects and per-hop re-validation (`POST /api/v1/media/probe`; [ADR 0005](docs/adr/0005-safe-outbound-http-and-redirects.md)).
-- Wrapper URL resolution foundation is available as a domain library (`fetchnow.resolution`; [ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md)) without changing validate/probe behavior.
+- Wrapper URL resolution: domain foundation ([ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md)) and Yandex Video Preview resolver + `POST /api/v1/media/resolve` ([ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md)). Validate/probe behavior is unchanged.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
@@ -47,6 +47,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0004](docs/adr/0004-provider-registry-and-dns-validation.md) | Provider registry + DNS order |
 | [ADR 0005](docs/adr/0005-safe-outbound-http-and-redirects.md) | Safe outbound HTTP + redirects |
 | [ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md) | Wrapper resolution foundation |
+| [ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md) | Yandex Video Preview resolver |
 
 ## Validate API (PR1)
 
@@ -67,6 +68,19 @@ curl -sS -X POST http://localhost:8080/api/v1/media/probe \
 ```
 
 Diagnostic only: provider, final URL without query, and limited HTTP metadata (`status`, `contentType`, `contentLength`, `redirectCount`, `methodUsed`). Does not extract media metadata or download files. Some providers may fall back from HEAD to a bounded GET per provider policy.
+
+## Resolve API (PR3B)
+
+```bash
+curl -sS -X POST http://localhost:8080/api/v1/media/resolve \
+  -H 'content-type: application/json' \
+  -d '{"url":"<PUBLIC_VK_OR_YANDEX_PREVIEW_URL>"}'
+```
+
+Resolves a direct supported provider URL or a registered wrapper (currently
+exact `https://yandex.ru/video/preview/<digits>`) to a query-stripped canonical
+provider URL. Returns `provenance`, optional `wrapperType`, and a sanitized
+resolution chain. Does not download media.
 
 ## Infrastructure Handbook
 

@@ -43,9 +43,19 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Nested wrappers, loops, private redirect targets, HTTP downgrade, arbitrary CDN/manifest candidates |
 | Impact | SSRF, resource exhaustion, unsupported media destinations |
-| Mitigation | Provider-first classification; sealed exact-host registry with immutable registration snapshots (live `exact_hostnames` ignored after build); HTTPS-only wrapper policy; depth/loop fingerprints; orchestration-scoped document allowlists (initial + redirect hosts); typed fail-closed outcomes; error/hop repr redaction ([ADR 0006](../adr/0006-wrapper-resolution-foundation.md)) |
-| Residual risk | First production resolver extraction bugs (future PR) |
-| Planned PR | Foundation: **PR3A**; first production wrapper: later |
+| Mitigation | Provider-first classification; sealed exact-host registry with immutable registration snapshots (live `exact_hostnames` ignored after build); HTTPS-only wrapper policy; depth/loop fingerprints; orchestration-scoped document allowlists (initial + redirect hosts; **never** expand allowlist to `yastatic.net` for iframe fetch); Yandex preview exact-shape + preview-ID/`location` binding + dups or trusted `yastatic.net` VK iframe `counters.videoUrl` only (reject embed/`video_ext.php`, lookalike iframe hosts, percent-decode bombs, related-player confusion; no page-wide success scan; safe HTTP→HTTPS string upgrade only) (ADR 0007); typed fail-closed outcomes; error/hop repr redaction ([ADR 0006](../adr/0006-wrapper-resolution-foundation.md), [ADR 0007](../adr/0007-yandex-video-preview-resolver.md)) |
+| Residual risk | External Yandex markup drift; first-resolver extraction bugs; iframe fragment/`counters` shape drift |
+| Planned PR | Foundation: **PR3A**; Yandex resolver + `/media/resolve`: **PR3B**; metadata: later |
+
+### Yandex iframe fragment / query confusion
+
+| Field | Detail |
+|---|---|
+| Attack | Query/fragment smuggling, duplicate `counters`, field explosion, JSON depth/node bombs, lookalike player hosts |
+| Impact | Wrong provider URL, parser DoS, secret leakage via errors |
+| Mitigation | Query forbidden on trusted iframe; strict bounded `parse_qsl`; exactly one `counters`; top-level `videoUrl` only; depth/node limits; no raw fragment/query in logs (ADR 0007) |
+| Residual risk | Markup drift of fragment field names |
+| Planned PR | **PR3B** hardening |
 
 ### IPv4 and IPv6 private ranges
 
