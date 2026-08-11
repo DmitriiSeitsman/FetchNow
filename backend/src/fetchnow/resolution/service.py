@@ -196,7 +196,14 @@ class ResolutionService:
 
             registration = self._wrappers.match(wrapper)
             if registration is None:
-                # Candidate was expected to remain in the wrapper graph.
+                # Host may be owned by a wrapper registration whose matches()
+                # rejected the URL shape — that is unsupported wrapper input,
+                # not an unsupported terminal provider.
+                if self._wrappers.find(wrapper.hostname) is not None:
+                    raise_resolution_error(
+                        ResolutionErrorKind.WRAPPER_UNSUPPORTED,
+                        internal_reason="WRAPPER_SHAPE_MISMATCH",
+                    )
                 raise_resolution_error(
                     ResolutionErrorKind.RESOLVED_PROVIDER_UNSUPPORTED
                 )

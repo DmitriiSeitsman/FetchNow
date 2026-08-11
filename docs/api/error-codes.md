@@ -28,6 +28,12 @@ Envelope shape (already used by the API foundation):
 | `RESPONSE_TOO_LARGE` | 413 | Response exceeded allowed size | no | no | Exact byte counters beyond public message |
 | `SOURCE_UNAVAILABLE` | 502 | Source could not be fetched | soft | yes (limited) | Upstream headers/body, TLS internals, peer IPs |
 | `SOURCE_TIMEOUT` | 504 | Source timed out | soft | yes (limited) | Peer IPs, exact syscall errors |
+| `WRAPPER_UNSUPPORTED` | 422 | URL wrapper not supported | no | no | Raw URL, query, HTML |
+| `WRAPPER_UNRESOLVED` | 422 | Wrapper could not be resolved | no | no | Document body, candidate URLs |
+| `RESOLVED_PROVIDER_UNSUPPORTED` | 422 | Resolved media destination not supported | no | no | Candidate URL, allowlist contents |
+| `RESOLUTION_LOOP` | 422 | Wrapper resolution loop | no | no | Fingerprints, query |
+| `RESOLUTION_LIMIT_EXCEEDED` | 422 | Wrapper depth exceeded | no | no | Internal depth counters |
+| `UNSAFE_RESOLUTION_TARGET` | 422 | Resolution target not allowed | no | no | Resolved IPs, Location, query |
 | `RATE_LIMITED` | 429 | Too many requests | yes | yes (honor Retry-After) | Per-user internal quotas math |
 | `CAPACITY_UNAVAILABLE` | 503 | Temporary capacity limit | yes | yes | Disk paths, free-byte counts |
 | `FILE_TOO_LARGE` | 413 | File exceeds limit | no | no | Exact configured byte caps (optional high-level OK) |
@@ -48,19 +54,33 @@ Envelope shape (already used by the API foundation):
 
 New codes require a docs update in this registry before public clients depend on them. Renaming published codes is a breaking change.
 
-## Wrapper resolution domain outcomes (PR3A)
+## Wrapper resolution domain outcomes (PR3A/PR3B)
 
 Lower-case kinds such as `wrapper_unsupported`, `wrapper_unresolved`,
 `resolved_provider_unsupported`, `resolution_loop`,
 `resolution_limit_exceeded`, and `unsafe_resolution_target` are **domain**
-outcomes inside `fetchnow.resolution`. They are **not** public API error codes
-in PR3A. Existing `/media/validate` and `/media/probe` continue to return the
-uppercase codes above. API mapping will be added when a production wrapper is
-wired.
+outcomes inside `fetchnow.resolution`.
+
+PR3B maps them to uppercase public API codes on `POST /api/v1/media/resolve`:
+
+| Domain kind | Public code | HTTP |
+|---|---|---:|
+| `wrapper_unsupported` | `WRAPPER_UNSUPPORTED` | 422 |
+| `wrapper_unresolved` | `WRAPPER_UNRESOLVED` | 422 |
+| `resolved_provider_unsupported` | `RESOLVED_PROVIDER_UNSUPPORTED` | 422 |
+| `resolution_loop` | `RESOLUTION_LOOP` | 422 |
+| `resolution_limit_exceeded` | `RESOLUTION_LIMIT_EXCEEDED` | 422 |
+| `unsafe_resolution_target` | `UNSAFE_RESOLUTION_TARGET` | 422 |
+| `internal_error` | `INTERNAL_ERROR` | 500 |
+
+Existing `/media/validate` and `/media/probe` continue to return the uppercase
+URL/network codes above and are unchanged by wrapper resolution.
+
 
 ## Related documents
 
 - [URL validation policy](../security/url-validation-policy.md)
 - [ADR 0005 — safe outbound HTTP](../adr/0005-safe-outbound-http-and-redirects.md)
 - [ADR 0006 — wrapper resolution foundation](../adr/0006-wrapper-resolution-foundation.md)
+- [ADR 0007 — Yandex Video Preview resolver](../adr/0007-yandex-video-preview-resolver.md)
 - [Capacity policy](../operations/capacity-policy.md)
