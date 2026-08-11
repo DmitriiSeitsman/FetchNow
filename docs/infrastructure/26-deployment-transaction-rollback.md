@@ -31,6 +31,13 @@ make release-rollout \
 
 The Make target fixes `--project-name fetchnow-staging`; it cannot be redirected to another project. Image tags are not the activation authority: the generated Compose override pins the inspected immutable image IDs from `release.json`.
 
+After a committed rollout, standalone staging health uses the same identity model:
+`make release-health ENV_FILE=/srv/fetchnow-staging/env/.env.staging
+DEPLOY_ROOT=/srv/fetchnow-staging EXPECTED_REVISION=<sha>` reads schema-v2
+`state/current.json`, verifies its prepared manifest binding, and checks running
+containers by exact image ID. The external env file is consumed in place; do not
+copy or symlink it into the repository.
+
 ## Bootstrap
 
 The first application rollout requires an explicit acknowledgement:

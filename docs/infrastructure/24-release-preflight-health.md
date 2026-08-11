@@ -56,13 +56,18 @@ Never print the password. Application DB config is unchanged in this PR.
 ```bash
 python3.12 scripts/fetchnow_release_cli.py preflight \
   --project-name fetchnow-staging \
-  --env-file .env.staging \
+  --env-file /srv/fetchnow-staging/env/.env.staging \
   --compose-file compose.yaml \
   --compose-file compose.staging.yaml \
-  --expected-revision <40-char-sha>
+  --expected-revision <40-char-sha> \
+  --deploy-root /srv/fetchnow-staging \
+  --backup-root /srv/fetchnow-staging/backups
 
 # or:
-make release-preflight EXPECTED_REVISION=<40-char-sha>
+make release-preflight \
+  EXPECTED_REVISION=<40-char-sha> \
+  ENV_FILE=/srv/fetchnow-staging/env/.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging
 ```
 
 Validates (non-exhaustive): project name, env file existence/regular file/not symlink/mode ≤0600, required keys once, password policy, full SHA equals env, **revision already contained in local `refs/remotes/origin/main`** (`git merge-base --is-ancestor "$EXPECTED" refs/remotes/origin/main` — feature-branch descendants are **rejected**), clean worktree, Docker CLI + Compose v2 + daemon, rendered Compose staging contract (loopback gateway, no leaked ports, revision tags, shared API/worker image, pinned Postgres, no binds/reload), deploy/backup root safety (reuses PRD1B path policy), free-space margin ≥ 1 GiB.
@@ -80,17 +85,49 @@ A pull-request HEAD is intentionally **not** contained in `origin/main`, so oper
 ```bash
 python3.12 scripts/fetchnow_release_cli.py health \
   --project-name fetchnow-staging \
-  --env-file .env.staging \
+  --env-file /srv/fetchnow-staging/env/.env.staging \
   --compose-file compose.yaml \
   --compose-file compose.staging.yaml \
   --expected-revision <40-char-sha> \
+  --deploy-root /srv/fetchnow-staging \
   --gateway-base-url http://127.0.0.1:8091
 
 # or:
-make release-health EXPECTED_REVISION=<40-char-sha>
+make release-health \
+  EXPECTED_REVISION=<40-char-sha> \
+  ENV_FILE=/srv/fetchnow-staging/env/.env.staging \
+  DEPLOY_ROOT=/srv/fetchnow-staging
 ```
 
 Uses `docker compose ps --format json` (array or NDJSON) plus `docker inspect`. Expected services: gateway, api, worker, postgres, web.
+
+Supplying `--deploy-root` selects **managed mode**. The gate strictly requires
+schema-v2 `state/current.json`, requires its application revision to equal
+`--expected-revision`, verifies the referenced prepared `release.json` and its
+SHA-256 binding, requires exact equality between manifest and current-state image
+IDs, and inspects those local image IDs and OCI revision labels. The same IDs are
+then required on the running api, worker, web, and gateway containers. There is no
+tag fallback in managed mode and no CLI option for operator-supplied image IDs.
+
+Omitting `--deploy-root` retains the historical tag-based check **only** for
+strictly validated isolated projects named `fetchnow-health-test-<suffix>`.
+Protected managed projects (`fetchnow-staging`, `fetchnow-prod`, `fetchnow`, and
+any other non-matching name) fail closed without `--deploy-root` so operators
+cannot accidentally obtain a misleading tag-mode result against ID-pinned
+containers. Protected staging use through `make release-health` always passes
+`DEPLOY_ROOT` and therefore always uses managed mode.
+
+Managed health validates the **deployed** revision through
+`state/current.json` and `<deploy-root>/releases/<expected-revision>/`. The
+tooling worktree `HEAD` may be a newer merged `main` than the deployed revision;
+no rebuild, retag, or container restart is required for a post-merge recheck of
+an already-healthy ID-pinned deployment.
+
+`ENV_FILE`, `DEPLOY_ROOT`, and `BACKUP_ROOT` are overridable Make variables. Their
+developer defaults remain `.env.staging`, `/srv/fetchnow-staging`, and
+`$(DEPLOY_ROOT)/backups`. An operator may point `ENV_FILE` directly at the protected
+external file; copying or symlinking secrets into the repository is neither needed
+nor recommended. Paths are quoted and env values are never printed.
 
 **Worker exception (temporary):** Compose disables the worker healthcheck today (`healthcheck.disable: true`) because the worker is still an idle heartbeat without a queue. The health gate therefore requires worker `running` only. This is temporary until queue health exists; do not treat it as a permanent policy.
 
@@ -114,7 +151,13 @@ make release-health-integration
 make release-ancestry-integration
 ```
 
-Health integration uses unique `fetchnow-health-test-<suffix>` only. Ancestry integration uses a disposable temporary Git repository (never mutates real `origin/main`). Never touches `fetchnow` / `fetchnow-staging` / `fetchnow-prod`. CI cleanup uses `if: always()`.
+Health integration uses unique `fetchnow-health-test-<suffix>` only and preserves
+the isolated tag-based scenario. Rollout integration additionally proves that an
+immutable-ID bootstrap publishes schema-v2 `current.json` and that the real managed
+standalone health CLI succeeds from that authority. Ancestry integration uses a
+disposable temporary Git repository (never mutates real `origin/main`). Never
+touches `fetchnow` / `fetchnow-staging` / `fetchnow-prod`. CI cleanup uses
+`if: always()`.
 
 ## Boundaries
 

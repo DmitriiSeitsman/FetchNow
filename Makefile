@@ -9,7 +9,10 @@
 COMPOSE ?= docker compose
 BACKEND ?= backend
 WEB ?= web
-STAGING_COMPOSE ?= $(COMPOSE) --env-file .env.staging --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml
+ENV_FILE ?= .env.staging
+DEPLOY_ROOT ?= /srv/fetchnow-staging
+BACKUP_ROOT ?= $(DEPLOY_ROOT)/backups
+STAGING_COMPOSE ?= $(COMPOSE) --env-file "$(ENV_FILE)" --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml
 PYTHON ?= python3.12
 PG_BACKUP ?= $(PYTHON) scripts/fetchnow_pg_backup_cli.py
 RELEASE ?= $(PYTHON) scripts/fetchnow_release_cli.py
@@ -66,10 +69,10 @@ pg-backup-integration:
 
 pg-backup-create:
 	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
-	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	$(PG_BACKUP) create \
 		--project-name fetchnow-staging \
-		--env-file .env.staging \
+		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
 		--compose-file compose.staging.yaml \
 		--backup-root "$(BACKUP_ROOT)"
@@ -77,10 +80,10 @@ pg-backup-create:
 pg-backup-verify:
 	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...' && exit 1)
 	@test -n "$(BACKUP_ID)" || (echo 'Usage: make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...' && exit 1)
-	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	$(PG_BACKUP) verify \
 		--project-name fetchnow-staging \
-		--env-file .env.staging \
+		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
 		--compose-file compose.staging.yaml \
 		--backup-root "$(BACKUP_ROOT)" \
@@ -101,24 +104,27 @@ release-ancestry-integration:
 	$(PYTHON) scripts/release_ancestry_integration_test.py
 
 release-preflight:
-	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-preflight EXPECTED_REVISION=<40-char-sha>' && exit 1)
 	$(RELEASE) preflight \
 		--project-name fetchnow-staging \
-		--env-file .env.staging \
-		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
-		--expected-revision "$(EXPECTED_REVISION)"
-
-release-health:
-	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
-	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-health EXPECTED_REVISION=<40-char-sha>' && exit 1)
-	$(RELEASE) health \
-		--project-name fetchnow-staging \
-		--env-file .env.staging \
+		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
 		--compose-file compose.staging.yaml \
 		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)" \
+		--backup-root "$(BACKUP_ROOT)"
+
+release-health:
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-health EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	$(RELEASE) health \
+		--project-name fetchnow-staging \
+		--env-file "$(ENV_FILE)" \
+		--compose-file compose.yaml \
+		--compose-file compose.staging.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root "$(DEPLOY_ROOT)" \
 		--gateway-base-url "$${GATEWAY_BASE_URL:-http://127.0.0.1:8091}"
 
 release-health-integration:
@@ -182,12 +188,12 @@ release-deploy-plan-test:
 	$(BACKEND)/.venv/bin/pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/release/test_current_state_unit.py tests/pg_backup/test_alembic_graph.py
 
 release-deploy-plan:
-	@test -f .env.staging || (echo "Missing .env.staging" && exit 1)
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	$(RELEASE) deploy-plan \
 		--project-name fetchnow-staging \
-		--env-file .env.staging \
+		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
 		--compose-file compose.staging.yaml \
 		--expected-revision "$(EXPECTED_REVISION)" \
@@ -204,10 +210,10 @@ release-migration-test:
 		tests/pg_backup/test_retention_hold_unit.py
 
 release-migrate:
-	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	$(RELEASE) migrate \
 		--project-name fetchnow-staging \
 		--env-file "$(ENV_FILE)" \
@@ -218,11 +224,11 @@ release-migrate:
 		--backup-root "$(BACKUP_ROOT)"
 
 release-migration-recover:
-	@test -n "$(MIGRATION_ID)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -n "$(ACTION)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
-	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-backups' && exit 1)
+	@test -n "$(MIGRATION_ID)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -n "$(ACTION)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
+	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	$(RELEASE) recover-migration \
 		--project-name fetchnow-staging \
 		--env-file "$(ENV_FILE)" \
@@ -237,7 +243,7 @@ release-migration-integration:
 	$(PYTHON) scripts/release_migration_integration_test.py
 
 staging-config:
-	@test -f .env.staging || (echo "Missing .env.staging — copy from .env.staging.example" && exit 1)
+	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE — copy from .env.staging.example" && exit 1)
 	$(STAGING_COMPOSE) config >/dev/null
 	@echo "Staging compose config OK"
 

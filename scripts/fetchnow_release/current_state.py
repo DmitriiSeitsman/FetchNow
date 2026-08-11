@@ -258,13 +258,16 @@ CurrentState = ResolvedCurrentState
 
 def parse_application_state(raw: dict[str, Any]) -> ApplicationState:
     _require_exact_keys(raw, APPLICATION_STATE_KEYS, label="application")
+    image_ids = raw["image_ids"]
+    if not isinstance(image_ids, dict):
+        raise CurrentStateError("application.image_ids must be an object")
     return ApplicationState(
         revision=_parse_sha(raw["revision"], field="application.revision"),
         release_manifest_sha256=_parse_manifest_hash(
             raw["release_manifest_sha256"], field="application.release_manifest_sha256"
         ),
         image_ids=validate_image_id_map(
-            {str(k): str(v) for k, v in raw["image_ids"].items()}
+            {str(k): str(v) for k, v in image_ids.items()}
         ),
         deployment_id=_parse_deployment_id(
             raw["deployment_id"], field="application.deployment_id"

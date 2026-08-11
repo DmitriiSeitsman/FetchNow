@@ -1,6 +1,6 @@
 # 21. Справочник команд
 
-Risk: low — чтение; medium — контролируемое изменение; high — возможен простой/данные. `…` означает явные `--env-file .env.staging --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml`.
+Risk: low — чтение; medium — контролируемое изменение; high — возможен простой/данные. `…` означает явные `--env-file "$ENV_FILE" --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml`; protected staging health также требует `--deploy-root "$DEPLOY_ROOT"`.
 
 | Категория | Команда | Назначение | Режим | sudo | Risk / ожидаемый вывод |
 |---|---|---|---|---|---|
@@ -54,8 +54,8 @@ Risk: low — чтение; medium — контролируемое измене
 | Backup | `make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...` | restore drill + attestation (v2 on pass with exact heads when `--expected-alembic-head` / `--migrations-versions-dir` supplied; CLI may infer heads from worktree migrations dir) | modifying temp DB | нет* | medium; typed passed/failed + attestation path/sha |
 | Backup | `make pg-backup-list BACKUP_ROOT=...` | inventory | read-only | нет | low; backup rows |
 | Backup | `make pg-backup-prune-dry BACKUP_ROOT=...` | retention dry-run | read-only | нет | low; keep/delete plan |
-| Release | `make release-preflight EXPECTED_REVISION=<sha>` | staging deployment preflight | read-only | нет* | low; OK/FAIL messages (no secrets) |
-| Release | `make release-health EXPECTED_REVISION=<sha>` | Compose+HTTP health gate | read-only | нет* | low; service/HTTP status |
+| Release | `make release-preflight EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` | staging deployment preflight with explicit deploy/backup roots | read-only | нет* | low; OK/FAIL messages (no secrets) |
+| Release | `make release-health EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` | managed current-state/image-ID Compose+HTTP health gate | read-only | нет* | low; service/HTTP status |
 | Release | `make release-ancestry-integration` | temp-Git trusted-main ancestry + positive preflight | modifying temp dirs only | нет* | low/medium; disposable Git only |
 | Release | `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` | materialize archive + build images | modifying deploy-root only | нет* | medium; publishes `releases/<sha>` |
 | Release | `make release-verify EXPECTED_REVISION=<sha> DEPLOY_ROOT=...` | read-only release verify | read-only | нет* | low; OK/FAIL |

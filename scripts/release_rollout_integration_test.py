@@ -35,7 +35,6 @@ from fetchnow_release.c3_constants import (  # noqa: E402
 )
 from fetchnow_release.bootstrap_cleanup import (  # noqa: E402
     COMPOSE_PROJECT_LABEL,
-    COMPOSE_SERVICE_LABEL,
     discover_owned_bootstrap_containers,
 )
 from fetchnow_release.c2_constants import SOURCE_CONTRACT_VERSION_V2, SOURCE_DIRNAME  # noqa: E402
@@ -770,8 +769,56 @@ def main(argv: list[str] | None = None) -> int:
         if api_labels.get(LABEL_RELEASE_REVISION) != revision_a:
             raise RuntimeError("bootstrap api container missing release-revision label")
         print("OK: healthy bootstrap after terminal failure succeeded with ownership labels")
-        assert_current_state_v2(deploy_root, application_revision=revision_a)
+        state_a = assert_current_state_v2(
+            deploy_root, application_revision=revision_a
+        )
         print("OK: bootstrap published current.json schema v2")
+
+        active_ids = state_a["application"]["image_ids"]
+        for service in APPLICATION_SERVICES:
+            cid = run(compose + ["ps", "-q", service], cwd=clone).stdout.strip()
+            configured_image = run(
+                ["docker", "inspect", cid, "--format", "{{.Config.Image}}"],
+                cwd=clone,
+            ).stdout.strip()
+            if configured_image != active_ids[service]:
+                raise RuntimeError(
+                    f"{service} was not activated by immutable image ID "
+                    f"(got {configured_image!r})"
+                )
+        print("OK: bootstrap containers use immutable sha256 image overrides")
+
+        managed_health = run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "fetchnow_release_cli.py"),
+                "health",
+                "--project-name",
+                project,
+                "--env-file",
+                str(env_file),
+                "--compose-file",
+                str(clone / "compose.yaml"),
+                "--compose-file",
+                str(clone / "compose.staging.yaml"),
+                "--expected-revision",
+                revision_a,
+                "--repo-root",
+                str(clone),
+                "--deploy-root",
+                str(deploy_root),
+                "--gateway-base-url",
+                f"http://{gateway_port}",
+            ],
+            cwd=clone,
+            check=False,
+        )
+        if managed_health.returncode != 0:
+            detail = managed_health.stderr.strip() or managed_health.stdout.strip()
+            raise RuntimeError(f"managed standalone health CLI failed: {detail}")
+        if "OK: staging health gate passed" not in managed_health.stdout:
+            raise RuntimeError("managed standalone health CLI omitted success proof")
+        print("OK: managed standalone health CLI passed from current.json authority")
 
         readme = clone / "README.md"
         readme.write_text(
