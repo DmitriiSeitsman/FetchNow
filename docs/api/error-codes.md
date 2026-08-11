@@ -48,8 +48,19 @@ Envelope shape (already used by the API foundation):
 
 New codes require a docs update in this registry before public clients depend on them. Renaming published codes is a breaking change.
 
+## Wrapper resolution domain outcomes (PR3A)
+
+Lower-case kinds such as `wrapper_unsupported`, `wrapper_unresolved`,
+`resolved_provider_unsupported`, `resolution_loop`,
+`resolution_limit_exceeded`, and `unsafe_resolution_target` are **domain**
+outcomes inside `fetchnow.resolution`. They are **not** public API error codes
+in PR3A. Existing `/media/validate` and `/media/probe` continue to return the
+uppercase codes above. API mapping will be added when a production wrapper is
+wired.
+
 ## Related documents
 
 - [URL validation policy](../security/url-validation-policy.md)
 - [ADR 0005 — safe outbound HTTP](../adr/0005-safe-outbound-http-and-redirects.md)
+- [ADR 0006 — wrapper resolution foundation](../adr/0006-wrapper-resolution-foundation.md)
 - [Capacity policy](../operations/capacity-policy.md)

@@ -6,6 +6,7 @@ Executable code:
 
 - `backend/src/fetchnow/url/` — parse, provider registry, DNS, destination classification
 - `backend/src/fetchnow/network/` — safe outbound HTTP with manual redirects
+- `backend/src/fetchnow/resolution/` — wrapper resolution foundation (PR3A; no production wrappers)
 
 Conformance vectors: `backend/tests/fixtures/url_security_cases.json`
 (`stage=validate` and `stage=network`; no public internet in tests).
@@ -104,6 +105,17 @@ Prefer stable codes from `docs/api/error-codes.md`:
 
 Do not return raw resolver internals, exception strings, or internal IPs to clients.
 
+## Wrapper resolution foundation (PR3A)
+
+Domain-only (`fetchnow.resolution`): provider-first classification, sealed
+exact-host wrapper registry with immutable registration snapshots (host
+ownership frozen at build time), HTTPS-only wrapper policy, orchestration-owned
+document-fetch host allowlists (initial request and every redirect), bounded
+document fetch reuse of the PR2 client (body cap on decompressed bytes), and
+typed lower-case resolution outcomes. **No production wrapper ships in PR3A.**
+`/media/validate` and `/media/probe` are unchanged.
+See [ADR 0006](../adr/0006-wrapper-resolution-foundation.md).
+
 ## Test vectors
 
 `backend/tests/fixtures/url_security_cases.json` — PR1/PR2 execute `validate` and `network` stages with fake DNS and `httpx.MockTransport`.
@@ -114,3 +126,4 @@ Do not return raw resolver internals, exception strings, or internal IPs to clie
 - [Error codes](../api/error-codes.md)
 - [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md)
 - [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md)
+- [ADR 0006](../adr/0006-wrapper-resolution-foundation.md)

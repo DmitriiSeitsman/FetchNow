@@ -122,6 +122,14 @@ class Settings(BaseSettings):
         alias="OUTBOUND_ALLOWED_CONTENT_TYPES",
     )
 
+    # Wrapper resolution foundation (PR3A)
+    wrapper_resolution_max_depth: int = Field(
+        default=3,
+        alias="WRAPPER_RESOLUTION_MAX_DEPTH",
+        ge=1,
+        le=8,
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -159,6 +167,11 @@ class Settings(BaseSettings):
                 "OUTBOUND_TOTAL_TIMEOUT_SECONDS must be >= "
                 "OUTBOUND_CONNECT_TIMEOUT_SECONDS"
             )
+        if (
+            self.wrapper_resolution_max_depth < 1
+            or self.wrapper_resolution_max_depth > 8
+        ):
+            raise ValueError("WRAPPER_RESOLUTION_MAX_DEPTH must be between 1 and 8")
         return self
 
 
