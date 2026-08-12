@@ -20,7 +20,7 @@ docker compose --env-file .env.staging --project-name fetchnow-staging \
   -f compose.yaml -f compose.staging.yaml run --rm api alembic upgrade head
 ```
 
-Первая команда проверяет readiness; переменные должны быть загружены в операторскую shell без печати. `alembic current` — **CHECK**, показывает текущую revision. `upgrade head` — **WARNING modifying**, применяет migrations до последней revision. В репозитории head — `0002_media_jobs` (после `0001_baseline`); PR5 добавляет таблицу `media_jobs`.
+Первая команда проверяет readiness; переменные должны быть загружены в операторскую shell без печати. `alembic current` — **CHECK**, показывает текущую revision. `upgrade head` — **WARNING modifying**, применяет migrations до последней revision. В репозитории head — `0003_download_jobs` (после `0002_media_jobs` / `0001_baseline`); PR6 добавляет таблицу `media_download_jobs`.
 
 ## Проверка и ошибки
 

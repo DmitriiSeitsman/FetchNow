@@ -60,24 +60,56 @@ def test_empty_valid_policy() -> None:
     assert contract.transitions == ()
 
 
-def test_repository_contract_covers_media_jobs_forward_transition() -> None:
+def test_repository_contract_covers_sequential_alembic_transitions() -> None:
+    """Compatibility JSON must cover each forward step of the real Alembic graph.
+
+    Do not assume a single leap from baseline to current head: when heads move
+    to 0003, the contract must still include 0001→0002 and 0002→0003.
+    """
     graph = build_alembic_graph(ROOT / "backend" / "migrations" / "versions")
-    current_heads = frozenset({"0001_baseline"})
-    target_heads = frozenset(graph.heads)
-    included_revisions = graph.included_revisions(current_heads, target_heads)
     contract = load_compatibility_contract(
         ROOT / "deploy" / "migrations" / "compatibility.json"
     )
+    assert graph.heads == ("0003_download_jobs",)
 
-    transition = find_matching_transition(
-        contract,
-        from_heads=current_heads,
-        to_heads=target_heads,
-        included_revisions=included_revisions,
+    steps = (
+        (
+            frozenset({"0001_baseline"}),
+            frozenset({"0002_media_jobs"}),
+            frozenset({"0002_media_jobs"}),
+        ),
+        (
+            frozenset({"0002_media_jobs"}),
+            frozenset({"0003_download_jobs"}),
+            frozenset({"0003_download_jobs"}),
+        ),
     )
+    for from_heads, to_heads, included in steps:
+        # Sanity: included set matches Alembic forward delta for this step.
+        assert (
+            graph.included_revisions(from_heads, to_heads) == included
+        ), (from_heads, to_heads)
+        transition = find_matching_transition(
+            contract,
+            from_heads=from_heads,
+            to_heads=to_heads,
+            included_revisions=included,
+        )
+        assert frozenset(transition.to_heads) == to_heads
+        assert frozenset(transition.included_revisions) == included
 
-    assert transition.to_heads == ("0002_media_jobs",)
-    assert transition.included_revisions == ("0002_media_jobs",)
+    # Full baseline→head still must not be assumed as a single transition entry.
+    full_included = graph.included_revisions(
+        frozenset({"0001_baseline"}), frozenset(graph.heads)
+    )
+    assert full_included == frozenset({"0002_media_jobs", "0003_download_jobs"})
+    with pytest.raises(CompatibilityError, match="no compatibility transition"):
+        find_matching_transition(
+            contract,
+            from_heads=frozenset({"0001_baseline"}),
+            to_heads=frozenset(graph.heads),
+            included_revisions=full_included,
+        )
 
 
 def test_unknown_top_level_field_rejected() -> None:

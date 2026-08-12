@@ -157,6 +157,16 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Residual risk | Application rate limits not enforced in PR5; stolen client token valid until TTL |
 | Planned PR | Abuse quotas / gateway limits in later ops PRs |
 
+### Download job / private artifact abuse (PR6)
+
+| Field | Detail |
+|---|---|
+| Attack | Guess download UUID; steal parent Bearer; flood download enqueue; fill disk with artifacts |
+| Impact | Unauthorized status read; capacity/disk exhaustion |
+| Mitigation | Parent MediaJob credential authorizes download create/status; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; private artifact root never exposed; `artifactReady` boolean only; `MEDIA_DOWNLOAD_CONCURRENCY` exactly 1; min free disk before claim; runtime output size monitor; feature default off |
+| Residual risk | yt-dlp own HTTP outside SafeHTTPClient; no client file delivery yet (delivery PR still pending) |
+| Planned PR | Signed/direct delivery + stronger isolation in later PRs |
+
 ### Media inspection SSRF / extractor escape (PR4)
 
 | Field | Detail |

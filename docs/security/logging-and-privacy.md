@@ -57,6 +57,17 @@ Media jobs (PR5) additionally forbid logging or publicizing:
 and status receive the client-owned token only as an Authorization Bearer
 credential, never echo it, and return `Cache-Control: no-store`.
 
+Download jobs (PR6) additionally forbid logging or publicizing:
+
+- provider format tokens;
+- filesystem paths / artifact ids;
+- canonical or tool URLs;
+- yt-dlp argv/stderr/stdout.
+
+`DownloadError` str/repr omit `internal_reason` and never include tokens or paths.
+Download create/status reuse the parent MediaJob Bearer and return
+`Cache-Control: no-store`.
+
 Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 
 Debug overrides that print the above are forbidden in production (`APP_ENV=production`).

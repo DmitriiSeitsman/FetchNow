@@ -12,7 +12,7 @@ from fetchnow.media_inspection.identity import (
     build_canonical_provider_url,
     parse_provider_media_identity,
 )
-from fetchnow.media_inspection.models import MediaMetadata
+from fetchnow.media_inspection.models import ExtractedMediaDraft, MediaMetadata
 from fetchnow.media_inspection.normalize import project_metadata
 from fetchnow.media_inspection.protocols import InspectionTarget
 from fetchnow.media_inspection.registry import InspectionExtractorRegistry
@@ -35,6 +35,23 @@ class MediaInspectionService:
 
     async def inspect(self, resolution: ResolutionResult) -> MediaMetadata:
         """Inspect media metadata for a previously resolved provider URL."""
+        draft = await self.inspect_draft(resolution)
+        target_canonical = draft.canonical_provider_url
+        return project_metadata(
+            draft,
+            self._settings,
+            trusted_canonical_url=target_canonical,
+            trusted_media_id=draft.media_id,
+            trusted_provider_id=draft.provider_id,
+        )
+
+    async def inspect_draft(self, resolution: ResolutionResult) -> ExtractedMediaDraft:
+        """Run the same binding/validation as inspect, returning the draft.
+
+        Used by download execution to build an ephemeral
+        formatOptionId → provider_format_token map without projecting public
+        metadata. Never persists the draft or provider tokens.
+        """
         if not isinstance(resolution, ResolutionResult):
             raise_inspection_error(
                 InspectionErrorKind.INTERNAL_INSPECTION_ERROR,
@@ -77,13 +94,7 @@ class MediaInspectionService:
                 InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH,
                 internal_reason="DRAFT_EXTRACTOR_MISMATCH",
             )
-        return project_metadata(
-            draft,
-            self._settings,
-            trusted_canonical_url=target.canonical_provider_url,
-            trusted_media_id=target.media_id,
-            trusted_provider_id=target.provider_id,
-        )
+        return draft
 
     def _bind_target(self, resolution: ResolutionResult) -> InspectionTarget:
         """Derive the tool target from a coherent validated URL snapshot only."""

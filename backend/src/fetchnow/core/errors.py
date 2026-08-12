@@ -31,6 +31,9 @@ def error_envelope(
     return body
 
 
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach handlers that always return the stable error envelope."""
 
@@ -44,6 +47,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         message = exc.detail if isinstance(exc.detail, str) else "HTTP error"
         return JSONResponse(
             status_code=exc.status_code,
+            headers=_NO_STORE,
             content=error_envelope(
                 code=code,
                 message=message,
@@ -60,6 +64,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         request_id = getattr(request.state, "request_id", None)
         return JSONResponse(
             status_code=422,
+            headers=_NO_STORE,
             content=error_envelope(
                 code="validation_error",
                 message="Request validation failed",
@@ -76,6 +81,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         request_id = getattr(request.state, "request_id", None)
         return JSONResponse(
             status_code=500,
+            headers=_NO_STORE,
             content=error_envelope(
                 code="internal_error",
                 message="An unexpected error occurred",

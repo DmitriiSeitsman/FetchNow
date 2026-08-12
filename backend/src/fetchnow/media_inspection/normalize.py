@@ -213,15 +213,22 @@ def project_metadata(
             internal_reason="NO_USABLE_FORMATS",
         )
 
-    # Sort first so duplicate option_ids resolve deterministically (not input order).
+    # Sort first so duplicate option_ids are permutation-invariant (not first-wins).
     prepared.sort(key=lambda item: item[0])
     projected: list[MediaFormat] = []
-    seen: set[str] = set()
+    by_option: dict[str, MediaFormat] = {}
     for _key, fmt in prepared:
-        if fmt.format_option_id in seen:
+        existing = by_option.get(fmt.format_option_id)
+        if existing is None:
+            by_option[fmt.format_option_id] = fmt
+            projected.append(fmt)
             continue
-        seen.add(fmt.format_option_id)
-        projected.append(fmt)
+        if existing != fmt:
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_POLICY_REJECTED,
+                internal_reason="OPTION_AMBIGUOUS",
+            )
+        # Byte-for-byte equivalent MediaFormat: collapse duplicates.
 
     if len(projected) > max_formats:
         projected = projected[:max_formats]

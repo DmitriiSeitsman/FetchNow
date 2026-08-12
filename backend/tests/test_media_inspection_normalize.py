@@ -11,6 +11,7 @@ import pytest
 from fetchnow.media_inspection.errors import InspectionError, InspectionErrorKind
 from fetchnow.media_inspection.models import (
     CodecFamily,
+    ExtractedMediaDraft,
     FormatCategory,
     InternalFormatCandidate,
     MediaFormat,
@@ -185,6 +186,47 @@ def test_distinct_formats_share_option_id_false() -> None:
         provider_format_token="url720b",
     )
     assert format_option_id_for(c1, "p720") != format_option_id_for(c2, "p720")
+
+
+def test_byte_equivalent_duplicate_option_ids_still_collapse() -> None:
+    """Normalize collapses equivalent option_ids; conflicting same-id fails closed."""
+    c1 = InternalFormatCandidate(
+        container="mp4",
+        width=1280,
+        height=720,
+        fps=30.0,
+        has_video=True,
+        has_audio=True,
+        video_codec=CodecFamily.AVC,
+        audio_codec=CodecFamily.AAC,
+        approx_bytes=1_000_000,
+        provider_format_token="url720",
+    )
+    c2 = InternalFormatCandidate(
+        container="mp4",
+        width=1280,
+        height=720,
+        fps=30.0,
+        has_video=True,
+        has_audio=True,
+        video_codec=CodecFamily.AVC,
+        audio_codec=CodecFamily.AAC,
+        approx_bytes=1_000_000,
+        provider_format_token="url720",
+    )
+    assert format_option_id_for(c1, "p720") == format_option_id_for(c2, "p720")
+    draft = ExtractedMediaDraft(
+        provider_id="vk",
+        canonical_provider_url="https://vk.com/video-123_456239017",
+        media_id="-123_456239017",
+        title="dup",
+        duration_seconds=10,
+        candidates=(c1, c2),
+        extractor_key="vk",
+        tool_version="2026.7.4",
+    )
+    meta = _project(draft)
+    assert len(meta.formats) == 1
 
 
 def test_provider_format_token_public_false() -> None:

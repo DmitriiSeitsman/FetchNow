@@ -278,6 +278,99 @@ class Settings(BaseSettings):
         le=524_288,
     )
 
+    # Durable download execution (PR6) — fail closed / disabled by default.
+    # No public file delivery. yt-dlp path reused from MEDIA_INSPECTION_YTDLP_PATH.
+    # MEDIA_DOWNLOAD_CONCURRENCY defaults to 1: multi-worker disk reservation is
+    # not implemented; raising concurrency risks overcommit without coordinated
+    # free-space accounting across workers.
+    media_downloads_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_DOWNLOADS_ENABLED",
+    )
+    media_download_max_bytes: int = Field(
+        default=536_870_912,
+        alias="MEDIA_DOWNLOAD_MAX_BYTES",
+        gt=0,
+    )
+    media_download_timeout_seconds: float = Field(
+        default=120.0,
+        alias="MEDIA_DOWNLOAD_TIMEOUT_SECONDS",
+        gt=0,
+        le=600,
+    )
+    media_download_concurrency: int = Field(
+        default=1,
+        alias="MEDIA_DOWNLOAD_CONCURRENCY",
+        ge=1,
+        le=1,
+    )
+    media_download_artifact_ttl_seconds: int = Field(
+        default=3600,
+        alias="MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS",
+        ge=60,
+        le=86_400,
+    )
+    media_download_min_free_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        alias="MEDIA_DOWNLOAD_MIN_FREE_BYTES",
+        ge=0,
+    )
+    media_download_temp_root: str = Field(
+        default="",
+        alias="MEDIA_DOWNLOAD_TEMP_ROOT",
+    )
+    media_download_stdout_max_bytes: int = Field(
+        default=1_048_576,
+        alias="MEDIA_DOWNLOAD_STDOUT_MAX_BYTES",
+        gt=0,
+        le=8_388_608,
+    )
+    media_download_stderr_max_bytes: int = Field(
+        default=262_144,
+        alias="MEDIA_DOWNLOAD_STDERR_MAX_BYTES",
+        gt=0,
+        le=2_097_152,
+    )
+    media_download_max_attempts: int = Field(
+        default=3,
+        alias="MEDIA_DOWNLOAD_MAX_ATTEMPTS",
+        ge=1,
+        le=10,
+    )
+    media_download_retry_base_seconds: float = Field(
+        default=2.0,
+        alias="MEDIA_DOWNLOAD_RETRY_BASE_SECONDS",
+        gt=0,
+        le=600,
+    )
+    media_download_retry_max_seconds: float = Field(
+        default=60.0,
+        alias="MEDIA_DOWNLOAD_RETRY_MAX_SECONDS",
+        gt=0,
+        le=3600,
+    )
+    # Grace must stay well above the widest publish→ready-commit window: a zero
+    # or tiny grace lets one worker reconcile away a publication another worker
+    # created moments earlier but has not yet committed.
+    media_download_orphan_grace_seconds: int = Field(
+        default=300,
+        alias="MEDIA_DOWNLOAD_ORPHAN_GRACE_SECONDS",
+        ge=60,
+        le=86_400,
+    )
+    media_download_lease_seconds: float = Field(
+        default=120.0,
+        alias="MEDIA_DOWNLOAD_LEASE_SECONDS",
+        ge=5,
+        le=600,
+    )
+    media_download_socket_timeout_seconds: float = Field(
+        default=30.0,
+        alias="MEDIA_DOWNLOAD_SOCKET_TIMEOUT_SECONDS",
+        gt=0,
+        le=120,
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -340,6 +433,37 @@ class Settings(BaseSettings):
         if self.media_job_retry_base_seconds > self.media_job_retry_max_seconds:
             raise ValueError(
                 "MEDIA_JOB_RETRY_BASE_SECONDS must be <= MEDIA_JOB_RETRY_MAX_SECONDS"
+            )
+        # MEDIA_DOWNLOADS_ENABLED must not require MEDIA_INSPECTION_YTDLP_PATH here:
+        # the API container enables job creation without receiving the worker
+        # executable path. Worker constructs validate executable/root at runtime.
+        download_temp = self.media_download_temp_root.strip()
+        if download_temp and not os.path.isabs(download_temp):
+            raise ValueError("MEDIA_DOWNLOAD_TEMP_ROOT must be absolute when set")
+        if (
+            self.media_download_retry_base_seconds
+            > self.media_download_retry_max_seconds
+        ):
+            raise ValueError(
+                "MEDIA_DOWNLOAD_RETRY_BASE_SECONDS must be <= "
+                "MEDIA_DOWNLOAD_RETRY_MAX_SECONDS"
+            )
+        if self.media_download_socket_timeout_seconds > (
+            self.media_download_timeout_seconds
+        ):
+            raise ValueError(
+                "MEDIA_DOWNLOAD_SOCKET_TIMEOUT_SECONDS must be <= "
+                "MEDIA_DOWNLOAD_TIMEOUT_SECONDS"
+            )
+        if self.media_download_max_bytes > self.max_source_file_bytes:
+            raise ValueError(
+                "MEDIA_DOWNLOAD_MAX_BYTES must be <= MAX_SOURCE_FILE_BYTES"
+            )
+        # Fail-closed: only concurrency=1 until multi-worker disk reservation exists.
+        if self.media_download_concurrency != 1:
+            raise ValueError(
+                "MEDIA_DOWNLOAD_CONCURRENCY must be 1 until cross-worker "
+                "disk reservation is implemented"
             )
         return self
 
