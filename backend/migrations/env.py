@@ -18,13 +18,15 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from fetchnow.core.config import get_settings  # noqa: E402
+from fetchnow.db.base import Base  # noqa: E402
+from fetchnow.jobs import models as jobs_models  # noqa: E402, F401
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)

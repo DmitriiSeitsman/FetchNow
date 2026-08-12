@@ -516,7 +516,7 @@ def test_discover_alembic_heads() -> None:
     heads = discover_alembic_head_revisions(
         ROOT / "backend" / "migrations" / "versions"
     )
-    assert "0001_baseline" in heads
+    assert heads == ("0002_media_jobs",)
 
 
 def test_compose_argv_requires_project() -> None:

@@ -32,7 +32,7 @@ Internet
 
 ## Текущее состояние продукта после PR4
 
-Реализованы URL validation (`POST /api/v1/media/validate`), диагностический safe outbound probe (`POST /api/v1/media/probe`), wrapper resolve (`POST /api/v1/media/resolve`, включая Yandex Preview), и **внутренний** media inspection foundation (metadata-only VK/Rutube через hardened yt-dlp adapter, `MEDIA_INSPECTION_ENABLED=false` по умолчанию). API не запускает yt-dlp inline. Media bytes не скачиваются. Staging deployment inspection path не выполнен.
+Реализованы URL validation (`POST /api/v1/media/validate`), диагностический safe outbound probe (`POST /api/v1/media/probe`), wrapper resolve (`POST /api/v1/media/resolve`, включая Yandex Preview), **внутренний** media inspection foundation (metadata-only VK/Rutube через hardened yt-dlp adapter), и durable media-inspection jobs (PR5: PostgreSQL queue, client access tokens; `MEDIA_JOBS_ENABLED=false` / `MEDIA_INSPECTION_ENABLED=false` по умолчанию). API не запускает yt-dlp inline. Media bytes не скачиваются для delivery. Staging enablement inspection/jobs path не выполнен.
 
 Пока не реализованы media download pipeline, ffmpeg, direct-download tickets, processed jobs, PostgreSQL job queue, реальная обработка worker jobs, anonymous sessions, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker, rate limiting, host Nginx/TLS staging publish, automatic deploy/rollback, отдельный StorageProvider или S3 implementation.
 

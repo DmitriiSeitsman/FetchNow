@@ -395,6 +395,44 @@ def check_isolation_render() -> None:
     print("OK: isolation render (volumes/networks differ)")
 
 
+def check_media_jobs_env_split() -> None:
+    """API must not receive yt-dlp path; worker may; feature stays off by default."""
+    cfg = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    services = _services(cfg)
+    api_env = services["api"].get("environment") or {}
+    worker_env = services["worker"].get("environment") or {}
+    _assert(
+        "MEDIA_INSPECTION_YTDLP_PATH" not in api_env,
+        "base: api must not receive MEDIA_INSPECTION_YTDLP_PATH",
+    )
+    _assert(
+        str(api_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
+        "base: MEDIA_JOBS_ENABLED must default false on api",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
+        "base: MEDIA_JOBS_ENABLED must default false on worker",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_INSPECTION_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_INSPECTION_ENABLED must default false on worker",
+    )
+    _assert(
+        "MEDIA_INSPECTION_YTDLP_PATH" in worker_env,
+        "base: worker must declare MEDIA_INSPECTION_YTDLP_PATH for operators",
+    )
+    path = str(worker_env.get("MEDIA_INSPECTION_YTDLP_PATH") or "")
+    _assert(
+        path.endswith("/yt-dlp") or path == "/opt/venv/bin/yt-dlp",
+        f"base: unexpected worker yt-dlp path {path!r}",
+    )
+    print("OK: media jobs env split (api vs worker)")
+
+
 def main() -> int:
     check_base_only_config()
     check_dev_config()
@@ -402,6 +440,7 @@ def main() -> int:
     check_staging_missing_password_fails()
     check_staging_missing_revision_fails()
     check_isolation_render()
+    check_media_jobs_env_split()
     print("All Compose contract checks passed.")
     return 0
 

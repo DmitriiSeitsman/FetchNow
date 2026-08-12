@@ -16,6 +16,23 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16.9-alpine
+        env:
+          POSTGRES_USER: fetchnow
+          POSTGRES_PASSWORD: fetchnow
+          POSTGRES_DB: fetchnow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fetchnow -d fetchnow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow
+      FETCHNOW_TEST_DATABASE_URL: postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -31,6 +48,8 @@ jobs:
         run: ruff check src tests
       - name: Mypy
         run: mypy src
+      - name: Alembic upgrade
+        run: alembic upgrade head
       - name: Pytest
         run: pytest -q
 

@@ -13,7 +13,9 @@ from fetchnow.core.config import Settings, get_settings
 from fetchnow.core.errors import register_exception_handlers
 from fetchnow.core.logging import configure_logging
 from fetchnow.core.middleware import RequestIdMiddleware
-from fetchnow.db.session import create_engine
+from fetchnow.db.session import create_engine, create_session_factory
+from fetchnow.jobs.service import MediaJobService
+from fetchnow.media_inspection.defaults import build_default_inspection_registry
 from fetchnow.network.client import SafeHTTPClient
 from fetchnow.resolution.defaults import build_wrapper_registry
 from fetchnow.resolution.service import ResolutionService
@@ -30,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine(settings)
+        session_factory = create_session_factory(engine)
         resolver = SystemDnsResolver(
             timeout_seconds=settings.dns_resolution_timeout_seconds
         )
@@ -51,7 +54,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             http_client=http_client,
             dns_resolver=resolver,
         )
+        # Registry for ownership checks only — API never runs extractors/yt-dlp.
+        inspection_registry = build_default_inspection_registry(
+            settings, provider_registry
+        )
+        media_job_service = MediaJobService(settings)
         app.state.engine = engine
+        app.state.session_factory = session_factory
         app.state.settings = settings
         app.state.dns_resolver = resolver
         app.state.provider_registry = provider_registry
@@ -59,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.safe_http_client = http_client
         app.state.wrapper_registry = wrapper_registry
         app.state.resolution_service = resolution_service
+        app.state.inspection_registry = inspection_registry
+        app.state.media_job_service = media_job_service
         try:
             yield
         finally:

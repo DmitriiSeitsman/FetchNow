@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection foundation** (PR4: metadata-only VK/Rutube extractor adapter, disabled by default). **FetchNow still does not download or process media.** There is no public download endpoint, job queue, ffmpeg pipeline, or download delivery. Probe returns diagnostic HTTP metadata only. Media inspection is an internal service/CLI boundary — the API does not run yt-dlp inline.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5: PostgreSQL queue, client access tokens, worker leases; **disabled by default**). **FetchNow still does not download or process media bytes for delivery.** There is no public download endpoint or ffmpeg pipeline. Job create/status never run yt-dlp in the API process.
 
 ## Architecture
 
@@ -13,8 +13,8 @@ FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro sta
 | `gateway` | Nginx reverse proxy; only published entrypoint |
 | `web` | Astro static site served by Nginx |
 | `api` | FastAPI HTTP API |
-| `worker` | Separate process from the same Python package |
-| `postgres` | PostgreSQL (future job queue lives here; no Redis) |
+| `worker` | Claims media-inspection jobs when enabled; same Python package |
+| `postgres` | PostgreSQL (durable media-job queue; no Redis) |
 
 Named volumes (project-scoped): `{project}_pgdata` (database), `{project}_tmp` (future temporary media files). With local `COMPOSE_PROJECT_NAME=fetchnow` these resolve to `fetchnow_pgdata` / `fetchnow_tmp`.
 
@@ -26,6 +26,7 @@ Security and product boundaries are documented **before** media processing ships
 - Outbound HTTP uses a safe client with manual redirects and per-hop re-validation (`POST /api/v1/media/probe`; [ADR 0005](docs/adr/0005-safe-outbound-http-and-redirects.md)).
 - Wrapper URL resolution: domain foundation ([ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md)) and Yandex Video Preview resolver + `POST /api/v1/media/resolve` ([ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md)). Validate/probe behavior is unchanged.
 - Media inspection foundation: metadata-only VK/Rutube adapter behind a hardened yt-dlp subprocess boundary ([ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md)). Disabled by default; no media bytes downloaded; direct media URLs stay internal.
+- Durable media-inspection jobs: PostgreSQL queue with client-generated access tokens, `SKIP LOCKED` claims, and lease fencing ([ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md)). Defaults off; API does not run yt-dlp.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
@@ -50,6 +51,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md) | Wrapper resolution foundation |
 | [ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md) | Yandex Video Preview resolver |
 | [ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md) | Media inspection + yt-dlp tool boundary |
+| [ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md) | PostgreSQL media-job orchestration |
 
 ## Validate API (PR1)
 
@@ -100,6 +102,27 @@ FETCHNOW_LIVE_MEDIA_INSPECTION=1 \
 ```
 
 Does not download media. Staging deployment of this path is not performed in PR4.
+
+## Media inspection jobs (PR5)
+
+Durable PostgreSQL-backed jobs enqueue metadata inspection after URL resolution.
+Feature flags default **off** (`MEDIA_JOBS_ENABLED=false`,
+`MEDIA_INSPECTION_ENABLED=false`).
+
+```bash
+# Client generates a 32-byte token (base64url, 43 chars) and keeps it.
+curl -sS -X POST http://localhost:8080/api/v1/media/jobs \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <TOKEN>' \
+  -d '{"url":"<PUBLIC_VK_OR_RUTUBE_OR_YANDEX_PREVIEW_URL>"}'
+
+curl -sS http://localhost:8080/api/v1/media/jobs/<JOB_ID> \
+  -H 'authorization: Bearer <TOKEN>'
+```
+
+API resolves/validates and persists a trusted terminal target only; it does **not**
+run yt-dlp. The worker claims jobs with `SKIP LOCKED` and may run PR4 inspection
+when both flags are enabled. See [ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md).
 
 ## Infrastructure Handbook
 

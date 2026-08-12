@@ -45,9 +45,13 @@ Reject or fail jobs exceeding `MAX_SOURCE_DURATION_SECONDS`, `MAX_SOURCE_FILE_BY
 PR4 media inspection reads the same duration/byte caps (and
 `MEDIA_INSPECTION_MAX_*` / JSON structural bounds) when projecting metadata.
 Inspection creates no durable media outputs; it respects timeouts and
-stdout/stderr byte limits. `METADATA_CONCURRENCY` remains an env placeholder for
-future worker wiring (PR5) and is **not** enforced by Settings in PR4. The
-inspection tool remains disabled by default.
+stdout/stderr byte limits. PR5 workers enforce `WORKER_CONCURRENCY` for claimed
+media-inspection jobs when `MEDIA_JOBS_ENABLED` and `MEDIA_INSPECTION_ENABLED`
+are both true. `METADATA_CONCURRENCY` remains an env placeholder and is **not**
+bound in Settings. Both job and inspection features remain disabled by default.
+Job absolute TTL uses `MEDIA_JOB_ABSOLUTE_TTL_SECONDS` (not the older
+`JOB_ABSOLUTE_TTL_SECONDS` placeholder name). Application-level enqueue rate
+limits are not enforced in PR5.
 
 ## TTL interaction
 

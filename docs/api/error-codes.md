@@ -40,6 +40,9 @@ Envelope shape (already used by the API foundation):
 | `DURATION_TOO_LONG` | 422 | Media longer than allowed | no | no | Internal probe traces |
 | `JOB_NOT_FOUND` | 404 | Job not found | no | no | Whether ID existed then deleted |
 | `JOB_EXPIRED` | 410 | Job or file expired | no | no | Storage keys |
+| `IDEMPOTENCY_CONFLICT` | 409 | Access token already used for a different request | no | no | Fingerprints, prior job fields |
+| `INVALID_ACCESS_TOKEN` | 400 | Access token is invalid | no | no | Raw token, decode internals |
+| `MEDIA_INSPECTION_FAILED` | 422 | Media inspection failed | soft | maybe later | yt-dlp stderr, URLs, tool argv |
 | `INTERNAL_ERROR` | 500 | Unexpected error | soft | maybe later | Stack traces, hostnames, SQL |
 
 **Retryable** meanings: `yes` = safe to retry same request; `soft` = maybe transient; `no` = change input or stop.
@@ -76,6 +79,19 @@ PR3B maps them to uppercase public API codes on `POST /api/v1/media/resolve`:
 Existing `/media/validate` and `/media/probe` continue to return the uppercase
 URL/network codes above and are unchanged by wrapper resolution.
 
+## Media inspection jobs (PR5)
+
+Durable job orchestration is **disabled by default** (`MEDIA_JOBS_ENABLED=false`).
+When disabled, create returns `CAPACITY_UNAVAILABLE` (503).
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/media/jobs` | Body: `url`; requires `Authorization: Bearer <accessToken>` with a client-generated 43-char base64url credential. Resolves only on first creation; an authenticated retry is recovered before network resolution. API does **not** run yt-dlp. |
+| `GET /api/v1/media/jobs/{id}` | Requires `Authorization: Bearer <accessToken>`. Missing/wrong credential → `JOB_NOT_FOUND` (indistinguishable). Expired → `JOB_EXPIRED`. |
+
+Ownership uses hashed credentials only (see [ADR 0009](../adr/0009-postgresql-media-job-orchestration.md)).
+Worker-side terminal inspection failures surface as `MEDIA_INSPECTION_FAILED` on
+the job record; they are not an inline API yt-dlp path.
 
 ## Related documents
 
@@ -83,4 +99,6 @@ URL/network codes above and are unchanged by wrapper resolution.
 - [ADR 0005 — safe outbound HTTP](../adr/0005-safe-outbound-http-and-redirects.md)
 - [ADR 0006 — wrapper resolution foundation](../adr/0006-wrapper-resolution-foundation.md)
 - [ADR 0007 — Yandex Video Preview resolver](../adr/0007-yandex-video-preview-resolver.md)
+- [ADR 0008 — media inspection tool boundary](../adr/0008-media-inspection-and-tool-boundary.md)
+- [ADR 0009 — PostgreSQL media-job orchestration](../adr/0009-postgresql-media-job-orchestration.md)
 - [Capacity policy](../operations/capacity-policy.md)
