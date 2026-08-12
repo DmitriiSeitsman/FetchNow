@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .c3_constants import (
-    APPLICATION_SERVICES,
+    RUNTIME_APPLICATION_SERVICES,
     LABEL_DEPLOYMENT_ID,
     LABEL_RELEASE_REVISION,
 )
@@ -114,7 +114,7 @@ def discover_owned_bootstrap_containers(
         cwd=cwd,
     ):
         svc = str(row.get("Service") or row.get("service") or "")
-        if svc not in APPLICATION_SERVICES:
+        if svc not in RUNTIME_APPLICATION_SERVICES:
             continue
         cid = str(row.get("ID") or row.get("Id") or "").strip()
         if not cid:

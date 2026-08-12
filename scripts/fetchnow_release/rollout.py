@@ -23,6 +23,7 @@ from .application_compatibility import (
 )
 from .c3_constants import (
     APP_SERVICES_BEFORE_GATEWAY,
+    RUNTIME_APPLICATION_SERVICES,
     OVERRIDES_DIRNAME,
     PLAN_SCHEMA_VERSION,
     STATUS_ACTIVATING_APP,
@@ -71,7 +72,11 @@ from .journal import (
     write_result,
 )
 from .manifest import ManifestError, load_manifest, manifest_path
-from .override import OverrideError, write_images_override
+from .override import (
+    OverrideError,
+    compose_files_include_delivery,
+    write_images_override,
+)
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 from .rollout_lock import RolloutLock, RolloutLockError
@@ -140,7 +145,7 @@ def _app_containers_present(
         compose_files=compose_files,
         cwd=cwd,
     )
-    app = {"api", "worker", "web", "gateway"}
+    app = set(RUNTIME_APPLICATION_SERVICES)
     for row in rows:
         svc = str(row.get("Service") or row.get("service") or "")
         state = str(row.get("State") or "").lower()
@@ -235,6 +240,9 @@ def _perform_rollback(
             previous_ids,
             deployment_id=deployment_id,
             release_revision=previous_revision,
+            include_delivery=compose_files_include_delivery(
+                _release_compose_files(prev_release)
+            ),
         )
         compose_files = _compose_with_override(prev_release, override)
         cwd = prev_release / SOURCE_DIRNAME
@@ -357,7 +365,13 @@ def _verify_already_active(
     health_dep = deployment_dir(deploy, current.deployment_id)
     override = health_dep / OVERRIDES_DIRNAME / "images.yaml"
     if not override.is_file():
-        write_images_override(health_dep / OVERRIDES_DIRNAME, override_ids)
+        write_images_override(
+            health_dep / OVERRIDES_DIRNAME,
+            override_ids,
+            include_delivery=compose_files_include_delivery(
+                _release_compose_files(target_release)
+            ),
+        )
     compose_files = _compose_with_override(target_release, override)
     health_inp = HealthInput(
         project_name=inp.project_name,
@@ -561,12 +575,19 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 target_ids,
                 deployment_id=deployment_id,
                 release_revision=rev,
+                include_delivery=compose_files_include_delivery(
+                    _release_compose_files(target_release)
+                ),
             )
             compose_files = _compose_with_override(target_release, override)
             messages.append(f"OK: plan published deployment_id={deployment_id}")
 
             try:
-                append_event(dep_dir, STATUS_ACTIVATING_APP, "activate api/worker/web")
+                append_event(
+                    dep_dir,
+                    STATUS_ACTIVATING_APP,
+                    "activate api/worker/delivery/web",
+                )
                 mutation_began = True
                 activate_app_tier(
                     project_name=inp.project_name,

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .c3_constants import (
-    APPLICATION_SERVICES,
+    RUNTIME_APPLICATION_SERVICES,
     SERVICE_HEALTH_DEADLINE_SECONDS,
     SERVICE_HEALTH_POLL_SECONDS,
     STABILIZE_CONSECUTIVE_SUCCESSES,
@@ -143,7 +143,7 @@ def collect_restart_counts(
     out: dict[str, int] = {}
     for row in rows:
         svc = str(row.get("Service") or row.get("service") or "")
-        if svc not in APPLICATION_SERVICES and svc != "postgres":
+        if svc not in RUNTIME_APPLICATION_SERVICES and svc != "postgres":
             continue
         cid = str(row.get("ID") or row.get("Id") or "")
         if not cid:

@@ -63,7 +63,11 @@ from .migration_journal import (
 )
 from .migration_plan import MigrationPlanError, MigrationPlanInput, compute_migration_plan
 from .migration_project import MigrationProjectError, assert_migration_project
-from .override import OverrideError, write_images_override
+from .override import (
+    OverrideError,
+    compose_files_include_delivery,
+    write_images_override,
+)
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 from .rollout_lock import RolloutLock, RolloutLockError
@@ -80,7 +84,7 @@ from fetchnow_pg_backup.session import (  # noqa: E402
     open_backup_root_session,
 )
 
-_MONITORED_SERVICES = ("api", "worker", "web", "gateway", "postgres")
+_MONITORED_SERVICES = ("api", "worker", "delivery", "web", "gateway", "postgres")
 
 
 class MigrationError(RuntimeError):
@@ -541,6 +545,9 @@ def run_migration(inp: MigrationInput) -> MigrationResult:
             override = write_images_override(
                 mig_dir / OVERRIDES_DIRNAME,
                 target_ids,
+                include_delivery=compose_files_include_delivery(
+                    _release_compose_files(target_release)
+                ),
             )
             alembic_compose = (*_release_compose_files(target_release), override)
             alembic_cwd = target_release / SOURCE_DIRNAME

@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from fetchnow.core.config import Settings
 
-_DB = "postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow"
+_DB = "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
 
 
 def test_feature_disabled_by_default() -> None:

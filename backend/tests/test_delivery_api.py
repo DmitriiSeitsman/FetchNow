@@ -25,7 +25,7 @@ from fetchnow.jobs.credentials import generate_access_token
 def _settings(root: Path, **overrides: Any) -> Settings:
     kwargs = {
         "APP_ENV": "test",
-        "DATABASE_URL": "postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow",
+        "DATABASE_URL": "postgresql+asyncpg://unused@127.0.0.1:5432/unused",
         "MEDIA_DELIVERY_ENABLED": True,
         "MEDIA_DELIVERY_ROOT": str(root),
         "MEDIA_DELIVERY_CHUNK_BYTES": 4096,
@@ -252,7 +252,7 @@ async def test_disabled_delivery_returns_catalog(tmp_path: Path) -> None:
     settings = Settings(
         APP_ENV="test",
         DATABASE_URL=(
-            "postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow"
+            "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
         ),
         MEDIA_DELIVERY_ENABLED=False,
     )

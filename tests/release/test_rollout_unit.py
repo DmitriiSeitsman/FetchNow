@@ -376,6 +376,14 @@ def test_images_override_pins_ids_excludes_postgres() -> None:
         render_images_override({**_ids(), "worker": "sha256:" + ("f" * 64)})
 
 
+def test_images_override_delivery_is_release_shape_aware() -> None:
+    legacy = render_images_override(_ids(), include_delivery=False)
+    current = render_images_override(_ids(), include_delivery=True)
+    assert "\n  delivery:\n" not in legacy
+    assert "\n  delivery:\n" in current
+    assert current.count("sha256:" + ("a" * 64)) >= 3
+
+
 def test_activate_argv_contract() -> None:
     argv = build_activate_argv(
         project_name="fetchnow-staging",

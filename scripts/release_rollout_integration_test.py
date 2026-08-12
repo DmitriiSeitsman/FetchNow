@@ -21,9 +21,9 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "tests" / "release"))
 
 from fetchnow_release.c3_constants import (  # noqa: E402
-    APPLICATION_SERVICES,
     LABEL_DEPLOYMENT_ID,
     LABEL_RELEASE_REVISION,
+    RUNTIME_APPLICATION_SERVICES,
     STATUS_ACTIVATING_APP,
     STATUS_ACTIVATING_GATEWAY,
     STATUS_APP_HEALTHY,
@@ -256,7 +256,7 @@ def assert_current_state_v2(deploy_root: Path, *, application_revision: str) -> 
 
 def container_image_ids(compose: list[str], clone: Path) -> dict[str, str]:
     ids: dict[str, str] = {}
-    for svc in ("api", "worker", "web", "gateway"):
+    for svc in RUNTIME_APPLICATION_SERVICES:
         cid = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
         if not cid:
             raise RuntimeError(f"missing container for {svc}")
@@ -462,7 +462,7 @@ def downgrade() -> None:
 
 def app_container_ids(compose: list[str], clone: Path) -> dict[str, str]:
     ids: dict[str, str] = {}
-    for svc in ("api", "worker", "web", "gateway"):
+    for svc in RUNTIME_APPLICATION_SERVICES:
         cid = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
         if not cid:
             raise RuntimeError(f"missing running container for {svc}")
@@ -505,7 +505,7 @@ def container_exists(container_id: str) -> bool:
 
 def running_app_container_ids(compose: list[str], clone: Path) -> dict[str, str]:
     out: dict[str, str] = {}
-    for svc in APPLICATION_SERVICES:
+    for svc in RUNTIME_APPLICATION_SERVICES:
         cid = run(compose + ["ps", "-q", svc], cwd=clone, check=False).stdout.strip()
         if cid:
             out[svc] = cid
@@ -647,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("unhealthy bootstrap missing deployment_id")
 
         audit = parse_bootstrap_cleanup_audit(bad_boot.messages)
-        if len(audit) < len(APPLICATION_SERVICES):
+        if len(audit) < len(RUNTIME_APPLICATION_SERVICES):
             raise RuntimeError(
                 "unhealthy bootstrap did not create all application containers "
                 f"before health failure (audit removed {len(audit)})"
@@ -661,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         for entry in audit:
             if entry["compose_project"] != project:
                 raise RuntimeError("removed container compose project label mismatch")
-            if entry["compose_service"] not in APPLICATION_SERVICES:
+            if entry["compose_service"] not in RUNTIME_APPLICATION_SERVICES:
                 raise RuntimeError("removed container service label not allowed")
             if entry["deployment_id"] != bad_boot.deployment_id:
                 raise RuntimeError("removed container deployment-id label mismatch")
@@ -775,13 +775,14 @@ def main(argv: list[str] | None = None) -> int:
         print("OK: bootstrap published current.json schema v2")
 
         active_ids = state_a["application"]["image_ids"]
-        for service in APPLICATION_SERVICES:
+        for service in RUNTIME_APPLICATION_SERVICES:
             cid = run(compose + ["ps", "-q", service], cwd=clone).stdout.strip()
             configured_image = run(
                 ["docker", "inspect", cid, "--format", "{{.Config.Image}}"],
                 cwd=clone,
             ).stdout.strip()
-            if configured_image != active_ids[service]:
+            image_key = "api" if service == "delivery" else service
+            if configured_image != active_ids[image_key]:
                 raise RuntimeError(
                     f"{service} was not activated by immutable image ID "
                     f"(got {configured_image!r})"
@@ -1021,7 +1022,8 @@ def main(argv: list[str] | None = None) -> int:
         if after_images != before_app_images:
             raise RuntimeError("rejected incompatible rollout changed running image IDs")
         for svc, image_id in after_images.items():
-            if image_id == incompatible_image_ids[svc]:
+            image_key = "api" if svc == "delivery" else svc
+            if image_id == incompatible_image_ids[image_key]:
                 raise RuntimeError(
                     f"rejected incompatible target image is running for {svc}"
                 )
@@ -1103,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
         if sentinel != marker:
             raise RuntimeError("database sentinel changed during rollout")
         after_rollback_ids = container_image_ids(compose, clone)
-        for svc in ("api", "worker", "web", "gateway"):
+        for svc in RUNTIME_APPLICATION_SERVICES:
             if after_rollback_ids[svc] != b_image_ids[svc]:
                 raise RuntimeError(
                     f"rollback did not restore {svc} container image ID "
@@ -1296,7 +1298,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         container_ids_before = {
             svc: run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
-            for svc in ("api", "worker", "web", "gateway", "postgres")
+            for svc in (*RUNTIME_APPLICATION_SERVICES, "postgres")
         }
         again_b = rollout_release(
             RolloutInput(

@@ -97,7 +97,7 @@ def _settings(root: Path, *, concurrency: int = 1) -> Settings:
     return Settings(
         APP_ENV="test",
         DATABASE_URL=(
-            "postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow"
+            "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
         ),
         MEDIA_DELIVERY_ENABLED=True,
         MEDIA_DELIVERY_ROOT=str(root),

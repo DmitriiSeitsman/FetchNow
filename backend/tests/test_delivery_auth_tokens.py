@@ -20,7 +20,7 @@ def _app(*, enable_real_authorize: bool = False) -> Any:
     settings = Settings(
         APP_ENV="test",
         DATABASE_URL=(
-            "postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow"
+            "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
         ),
         MEDIA_DELIVERY_ENABLED=False,
     )
