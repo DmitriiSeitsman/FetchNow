@@ -1,4 +1,4 @@
-"""Background worker process with graceful shutdown."""
+"""Background worker process with durable media-job orchestration."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from types import FrameType
 
 from fetchnow.core.config import get_settings
 from fetchnow.core.logging import configure_logging
+from fetchnow.jobs.worker_loop import MediaJobWorkerRunner
 
 logger = logging.getLogger(__name__)
 
@@ -19,37 +20,19 @@ async def run_worker(*, stop_event: asyncio.Event | None = None) -> None:
     configure_logging(settings.log_level)
     stop_event = stop_event or asyncio.Event()
 
+    runner = MediaJobWorkerRunner(settings, stop_event=stop_event)
+
     def _handle_signal(signum: int, _frame: FrameType | None) -> None:
-        logger.info("Received signal %s; initiating graceful shutdown", signum)
-        stop_event.set()
+        runner.request_stop(signum)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(sig, _handle_signal, sig, None)
         except NotImplementedError:
-            # Windows / restricted environments may not support signal handlers.
             signal.signal(sig, _handle_signal)
 
-    logger.info(
-        "Worker started env=%s poll_interval=%s concurrency=%s",
-        settings.app_env,
-        settings.worker_poll_interval_seconds,
-        settings.worker_concurrency,
-    )
-
-    try:
-        while not stop_event.is_set():
-            logger.info("Worker heartbeat; idle (no jobs in this foundation PR)")
-            try:
-                await asyncio.wait_for(
-                    stop_event.wait(),
-                    timeout=settings.worker_poll_interval_seconds,
-                )
-            except TimeoutError:
-                continue
-    finally:
-        logger.info("Worker shut down cleanly")
+    await runner.run()
 
 
 def run() -> None:

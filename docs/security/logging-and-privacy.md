@@ -46,6 +46,17 @@ Media inspection (PR4) additionally forbids logging or publicizing:
 needed and never include direct media URLs. Subprocess environments must not
 forward `DATABASE_URL` or other application secrets.
 
+Media jobs (PR5) additionally forbid logging or publicizing:
+
+- raw `accessToken` / Bearer credentials;
+- credential or fingerprint digests in client-facing errors;
+- submitted/wrapper URLs or query/fragment from create requests;
+- lease owner identifiers beyond coarse operational need.
+
+`JobError` str/repr never include the raw token or `internal_reason`. Both create
+and status receive the client-owned token only as an Authorization Bearer
+credential, never echo it, and return `Cache-Control: no-store`.
+
 Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 
 Debug overrides that print the above are forbidden in production (`APP_ENV=production`).

@@ -145,7 +145,17 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | RCE, data exfiltration, SSRF |
 | Mitigation | Server-side fixed argv only (`media_inspection`); user supplies URL only; no public endpoint runs the tool inline (PR4) |
 | Residual risk | yt-dlp CVEs in allowed code paths; tool performs independent network I/O |
-| Planned PR | Enforced in PR4 adapter; download/job wiring in PR5+ |
+| Planned PR | Enforced in PR4 adapter; worker job wiring in PR5 (still metadata-only) |
+
+### Media job ownership / queue abuse (PR5)
+
+| Field | Detail |
+|---|---|
+| Attack | Guess job UUID; reuse access token across different URLs; flood enqueue |
+| Impact | Unauthorized metadata read; idempotency confusion; capacity exhaustion |
+| Mitigation | Client 32-byte token; only domain-separated hashes stored; constant-time compare; unknown/wrong credential → identical `JOB_NOT_FOUND`; `UNIQUE(credential_hash)`; feature default off |
+| Residual risk | Application rate limits not enforced in PR5; stolen client token valid until TTL |
+| Planned PR | Abuse quotas / gateway limits in later ops PRs |
 
 ### Media inspection SSRF / extractor escape (PR4)
 

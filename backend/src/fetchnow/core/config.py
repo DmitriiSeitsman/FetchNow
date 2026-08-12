@@ -55,10 +55,16 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = Field(
         default=5.0,
         alias="WORKER_POLL_INTERVAL_SECONDS",
+        gt=0,
     )
 
     api_concurrency_limit: int = Field(default=32, alias="API_CONCURRENCY_LIMIT")
-    worker_concurrency: int = Field(default=2, alias="WORKER_CONCURRENCY")
+    worker_concurrency: int = Field(
+        default=2,
+        alias="WORKER_CONCURRENCY",
+        ge=1,
+        le=32,
+    )
     temp_storage_path: str = Field(
         default="/var/lib/fetchnow/tmp",
         alias="TEMP_STORAGE_PATH",
@@ -223,6 +229,55 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # Durable media-job orchestration (PR5) — fail closed / disabled by default.
+    # Client-generated access tokens; no server secret required.
+    media_jobs_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_JOBS_ENABLED",
+    )
+    media_job_lease_seconds: float = Field(
+        default=60.0,
+        alias="MEDIA_JOB_LEASE_SECONDS",
+        ge=5,
+        le=600,
+    )
+    media_job_shutdown_grace_seconds: float = Field(
+        default=15.0,
+        alias="MEDIA_JOB_SHUTDOWN_GRACE_SECONDS",
+        gt=0,
+        le=300,
+    )
+    media_job_max_attempts: int = Field(
+        default=3,
+        alias="MEDIA_JOB_MAX_ATTEMPTS",
+        ge=1,
+        le=10,
+    )
+    media_job_retry_base_seconds: float = Field(
+        default=2.0,
+        alias="MEDIA_JOB_RETRY_BASE_SECONDS",
+        gt=0,
+        le=600,
+    )
+    media_job_retry_max_seconds: float = Field(
+        default=60.0,
+        alias="MEDIA_JOB_RETRY_MAX_SECONDS",
+        gt=0,
+        le=3600,
+    )
+    media_job_absolute_ttl_seconds: int = Field(
+        default=86_400,
+        alias="MEDIA_JOB_ABSOLUTE_TTL_SECONDS",
+        ge=60,
+        le=604_800,
+    )
+    media_job_result_max_bytes: int = Field(
+        default=65_536,
+        alias="MEDIA_JOB_RESULT_MAX_BYTES",
+        gt=0,
+        le=524_288,
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -282,6 +337,10 @@ class Settings(BaseSettings):
         temp_root = self.media_inspection_temp_root.strip()
         if temp_root and not os.path.isabs(temp_root):
             raise ValueError("MEDIA_INSPECTION_TEMP_ROOT must be absolute when set")
+        if self.media_job_retry_base_seconds > self.media_job_retry_max_seconds:
+            raise ValueError(
+                "MEDIA_JOB_RETRY_BASE_SECONDS must be <= MEDIA_JOB_RETRY_MAX_SECONDS"
+            )
         return self
 
 

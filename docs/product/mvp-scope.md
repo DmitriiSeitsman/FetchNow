@@ -27,5 +27,6 @@
 - **PR0B:** product/security/capacity policies, URL security fixtures, error-code registry.
 - **PR1:** executable URL validation + VK/Rutube provider registry + `POST /api/v1/media/validate` (no media download).
 - **PR2–PR3B:** safe outbound probe, wrapper resolution foundation, Yandex Preview resolver + `POST /api/v1/media/resolve`.
-- **PR4:** internal media inspection foundation (metadata-only VK/Rutube yt-dlp adapter, disabled by default). Does not download media, create jobs, or change the Web UI.
-- Job queue / worker download wiring, ffmpeg, payments, Turbo entitlements, and public download APIs arrive in subsequent PRs.
+- **PR4:** internal media inspection foundation (metadata-only VK/Rutube yt-dlp adapter, disabled by default). Does not download media or change the Web UI.
+- **PR5:** durable PostgreSQL media-inspection jobs (`POST/GET /api/v1/media/jobs`), client-generated access tokens, worker leases/`SKIP LOCKED`. Feature default off; still no media download/delivery.
+- Download execution, ffmpeg, payments, Turbo entitlements, and public download APIs arrive in subsequent PRs.
