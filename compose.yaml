@@ -46,8 +46,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
       API_CONCURRENCY_LIMIT: ${API_CONCURRENCY_LIMIT:-32}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
-      TEMP_STORAGE_PATH: /var/lib/fetchnow/tmp
-      TEMP_STORAGE_MAX_BYTES: ${TEMP_STORAGE_MAX_BYTES:-10737418240}
       URL_ALLOWED_SCHEMES: ${URL_ALLOWED_SCHEMES:-http,https}
       URL_ALLOWED_PORTS: ${URL_ALLOWED_PORTS:-80,443}
       URL_MAX_LENGTH: ${URL_MAX_LENGTH:-4096}
@@ -74,8 +72,56 @@ services:
       MEDIA_DOWNLOADS_ENABLED: ${MEDIA_DOWNLOADS_ENABLED:-false}
       MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS: ${MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS:-3600}
       MEDIA_DOWNLOAD_MAX_ATTEMPTS: ${MEDIA_DOWNLOAD_MAX_ATTEMPTS:-3}
+    # Intentionally no tmp/artifact volume: API must not see private artifacts.
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  delivery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    command: ["fetchnow-delivery"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      # Delivery-safe settings only: no yt-dlp, no worker lease, no write tooling.
+      MEDIA_DELIVERY_ENABLED: ${MEDIA_DELIVERY_ENABLED:-false}
+      MEDIA_DELIVERY_ROOT: ${MEDIA_DELIVERY_ROOT:-/var/lib/fetchnow/tmp/downloads}
+      MEDIA_DELIVERY_CHUNK_BYTES: ${MEDIA_DELIVERY_CHUNK_BYTES:-65536}
+      MEDIA_DELIVERY_CONCURRENCY: ${MEDIA_DELIVERY_CONCURRENCY:-8}
+      MEDIA_DELIVERY_RANGE_ENABLED: ${MEDIA_DELIVERY_RANGE_ENABLED:-true}
     volumes:
-      - tmp:/var/lib/fetchnow/tmp
+      # Read-only mount of the shared tmp volume so delivery can open published
+      # artifacts under MEDIA_DELIVERY_ROOT without write capability.
+      - tmp:/var/lib/fetchnow/tmp:ro
     networks:
       - fetchnow
     depends_on:
@@ -208,6 +254,8 @@ services:
       - fetchnow
     depends_on:
       api:
+        condition: service_healthy
+      delivery:
         condition: service_healthy
       web:
         condition: service_healthy

@@ -32,6 +32,7 @@ dev = [
 [project.scripts]
 fetchnow-api = "fetchnow.api.main:run"
 fetchnow-worker = "fetchnow.worker:run"
+fetchnow-delivery = "fetchnow.delivery.main:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fetchnow"]

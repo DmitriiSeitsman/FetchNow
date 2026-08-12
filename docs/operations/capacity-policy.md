@@ -63,6 +63,11 @@ PR6 does not deliver files to clients. Download artifact TTL uses
 reconciliation is eventually consistent with the database, so a shorter grace
 can delete a publication that a peer worker has not yet committed as ready.
 
+Authenticated delivery (PR7) uses process-local
+`MEDIA_DELIVERY_CONCURRENCY` (default 8) and bounded
+`MEDIA_DELIVERY_CHUNK_BYTES`. This is **not** a cross-replica rate limit.
+`MEDIA_DELIVERY_ENABLED` defaults to false.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.

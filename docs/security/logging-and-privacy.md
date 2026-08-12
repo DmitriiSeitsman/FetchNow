@@ -61,6 +61,8 @@ Download jobs (PR6) additionally forbid logging or publicizing:
 
 - provider format tokens;
 - filesystem paths / artifact ids;
+- Range header values in full;
+- Content-Disposition is server-generated only (never user-derived filenames);
 - canonical or tool URLs;
 - yt-dlp argv/stderr/stdout.
 

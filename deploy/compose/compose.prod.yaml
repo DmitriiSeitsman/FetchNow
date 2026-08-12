@@ -15,6 +15,11 @@ services:
       APP_ENV: production
       LOG_LEVEL: INFO
 
+  delivery:
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
   gateway:
     ports:
       - "${GATEWAY_PORT:-80}:8080"
