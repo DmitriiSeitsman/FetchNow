@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -130,6 +131,98 @@ class Settings(BaseSettings):
         le=8,
     )
 
+    # Media inspection foundation (PR4) — fail closed / disabled by default.
+    # yt-dlp performs its own network I/O outside SafeHTTPClient; keep off until
+    # operators explicitly configure a trusted executable path.
+    media_inspection_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_INSPECTION_ENABLED",
+    )
+    media_inspection_ytdlp_path: str = Field(
+        default="",
+        alias="MEDIA_INSPECTION_YTDLP_PATH",
+    )
+    media_inspection_timeout_seconds: float = Field(
+        default=30.0,
+        alias="MEDIA_INSPECTION_TIMEOUT_SECONDS",
+        gt=0,
+        le=120,
+    )
+    media_inspection_socket_timeout_seconds: float = Field(
+        default=10.0,
+        alias="MEDIA_INSPECTION_SOCKET_TIMEOUT_SECONDS",
+        gt=0,
+        le=60,
+    )
+    media_inspection_stdout_max_bytes: int = Field(
+        default=1_048_576,
+        alias="MEDIA_INSPECTION_STDOUT_MAX_BYTES",
+        gt=0,
+        le=8_388_608,
+    )
+    media_inspection_stderr_max_bytes: int = Field(
+        default=262_144,
+        alias="MEDIA_INSPECTION_STDERR_MAX_BYTES",
+        gt=0,
+        le=2_097_152,
+    )
+    media_inspection_max_formats: int = Field(
+        default=32,
+        alias="MEDIA_INSPECTION_MAX_FORMATS",
+        ge=1,
+        le=128,
+    )
+    media_inspection_max_title_length: int = Field(
+        default=200,
+        alias="MEDIA_INSPECTION_MAX_TITLE_LENGTH",
+        ge=1,
+        le=500,
+    )
+    media_inspection_max_height: int = Field(
+        default=2160,
+        alias="MEDIA_INSPECTION_MAX_HEIGHT",
+        ge=144,
+        le=7680,
+    )
+    media_inspection_max_width: int = Field(
+        default=3840,
+        alias="MEDIA_INSPECTION_MAX_WIDTH",
+        ge=144,
+        le=7680,
+    )
+    media_inspection_temp_root: str = Field(
+        default="",
+        alias="MEDIA_INSPECTION_TEMP_ROOT",
+    )
+    media_inspection_json_max_depth: int = Field(
+        default=12,
+        alias="MEDIA_INSPECTION_JSON_MAX_DEPTH",
+        ge=2,
+        le=32,
+    )
+    media_inspection_json_max_nodes: int = Field(
+        default=8_192,
+        alias="MEDIA_INSPECTION_JSON_MAX_NODES",
+        ge=16,
+        le=65_536,
+    )
+    media_inspection_max_format_entries: int = Field(
+        default=256,
+        alias="MEDIA_INSPECTION_MAX_FORMAT_ENTRIES",
+        ge=1,
+        le=512,
+    )
+    max_source_duration_seconds: int = Field(
+        default=3600,
+        alias="MAX_SOURCE_DURATION_SECONDS",
+        gt=0,
+    )
+    max_source_file_bytes: int = Field(
+        default=536_870_912,
+        alias="MAX_SOURCE_FILE_BYTES",
+        gt=0,
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -172,6 +265,23 @@ class Settings(BaseSettings):
             or self.wrapper_resolution_max_depth > 8
         ):
             raise ValueError("WRAPPER_RESOLUTION_MAX_DEPTH must be between 1 and 8")
+        if self.media_inspection_enabled and not (
+            self.media_inspection_ytdlp_path.strip()
+        ):
+            raise ValueError(
+                "MEDIA_INSPECTION_YTDLP_PATH is required when "
+                "MEDIA_INSPECTION_ENABLED is true"
+            )
+        if self.media_inspection_socket_timeout_seconds > (
+            self.media_inspection_timeout_seconds
+        ):
+            raise ValueError(
+                "MEDIA_INSPECTION_SOCKET_TIMEOUT_SECONDS must be <= "
+                "MEDIA_INSPECTION_TIMEOUT_SECONDS"
+            )
+        temp_root = self.media_inspection_temp_root.strip()
+        if temp_root and not os.path.isabs(temp_root):
+            raise ValueError("MEDIA_INSPECTION_TEMP_ROOT must be absolute when set")
         return self
 
 

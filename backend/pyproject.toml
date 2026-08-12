@@ -15,6 +15,9 @@ dependencies = [
     "asyncpg==0.31.0",
     "pydantic-settings==2.14.2",
     "httpx==0.28.1",
+    # Metadata-only CLI for PR4 inspection adapter (invoked via subprocess, not
+    # imported into request handlers). Disabled by default via Settings.
+    "yt-dlp==2026.7.4",
 ]
 
 [project.optional-dependencies]

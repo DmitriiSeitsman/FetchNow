@@ -6,10 +6,17 @@ Executable code:
 
 - `backend/src/fetchnow/url/` — parse, provider registry, DNS, destination classification
 - `backend/src/fetchnow/network/` — safe outbound HTTP with manual redirects
-- `backend/src/fetchnow/resolution/` — wrapper resolution foundation (PR3A; no production wrappers)
+- `backend/src/fetchnow/resolution/` — wrapper resolution (PR3A/PR3B; Yandex Preview → VK/Rutube)
+- `backend/src/fetchnow/media_inspection/` — metadata-only inspection (PR4; not a download path)
 
 Conformance vectors: `backend/tests/fixtures/url_security_cases.json`
 (`stage=validate` and `stage=network`; no public internet in tests).
+
+Media inspection never accepts a raw unvalidated URL. It requires a
+`ResolutionResult` whose canonical provider URL is already owned by the
+VK/Rutube ProviderRegistry snapshot. Credentials, non-default ports, fragments,
+and unsupported hosts are rejected before the tool runs. yt-dlp is not trusted
+as an SSRF boundary by itself and remains disabled by default.
 
 ## Goals
 

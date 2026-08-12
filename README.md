@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver. **FetchNow still does not download or process media.** There is no yt-dlp/ffmpeg pipeline, job queue, or download delivery. Probe returns diagnostic HTTP metadata only — not media extraction.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection foundation** (PR4: metadata-only VK/Rutube extractor adapter, disabled by default). **FetchNow still does not download or process media.** There is no public download endpoint, job queue, ffmpeg pipeline, or download delivery. Probe returns diagnostic HTTP metadata only. Media inspection is an internal service/CLI boundary — the API does not run yt-dlp inline.
 
 ## Architecture
 
@@ -25,6 +25,7 @@ Security and product boundaries are documented **before** media processing ships
 - User URLs are untrusted input; only `http`/`https` with a provider hostname allowlist are accepted (`POST /api/v1/media/validate`; policy: [URL validation](docs/security/url-validation-policy.md), [ADR 0004](docs/adr/0004-provider-registry-and-dns-validation.md)).
 - Outbound HTTP uses a safe client with manual redirects and per-hop re-validation (`POST /api/v1/media/probe`; [ADR 0005](docs/adr/0005-safe-outbound-http-and-redirects.md)).
 - Wrapper URL resolution: domain foundation ([ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md)) and Yandex Video Preview resolver + `POST /api/v1/media/resolve` ([ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md)). Validate/probe behavior is unchanged.
+- Media inspection foundation: metadata-only VK/Rutube adapter behind a hardened yt-dlp subprocess boundary ([ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md)). Disabled by default; no media bytes downloaded; direct media URLs stay internal.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
@@ -48,6 +49,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0005](docs/adr/0005-safe-outbound-http-and-redirects.md) | Safe outbound HTTP + redirects |
 | [ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md) | Wrapper resolution foundation |
 | [ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md) | Yandex Video Preview resolver |
+| [ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md) | Media inspection + yt-dlp tool boundary |
 
 ## Validate API (PR1)
 
@@ -81,6 +83,23 @@ Resolves a direct supported provider URL or a registered wrapper (currently
 exact `https://yandex.ru/video/preview/<digits>`) to a query-stripped canonical
 provider URL. Returns `provenance`, optional `wrapperType`, and a sanitized
 resolution chain. Does not download media.
+
+## Media inspection (PR4, internal)
+
+Internal `MediaInspectionService` turns a `ResolutionResult` into bounded
+`MediaMetadata` / quality options via a metadata-only yt-dlp adapter. No public
+HTTP route in this PR. The tool is disabled by default
+(`MEDIA_INSPECTION_ENABLED=false`). Manual live smoke:
+
+```bash
+FETCHNOW_LIVE_MEDIA_INSPECTION=1 \
+  MEDIA_INSPECTION_ENABLED=true \
+  MEDIA_INSPECTION_YTDLP_PATH=/absolute/path/to/yt-dlp \
+  backend/.venv/bin/python backend/scripts/media_inspection_live_smoke.py \
+  '<PUBLIC_VK_OR_RUTUBE_OR_YANDEX_PREVIEW_URL>'
+```
+
+Does not download media. Staging deployment of this path is not performed in PR4.
 
 ## Infrastructure Handbook
 
