@@ -396,7 +396,7 @@ def check_isolation_render() -> None:
 
 
 def check_media_jobs_env_split() -> None:
-    """API must not receive yt-dlp path; worker may; feature stays off by default."""
+    """API must not receive yt-dlp/temp roots; worker may; features stay off."""
     cfg = _run_compose(
         ["-f", "compose.yaml"],
         env={"COMPOSE_PROJECT_NAME": "fetchnow"},
@@ -409,8 +409,17 @@ def check_media_jobs_env_split() -> None:
         "base: api must not receive MEDIA_INSPECTION_YTDLP_PATH",
     )
     _assert(
+        "MEDIA_DOWNLOAD_TEMP_ROOT" not in api_env,
+        "base: api must not receive MEDIA_DOWNLOAD_TEMP_ROOT",
+    )
+    _assert(
         str(api_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
         "base: MEDIA_JOBS_ENABLED must default false on api",
+    )
+    _assert(
+        str(api_env.get("MEDIA_DOWNLOADS_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_DOWNLOADS_ENABLED must default false on api",
     )
     _assert(
         str(worker_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
@@ -422,8 +431,17 @@ def check_media_jobs_env_split() -> None:
         "base: MEDIA_INSPECTION_ENABLED must default false on worker",
     )
     _assert(
+        str(worker_env.get("MEDIA_DOWNLOADS_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_DOWNLOADS_ENABLED must default false on worker",
+    )
+    _assert(
         "MEDIA_INSPECTION_YTDLP_PATH" in worker_env,
         "base: worker must declare MEDIA_INSPECTION_YTDLP_PATH for operators",
+    )
+    _assert(
+        "MEDIA_DOWNLOAD_TEMP_ROOT" in worker_env,
+        "base: worker must declare MEDIA_DOWNLOAD_TEMP_ROOT for operators",
     )
     path = str(worker_env.get("MEDIA_INSPECTION_YTDLP_PATH") or "")
     _assert(

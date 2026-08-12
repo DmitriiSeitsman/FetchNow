@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5: PostgreSQL queue, client access tokens, worker leases; **disabled by default**). **FetchNow still does not download or process media bytes for delivery.** There is no public download endpoint or ffmpeg pipeline. Job create/status never run yt-dlp in the API process.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5) + **durable download execution foundation** (PR6: private artifacts, create/status only; **disabled by default**). **FetchNow still does not deliver media bytes to clients.** There is no public file download endpoint or ffmpeg pipeline. Job create/status never run yt-dlp in the API process.
 
 ## Architecture
 
@@ -13,8 +13,8 @@ FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro sta
 | `gateway` | Nginx reverse proxy; only published entrypoint |
 | `web` | Astro static site served by Nginx |
 | `api` | FastAPI HTTP API |
-| `worker` | Claims media-inspection jobs when enabled; same Python package |
-| `postgres` | PostgreSQL (durable media-job queue; no Redis) |
+| `worker` | Claims inspection/download jobs when enabled; same Python package |
+| `postgres` | PostgreSQL (durable media/download job queues; no Redis) |
 
 Named volumes (project-scoped): `{project}_pgdata` (database), `{project}_tmp` (future temporary media files). With local `COMPOSE_PROJECT_NAME=fetchnow` these resolve to `fetchnow_pgdata` / `fetchnow_tmp`.
 
@@ -27,6 +27,7 @@ Security and product boundaries are documented **before** media processing ships
 - Wrapper URL resolution: domain foundation ([ADR 0006](docs/adr/0006-wrapper-resolution-foundation.md)) and Yandex Video Preview resolver + `POST /api/v1/media/resolve` ([ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md)). Validate/probe behavior is unchanged.
 - Media inspection foundation: metadata-only VK/Rutube adapter behind a hardened yt-dlp subprocess boundary ([ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md)). Disabled by default; no media bytes downloaded; direct media URLs stay internal.
 - Durable media-inspection jobs: PostgreSQL queue with client-generated access tokens, `SKIP LOCKED` claims, and lease fencing ([ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md)). Defaults off; API does not run yt-dlp.
+- Durable download execution foundation: progressive download jobs, exact option rebinding, private artifact store ([ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md)). Defaults off; no client file delivery in PR6.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
@@ -52,6 +53,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0007](docs/adr/0007-yandex-video-preview-resolver.md) | Yandex Video Preview resolver |
 | [ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md) | Media inspection + yt-dlp tool boundary |
 | [ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md) | PostgreSQL media-job orchestration |
+| [ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md) | Durable download execution + private artifacts |
 
 ## Validate API (PR1)
 

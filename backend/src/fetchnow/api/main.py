@@ -14,6 +14,7 @@ from fetchnow.core.errors import register_exception_handlers
 from fetchnow.core.logging import configure_logging
 from fetchnow.core.middleware import RequestIdMiddleware
 from fetchnow.db.session import create_engine, create_session_factory
+from fetchnow.downloads.service import DownloadJobService
 from fetchnow.jobs.service import MediaJobService
 from fetchnow.media_inspection.defaults import build_default_inspection_registry
 from fetchnow.network.client import SafeHTTPClient
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings, provider_registry
         )
         media_job_service = MediaJobService(settings)
+        download_job_service = DownloadJobService(settings)
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.settings = settings
@@ -70,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.resolution_service = resolution_service
         app.state.inspection_registry = inspection_registry
         app.state.media_job_service = media_job_service
+        app.state.download_job_service = download_job_service
         try:
             yield
         finally:

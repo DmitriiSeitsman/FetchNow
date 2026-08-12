@@ -19,7 +19,6 @@ from fetchnow.jobs.models import MediaJob
 from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.service import JobCreateView, JobView, MediaJobService
 from fetchnow.jobs.states import MediaJobState, assert_transition
-from fetchnow.jobs.worker_loop import MediaJobWorkerRunner
 
 __all__ = [
     "JobCreateView",
@@ -30,7 +29,6 @@ __all__ = [
     "MediaJobRepository",
     "MediaJobService",
     "MediaJobState",
-    "MediaJobWorkerRunner",
     "assert_transition",
     "generate_access_token",
     "hash_access_token",

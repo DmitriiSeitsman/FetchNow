@@ -29,4 +29,5 @@
 - **PR2–PR3B:** safe outbound probe, wrapper resolution foundation, Yandex Preview resolver + `POST /api/v1/media/resolve`.
 - **PR4:** internal media inspection foundation (metadata-only VK/Rutube yt-dlp adapter, disabled by default). Does not download media or change the Web UI.
 - **PR5:** durable PostgreSQL media-inspection jobs (`POST/GET /api/v1/media/jobs`), client-generated access tokens, worker leases/`SKIP LOCKED`. Feature default off; still no media download/delivery.
-- Download execution, ffmpeg, payments, Turbo entitlements, and public download APIs arrive in subsequent PRs.
+- **PR6:** durable download execution foundation (`POST …/downloads`, `GET /download-jobs/{id}`), private worker artifacts, exact format rebinding. Feature default off; **no client file delivery**.
+- ffmpeg mux, public file delivery, payments, and Turbo entitlements arrive in subsequent PRs.

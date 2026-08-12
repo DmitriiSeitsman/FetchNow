@@ -93,6 +93,35 @@ Ownership uses hashed credentials only (see [ADR 0009](../adr/0009-postgresql-me
 Worker-side terminal inspection failures surface as `MEDIA_INSPECTION_FAILED` on
 the job record; they are not an inline API yt-dlp path.
 
+## Media download jobs (PR6)
+
+Durable download execution is **disabled by default**
+(`MEDIA_DOWNLOADS_ENABLED=false`). When disabled, create returns
+`DOWNLOADS_DISABLED` (503). PR6 does **not** deliver media bytes to clients —
+status exposes `artifactReady` only.
+
+| Code | HTTP | Public message policy | Retryable | Client should offer retry | Forbidden details to clients |
+|---|---:|---|---|---|---|
+| `DOWNLOADS_DISABLED` | 503 | Downloads are not available | yes | later | Feature flags, disk paths |
+| `DOWNLOAD_JOB_NOT_FOUND` | 404 | Download job not found | no | no | Whether id existed |
+| `PARENT_JOB_NOT_READY` | 409 | Parent media job not ready | soft | yes (poll parent) | Parent internals |
+| `FORMAT_NOT_FOUND` | 404 | Format not found | no | no | Full format lists |
+| `FORMAT_NOT_ELIGIBLE` | 422 | Format not eligible | no | no | Eligibility math, tokens |
+| `FORMAT_UNAVAILABLE` | 422 | Format no longer available | soft | yes (re-inspect) | Provider tokens, drift details |
+| `DOWNLOAD_TIMEOUT` | 504 | Download timed out | soft | yes (limited) | Tool stderr, argv |
+| `DOWNLOAD_TOO_LARGE` | 413 | Download exceeds allowed size | no | no | Exact byte counters beyond message |
+| `DOWNLOAD_TOOL_FAILED` | 422 | Download tool failed | soft | maybe later | stderr, paths, tokens |
+| `DOWNLOAD_INVALID_OUTPUT` | 422 | Invalid produced invalid output | no | no | Filesystem paths |
+| `DOWNLOAD_STORAGE_UNAVAILABLE` | 503 | Storage temporarily unavailable | yes | yes | Disk paths, free-byte counts |
+| `DOWNLOAD_EXPIRED` | 410 | Download job or artifact expired | no | no | Storage keys |
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/media/jobs/{mediaJobId}/downloads` | Body: `formatOptionId`; requires parent MediaJob `Authorization: Bearer <accessToken>`. UUID alone never authorizes. |
+| `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. |
+
+See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
+
 ## Related documents
 
 - [URL validation policy](../security/url-validation-policy.md)
@@ -101,4 +130,5 @@ the job record; they are not an inline API yt-dlp path.
 - [ADR 0007 — Yandex Video Preview resolver](../adr/0007-yandex-video-preview-resolver.md)
 - [ADR 0008 — media inspection tool boundary](../adr/0008-media-inspection-and-tool-boundary.md)
 - [ADR 0009 — PostgreSQL media-job orchestration](../adr/0009-postgresql-media-job-orchestration.md)
+- [ADR 0010 — durable download execution](../adr/0010-durable-download-execution-and-private-artifact-boundary.md)
 - [Capacity policy](../operations/capacity-policy.md)

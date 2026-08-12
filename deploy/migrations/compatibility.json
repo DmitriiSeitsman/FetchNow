@@ -17,6 +17,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create the new media_jobs table and indexes without changing existing tables, so the previous application remains compatible during migration and rollback."
+    },
+    {
+      "from_heads": [
+        "0002_media_jobs"
+      ],
+      "to_heads": [
+        "0003_download_jobs"
+      ],
+      "included_revisions": [
+        "0003_download_jobs"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the new media_download_jobs table and indexes only; existing media_jobs rows and schema are unchanged, so the previous application remains compatible during online expand and application rollback."
     }
   ]
 }

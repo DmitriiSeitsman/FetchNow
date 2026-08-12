@@ -1,4 +1,4 @@
-"""Durable media-job worker runner with lease claim and PR4 inspection."""
+"""Durable media-job worker with PR4 inspection and PR6 downloads."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fetchnow.core.config import Settings
 from fetchnow.db.session import create_engine, create_session_factory
+from fetchnow.downloads.executor import (
+    DownloadClaimSnapshot,
+    DownloadExecutor,
+    snapshot_from_job,
+)
+from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.jobs.errors import JobError, JobErrorCode
 from fetchnow.jobs.metadata_codec import media_metadata_to_jsonable
 from fetchnow.jobs.repository import MediaJobRepository
@@ -71,10 +77,11 @@ class _ActiveWork:
     task: asyncio.Task[None]
     job_id: uuid.UUID
     fence: int
+    kind: str
 
 
 class MediaJobWorkerRunner:
-    """Poll PostgreSQL for media jobs and run PR4 inspection under a lease."""
+    """Poll PostgreSQL for media/download jobs and run work under leases."""
 
     def __init__(
         self,
@@ -89,6 +96,7 @@ class MediaJobWorkerRunner:
         http_client: SafeHTTPClient | None = None,
         inspection_service: MediaInspectionService | None = None,
         inspection_registry: InspectionExtractorRegistry | None = None,
+        download_executor: DownloadExecutor | None = None,
     ) -> None:
         self._settings = settings
         self._stop_event = stop_event or asyncio.Event()
@@ -119,9 +127,28 @@ class MediaJobWorkerRunner:
             self._inspection = MediaInspectionService(
                 settings=settings, registry=self._inspection_registry
             )
-        self._semaphore = asyncio.Semaphore(settings.worker_concurrency)
-        self._active: dict[asyncio.Task[None], _ActiveWork] = {}
+        self._owns_download_executor = download_executor is None
+        self._download_executor = download_executor
+        self._inspection_semaphore = asyncio.Semaphore(settings.worker_concurrency)
+        self._download_semaphore = asyncio.Semaphore(
+            settings.media_download_concurrency
+        )
+        self._active_inspection: dict[asyncio.Task[None], _ActiveWork] = {}
+        self._active_download: dict[asyncio.Task[None], _ActiveWork] = {}
         self._closed = False
+
+    def _ensure_download_executor(self) -> DownloadExecutor:
+        if self._download_executor is None:
+            self._download_executor = DownloadExecutor(
+                self._settings,
+                session_factory=self._session_factory,
+                inspection_service=self._inspection,
+                inspection_registry=self._inspection_registry,
+                provider_registry=self._providers,
+                validator=self._validator,
+                worker_id=self._worker_id,
+            )
+        return self._download_executor
 
     @property
     def worker_id(self) -> str:
@@ -152,12 +179,17 @@ class MediaJobWorkerRunner:
     async def run(self) -> None:
         """Run poll loop until stop_event; close resources exactly once."""
         logger.info(
-            "Media job worker started env=%s poll_interval=%s concurrency=%s "
-            "media_jobs_enabled=%s",
+            "Media job worker started env=%s poll_interval=%s "
+            "inspection_concurrency=%s download_concurrency=%s "
+            "media_jobs_enabled=%s media_inspection_enabled=%s "
+            "media_downloads_enabled=%s",
             self._settings.app_env,
             self._settings.worker_poll_interval_seconds,
             self._settings.worker_concurrency,
+            self._settings.media_download_concurrency,
             self._settings.media_jobs_enabled,
+            self._settings.media_inspection_enabled,
+            self._settings.media_downloads_enabled,
         )
         try:
             while not self._stop_event.is_set():
@@ -178,21 +210,67 @@ class MediaJobWorkerRunner:
             logger.info("Media job worker shut down cleanly")
 
     async def _poll_once(self) -> None:
-        if not self._settings.media_jobs_enabled:
-            return
+        if self._settings.media_jobs_enabled:
+            async with self._session_factory() as session:
+                repo = MediaJobRepository(session)
+                now = await repo.database_now()
+                await repo.reclaim_expired_leases(now)
+                await repo.expire_due_jobs(now)
+                await session.commit()
 
+        if self._settings.media_downloads_enabled:
+            await self._hygiene_download_jobs()
+
+        if (
+            self._settings.media_jobs_enabled
+            and self._settings.media_inspection_enabled
+        ):
+            await self._claim_inspection_jobs()
+
+        if (
+            self._settings.media_downloads_enabled
+            and self._settings.media_inspection_enabled
+        ):
+            await self._claim_download_jobs()
+
+    async def _hygiene_download_jobs(self) -> None:
+        executor = self._ensure_download_executor()
+        store = executor.artifact_store
         async with self._session_factory() as session:
-            repo = MediaJobRepository(session)
+            repo = MediaDownloadJobRepository(session)
             now = await repo.database_now()
             await repo.reclaim_expired_leases(now)
-            await repo.expire_due_jobs(now)
+            expired_artifacts = await repo.expire_due_jobs(now)
+            active_fences = await repo.list_active_fences()
+            referenced_artifacts = await repo.list_referenced_artifact_ids()
             await session.commit()
 
-        # Inspection disabled: maintain queue hygiene but never claim/spawn yt-dlp.
-        if not self._settings.media_inspection_enabled:
-            return
+        for artifact_id in expired_artifacts:
+            try:
+                store.delete_artifact(artifact_id)
+            except Exception:
+                logger.warning(
+                    "download_artifact_delete_failed artifact_kind=expired"
+                )
 
-        free_slots = self._settings.worker_concurrency - len(self._active)
+        # Protect in-memory claims that may not yet be visible as DOWNLOADING
+        # in a concurrent reader's snapshot (same-process race is still covered).
+        in_memory = frozenset(
+            (work.job_id, work.fence) for work in self._active_download.values()
+        )
+        try:
+            removed = store.reconcile(
+                referenced_artifact_ids=referenced_artifacts,
+                active_attempts=active_fences | in_memory,
+                limit=64,
+            )
+            if removed:
+                logger.info("download_orphan_sweep_removed count=%s", removed)
+        except Exception:
+            logger.exception("download_orphan_sweep_failed")
+
+    async def _claim_inspection_jobs(self) -> None:
+        free_slots = self._settings.worker_concurrency - len(self._active_inspection)
         if free_slots < 1:
             return
 
@@ -223,27 +301,100 @@ class MediaJobWorkerRunner:
             ]
 
         for snap in snapshots:
-            await self._semaphore.acquire()
+            await self._inspection_semaphore.acquire()
             task = asyncio.create_task(
                 self._run_claimed(snap),
                 name=f"media-job-{snap.job_id}",
             )
-            self._active[task] = _ActiveWork(
-                task=task, job_id=snap.job_id, fence=snap.fence
+            self._active_inspection[task] = _ActiveWork(
+                task=task,
+                job_id=snap.job_id,
+                fence=snap.fence,
+                kind="inspection",
             )
-            task.add_done_callback(self._on_task_done)
+            task.add_done_callback(self._on_inspection_done)
+            logger.info(
+                "media_inspection_claimed job_id=%s fence=%s",
+                snap.job_id,
+                snap.fence,
+            )
 
-    def _on_task_done(self, task: asyncio.Task[None]) -> None:
-        work = self._active.pop(task, None)
+    async def _claim_download_jobs(self) -> None:
+        free_slots = (
+            self._settings.media_download_concurrency - len(self._active_download)
+        )
+        if free_slots < 1:
+            return
+
+        executor = self._ensure_download_executor()
+        store = executor.artifact_store
+        if hasattr(store, "check_free_space") and not store.check_free_space(
+            self._settings.media_download_min_free_bytes
+        ):
+            logger.info(
+                "download_claim_skipped reason=disk_headroom "
+                "active_downloads=%s",
+                len(self._active_download),
+            )
+            return
+
+        async with self._session_factory() as session:
+            repo = MediaDownloadJobRepository(session)
+            now = await repo.database_now()
+            claimed = await repo.claim_next(
+                worker_id=self._worker_id,
+                lease_seconds=self._settings.media_download_lease_seconds,
+                now=now,
+                limit=free_slots,
+            )
+            await session.commit()
+            snapshots = [snapshot_from_job(job) for job in claimed]
+
+        for snap in snapshots:
+            await self._download_semaphore.acquire()
+            task = asyncio.create_task(
+                self._run_download_claimed(snap),
+                name=f"media-download-{snap.job_id}",
+            )
+            self._active_download[task] = _ActiveWork(
+                task=task,
+                job_id=snap.job_id,
+                fence=snap.fence,
+                kind="download",
+            )
+            task.add_done_callback(self._on_download_done)
+            logger.info(
+                "media_download_claimed job_id=%s fence=%s",
+                snap.job_id,
+                snap.fence,
+            )
+
+    def _on_inspection_done(self, task: asyncio.Task[None]) -> None:
+        work = self._active_inspection.pop(task, None)
         if work is None:
             return
-        self._semaphore.release()
+        self._inspection_semaphore.release()
         if task.cancelled():
             return
         exc = task.exception()
         if exc is not None:
             logger.error(
-                "Media job task failed job_id=%s error_type=%s",
+                "Media inspection task failed job_id=%s error_type=%s",
+                work.job_id,
+                type(exc).__name__,
+            )
+
+    def _on_download_done(self, task: asyncio.Task[None]) -> None:
+        work = self._active_download.pop(task, None)
+        if work is None:
+            return
+        self._download_semaphore.release()
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Media download task failed job_id=%s error_type=%s",
                 work.job_id,
                 type(exc).__name__,
             )
@@ -338,6 +489,62 @@ class MediaJobWorkerRunner:
                     return_exceptions=True,
                 )
 
+    async def _run_download_claimed(self, snap: DownloadClaimSnapshot) -> None:
+        work_task: asyncio.Task[None] | None = None
+        heartbeat_task: asyncio.Task[bool] | None = None
+        executor = self._ensure_download_executor()
+        try:
+            if self._stop_event.is_set():
+                await self._release_download_cancel(snap.job_id, snap.fence)
+                return
+
+            work_task = asyncio.create_task(
+                executor.run_claimed(snap),
+                name=f"media-download-exec-{snap.job_id}",
+            )
+            heartbeat_task = asyncio.create_task(
+                self._download_lease_heartbeat(snap),
+                name=f"media-download-lease-{snap.job_id}",
+            )
+            done, _ = await asyncio.wait(
+                {work_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done and not heartbeat_task.result():
+                work_task.cancel()
+                await asyncio.gather(work_task, return_exceptions=True)
+                logger.warning(
+                    "Lease lost; download result discarded job_id=%s",
+                    snap.job_id,
+                )
+                return
+            await work_task
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in (work_task, heartbeat_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (work_task, heartbeat_task) if task is not None),
+                return_exceptions=True,
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "Unexpected download worker failure job_id=%s",
+                snap.job_id,
+            )
+        finally:
+            for task in (work_task, heartbeat_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            if work_task is not None or heartbeat_task is not None:
+                await asyncio.gather(
+                    *(task for task in (work_task, heartbeat_task) if task is not None),
+                    return_exceptions=True,
+                )
+
     async def _execute_inspection(
         self, snap: _ClaimedSnapshot
     ) -> dict[str, Any]:
@@ -380,6 +587,32 @@ class MediaJobWorkerRunner:
                 raise
             except Exception:
                 logger.exception("Lease renewal failed job_id=%s", snap.job_id)
+                return False
+            if not renewed:
+                return False
+
+    async def _download_lease_heartbeat(self, snap: DownloadClaimSnapshot) -> bool:
+        interval = max(1.0, self._settings.media_download_lease_seconds / 3.0)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                async with self._session_factory() as session:
+                    repo = MediaDownloadJobRepository(session)
+                    now = await repo.database_now()
+                    renewed = await repo.renew_lease(
+                        job_id=snap.job_id,
+                        owner=self._worker_id,
+                        fence=snap.fence,
+                        lease_seconds=self._settings.media_download_lease_seconds,
+                        now=now,
+                    )
+                    await session.commit()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Download lease renewal failed job_id=%s", snap.job_id
+                )
                 return False
             if not renewed:
                 return False
@@ -448,14 +681,38 @@ class MediaJobWorkerRunner:
                 job_id,
             )
 
+    async def _release_download_cancel(
+        self, job_id: uuid.UUID, fence: int
+    ) -> None:
+        try:
+            async with self._session_factory() as session:
+                repo = MediaDownloadJobRepository(session)
+                now = await repo.database_now()
+                await repo.release_to_queued(
+                    job_id=job_id,
+                    owner=self._worker_id,
+                    fence=fence,
+                    now=now,
+                )
+                await session.commit()
+        except Exception:
+            logger.exception(
+                "Failed to release cancelled download job_id=%s",
+                job_id,
+            )
+
     async def _shutdown_active(self) -> None:
         grace = self._settings.media_job_shutdown_grace_seconds
-        tasks = list(self._active.keys())
+        tasks = list(self._active_inspection.keys()) + list(
+            self._active_download.keys()
+        )
         if not tasks:
             return
         logger.info(
-            "Cancelling %s active media jobs (grace=%ss)",
-            len(tasks),
+            "Cancelling %s active inspection and %s active download jobs "
+            "(grace=%ss)",
+            len(self._active_inspection),
+            len(self._active_download),
             grace,
         )
         for task in tasks:
@@ -471,13 +728,15 @@ class MediaJobWorkerRunner:
                 if not task.done():
                     task.cancel()
             # Resource closure is forbidden while a job may still use the DB or
-            # subprocess runner. PR4 guarantees bounded cancellation/reaping.
+            # subprocess runner. Bounded cancellation/reaping is required.
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
+        if self._owns_download_executor and self._download_executor is not None:
+            await self._download_executor.aclose()
         if self._owns_http:
             close = getattr(self._http, "aclose", None)
             if close is not None:

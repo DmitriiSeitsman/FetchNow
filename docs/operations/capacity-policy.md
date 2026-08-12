@@ -53,6 +53,16 @@ Job absolute TTL uses `MEDIA_JOB_ABSOLUTE_TTL_SECONDS` (not the older
 `JOB_ABSOLUTE_TTL_SECONDS` placeholder name). Application-level enqueue rate
 limits are not enforced in PR5.
 
+PR6 adds `MEDIA_DOWNLOAD_CONCURRENCY` (exactly **1**; 0 and ≥2 rejected) and
+`MEDIA_DOWNLOAD_MIN_FREE_BYTES` for progressive download attempts. Multi-worker
+disk reservation is **not** implemented — a local semaphore must not be treated
+as cross-worker free-space accounting. `MEDIA_DOWNLOADS_ENABLED` defaults false;
+PR6 does not deliver files to clients. Download artifact TTL uses
+`MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS`.
+`MEDIA_DOWNLOAD_ORPHAN_GRACE_SECONDS` must be **≥ 60** (default 300): orphan
+reconciliation is eventually consistent with the database, so a shorter grace
+can delete a publication that a peer worker has not yet committed as ready.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.

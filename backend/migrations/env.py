@@ -19,6 +19,7 @@ if str(_SRC) not in sys.path:
 
 from fetchnow.core.config import get_settings  # noqa: E402
 from fetchnow.db.base import Base  # noqa: E402
+from fetchnow.downloads import models as downloads_models  # noqa: E402, F401
 from fetchnow.jobs import models as jobs_models  # noqa: E402, F401
 
 config = context.config

@@ -27,7 +27,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 
 ### worker
 
-Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5): reclaim/expire, `SKIP LOCKED` claim, lease/fencing, и вызов PR4 inspection **только** когда `MEDIA_JOBS_ENABLED` и `MEDIA_INSPECTION_ENABLED` истинны (оба default false). Compose прокидывает `MEDIA_JOBS_*` на api/worker и `MEDIA_INSPECTION_*` на worker. API create/status не запускает yt-dlp. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
+Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5) и download execution (PR6): reclaim/expire, `SKIP LOCKED` claim, lease/fencing. Inspection — когда `MEDIA_JOBS_ENABLED` и `MEDIA_INSPECTION_ENABLED` истинны; downloads — когда `MEDIA_DOWNLOADS_ENABLED` и `MEDIA_INSPECTION_ENABLED` (оба feature default false). Compose прокидывает `MEDIA_JOBS_*` и API-safe `MEDIA_DOWNLOAD_*` (TTL/max attempts) на api; worker получает полный `MEDIA_INSPECTION_*` / `MEDIA_DOWNLOAD_*` включая yt-dlp path и temp root. API create/status не запускает yt-dlp и не отдаёт файлы клиенту. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
 
 ### postgres
 
@@ -36,7 +36,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 ## Volumes
 
 - `pgdata` → `{project}_pgdata` — persistent database state.
-- `tmp` → `{project}_tmp` — общий временный storage API/worker; в текущем коде media pipeline отсутствует.
+- `tmp` → `{project}_tmp` — общий временный storage API/worker; worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume (private; не публичный delivery).
 
 При `COMPOSE_PROJECT_NAME=fetchnow` имена совпадают с историческими `fetchnow_pgdata` / `fetchnow_tmp`. Staging (`fetchnow-staging`) получает отдельные volumes. Explicit global `name:` больше не используется (PRD1A).
 
