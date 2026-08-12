@@ -1,4 +1,22 @@
 {
   "schema_version": 1,
-  "transitions": []
+  "transitions": [
+    {
+      "from_heads": [
+        "0001_baseline"
+      ],
+      "to_heads": [
+        "0002_media_jobs"
+      ],
+      "included_revisions": [
+        "0002_media_jobs"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the new media_jobs table and indexes without changing existing tables, so the previous application remains compatible during migration and rollback."
+    }
+  ]
 }

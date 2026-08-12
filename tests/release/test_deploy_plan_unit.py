@@ -29,6 +29,7 @@ from fetchnow_release.readonly_guard import (  # noqa: E402
     assert_readonly_subprocess,
 )
 from fetchnow_release.redact import redact  # noqa: E402
+from fetchnow_pg_backup.alembic_graph import build_alembic_graph  # noqa: E402
 
 
 def _valid_transition(**overrides: object) -> dict[str, object]:
@@ -57,6 +58,26 @@ def _contract(*transitions: dict[str, object]) -> dict[str, object]:
 def test_empty_valid_policy() -> None:
     contract = parse_compatibility_contract(_contract())
     assert contract.transitions == ()
+
+
+def test_repository_contract_covers_media_jobs_forward_transition() -> None:
+    graph = build_alembic_graph(ROOT / "backend" / "migrations" / "versions")
+    current_heads = frozenset({"0001_baseline"})
+    target_heads = frozenset(graph.heads)
+    included_revisions = graph.included_revisions(current_heads, target_heads)
+    contract = load_compatibility_contract(
+        ROOT / "deploy" / "migrations" / "compatibility.json"
+    )
+
+    transition = find_matching_transition(
+        contract,
+        from_heads=current_heads,
+        to_heads=target_heads,
+        included_revisions=included_revisions,
+    )
+
+    assert transition.to_heads == ("0002_media_jobs",)
+    assert transition.included_revisions == ("0002_media_jobs",)
 
 
 def test_unknown_top_level_field_rejected() -> None:
