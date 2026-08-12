@@ -42,6 +42,13 @@ Development defaults live in `backend/.env.example` and root `.env.example`.
 
 Reject or fail jobs exceeding `MAX_SOURCE_DURATION_SECONDS`, `MAX_SOURCE_FILE_BYTES`, or `MAX_OUTPUT_FILE_BYTES` with `DURATION_TOO_LONG` / `FILE_TOO_LARGE` as applicable.
 
+PR4 media inspection reads the same duration/byte caps (and
+`MEDIA_INSPECTION_MAX_*` / JSON structural bounds) when projecting metadata.
+Inspection creates no durable media outputs; it respects timeouts and
+stdout/stderr byte limits. `METADATA_CONCURRENCY` remains an env placeholder for
+future worker wiring (PR5) and is **not** enforced by Settings in PR4. The
+inspection tool remains disabled by default.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.

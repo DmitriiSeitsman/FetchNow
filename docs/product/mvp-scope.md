@@ -26,4 +26,6 @@
 - **PR0A:** monorepo, health endpoints, worker lifecycle, static landing page, Compose gateway.
 - **PR0B:** product/security/capacity policies, URL security fixtures, error-code registry.
 - **PR1:** executable URL validation + VK/Rutube provider registry + `POST /api/v1/media/validate` (no media download).
-- ffmpeg/yt-dlp pipelines, payments, Turbo entitlements, and job tables arrive in subsequent PRs.
+- **PR2–PR3B:** safe outbound probe, wrapper resolution foundation, Yandex Preview resolver + `POST /api/v1/media/resolve`.
+- **PR4:** internal media inspection foundation (metadata-only VK/Rutube yt-dlp adapter, disabled by default). Does not download media, create jobs, or change the Web UI.
+- Job queue / worker download wiring, ffmpeg, payments, Turbo entitlements, and public download APIs arrive in subsequent PRs.

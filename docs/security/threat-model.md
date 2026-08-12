@@ -143,9 +143,19 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Client-supplied flags (`--exec`, output templates, config paths) |
 | Impact | RCE, data exfiltration, SSRF |
-| Mitigation | Server-side fixed allowlist of flags; user supplies URL only |
-| Residual risk | yt-dlp CVEs in allowed code paths |
-| Planned PR | Provider/yt-dlp PR |
+| Mitigation | Server-side fixed argv only (`media_inspection`); user supplies URL only; no public endpoint runs the tool inline (PR4) |
+| Residual risk | yt-dlp CVEs in allowed code paths; tool performs independent network I/O |
+| Planned PR | Enforced in PR4 adapter; download/job wiring in PR5+ |
+
+### Media inspection SSRF / extractor escape (PR4)
+
+| Field | Detail |
+|---|---|
+| Attack | Validated VK/Rutube URL causes yt-dlp to follow redirects, use generic extractor, or emit cross-provider identities |
+| Impact | SSRF, unexpected host contact, secret URL leakage |
+| Mitigation | Provider host snapshot registry; stable media identity binding (path + authoritative URLs + payload id); `--use-extractors` allowlist without generic; result identity mismatch fail closed; disabled-by-default setting; no public direct/CDN URLs in models/logs |
+| Residual risk | yt-dlp’s own HTTP stack is outside SafeHTTPClient DNS double-check while enabled; validate/exec TOCTOU on the trusted binary path |
+| Planned PR | Stronger network jail / worker isolation in later ops PRs |
 
 ### Malicious media containers
 

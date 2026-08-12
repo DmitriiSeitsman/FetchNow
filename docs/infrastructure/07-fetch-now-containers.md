@@ -27,7 +27,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 
 ### worker
 
-Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Сейчас это idle heartbeat без media jobs и без SafeHTTPClient; отсутствие Docker healthcheck требует проверять state/logs. Restart прерывает процесс через SIGTERM. PostgreSQL queue и recovery jobs ещё не реализованы.
+Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Сейчас это idle heartbeat без media jobs и без SafeHTTPClient; отсутствие Docker healthcheck требует проверять state/logs. PR4 добавляет library-level media inspection, но worker ещё не вызывает yt-dlp и Compose не прокидывает `MEDIA_INSPECTION_*` (fail closed / disabled by default). Restart прерывает процесс через SIGTERM. PostgreSQL queue и recovery jobs ещё не реализованы.
 
 ### postgres
 

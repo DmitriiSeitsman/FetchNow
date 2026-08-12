@@ -34,6 +34,18 @@ canonicals and token-shaped audit identifiers taken from immutable registry
 registration snapshots. Yandex HTML/JSON, embed hashes, and preview document
 bodies never appear in public errors or hop metadata.
 
+Media inspection (PR4) additionally forbids logging or publicizing:
+
+- yt-dlp stdout JSON and stderr;
+- direct/signed CDN or media URLs;
+- tool argv that embeds the input URL at INFO via `%r` of full structures;
+- query/fragment from submitted or provider URLs;
+- filesystem paths from tool failures in public errors.
+
+`InspectionError` / `MediaMetadata` / `MediaFormat` `repr` omit titles where
+needed and never include direct media URLs. Subprocess environments must not
+forward `DATABASE_URL` or other application secrets.
+
 Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 
 Debug overrides that print the above are forbidden in production (`APP_ENV=production`).
