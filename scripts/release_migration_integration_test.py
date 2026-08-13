@@ -52,6 +52,7 @@ from fetchnow_release.migration_project import (  # noqa: E402
     make_migration_project_name,
 )
 from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
+from fetchnow_release.diagnostics import format_rollout_failure_diagnostics  # noqa: E402
 from fetchnow_release.rollout import RolloutInput, rollout_release  # noqa: E402
 from fetchnow_release.stabilize import StabilizationPolicy  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
@@ -91,9 +92,10 @@ CONTRACT_WITH_MIGRATION = """{
 """
 
 
-def assert_passed(condition: bool, marker: str) -> None:
+def assert_passed(condition: bool, marker: str, *, diagnostics: str = "") -> None:
     if not condition:
-        raise RuntimeError(f"ASSERTION_FAILED: {marker}")
+        suffix = f"\n{diagnostics}" if diagnostics else ""
+        raise RuntimeError(f"ASSERTION_FAILED: {marker}{suffix}")
     print(f"ASSERTION_PASSED: {marker}")
 
 
@@ -393,9 +395,21 @@ def main(argv: list[str] | None = None) -> int:
                 policy=policy,
             )
         )
+        boot_diag = format_rollout_failure_diagnostics(
+            status=boot.status,
+            messages=boot.messages,
+            deployment_id=boot.deployment_id,
+            deploy_root=deploy_root,
+        )
         assert_passed(
             boot.ok and boot.status == "committed",
             "baseline bootstrap rollout committed",
+            diagnostics=boot_diag,
+        )
+        assert_passed(
+            "OK: storage-init completed" in boot.messages,
+            "PR9 bootstrap ran storage-init before commit",
+            diagnostics=boot_diag,
         )
 
         current_path = deploy_root / "state" / "current.json"

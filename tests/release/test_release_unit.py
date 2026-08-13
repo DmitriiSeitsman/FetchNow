@@ -364,6 +364,94 @@ def test_redaction() -> None:
     assert marker not in out
     assert "postgresql+asyncpg://u:p@h/db" not in out
     assert "<redacted>" in out
+    url = redact("https://example.test/path?token=abc#frag")
+    assert "token=abc" not in url
+    assert "#frag" not in url
+    assert url == "https://example.test/path"
+
+
+@pytest.mark.parametrize(
+    ("raw", "forbidden", "must_contain"),
+    [
+        (
+            "https://user:password@example.test/path",
+            ("user:password", "password@", ":password"),
+            ("https://example.test/path",),
+        ),
+        (
+            "https://alice%40corp:p%40ssword@example.test/api",
+            ("alice%40corp", "p%40ssword", "%40ssword", "alice@corp"),
+            ("https://example.test/api",),
+        ),
+        (
+            "https://deploy:s3cret@example.test:8443/v1?token=abc#frag",
+            ("s3cret", "token=abc", "#frag", "deploy:", "?token", "<redacted>"),
+            ("https://example.test:8443/v1",),
+        ),
+        (
+            "https://u:p@[2001:db8::1]:443/x?q=1#f",
+            ("u:p@", "q=1", "#f"),
+            ("https://[2001:db8::1]:443/x",),
+        ),
+        (
+            "https://user:pass@[::1]/health",
+            ("user:pass", "pass@"),
+            ("https://[::1]/health",),
+        ),
+        (
+            "see https://user:pass@example.test/a).",
+            ("user:pass", "pass@"),
+            ("https://example.test/a",),
+        ),
+        (
+            "a=https://u:p@one.test/x b=https://v:q@two.test/y?z=1",
+            ("u:p@", "v:q@", "z=1"),
+            ("https://one.test/x", "https://two.test/y"),
+        ),
+    ],
+)
+def test_http_url_credentials_and_query_redaction(
+    raw: str, forbidden: tuple[str, ...], must_contain: tuple[str, ...]
+) -> None:
+    out = redact(raw)
+    for needle in forbidden:
+        assert needle not in out
+    for needle in must_contain:
+        assert needle in out
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://user:pass@",
+        "https://[",
+        "https://user:pass@[::1",
+        "https://example.test:99999/x",
+        "https://user:pass@exa mple.test/x",
+        "http://:@example.test/",
+    ],
+)
+def test_malformed_http_url_redaction_fail_closed(raw: str) -> None:
+    out = redact(f"error at {raw} done")
+    assert "user:pass" not in out
+    assert ":pass@" not in out
+    assert "pass@" not in out
+
+
+def test_redact_never_raises_on_malformed_urls() -> None:
+    blobs = [
+        "https://",
+        "https://@",
+        "https://[",
+        "https://user:pass@[::1",
+        "https://example.test:notaport/x",
+        "https://u:p@" + ("x" * 5000),
+        "http://[::::::::]/",
+        "HTTPS://USER:PASS@EXAMPLE.TEST/x?y=1#z",
+    ]
+    for blob in blobs:
+        redact(blob)
+    redact("postgresql://u:secret@host/db https://u:p@h/x")
 
 
 def test_preflight_wrong_project(tmp_path: Path) -> None:
@@ -695,6 +783,54 @@ def test_health_fails_if_storage_init_still_running(
     )
     assert not result.ok
     assert "still running" in result.messages[0]
+
+
+def test_health_pr8_compose_does_not_require_storage_init(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fetchnow_release.health import HealthError
+
+    rev = "c" * 40
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services:\n  api:\n    image: x\n", encoding="utf-8")
+    monkeypatch.setattr("fetchnow_release.health.require_compose_v2", lambda: None)
+    monkeypatch.setattr("fetchnow_release.health.require_docker_daemon", lambda: None)
+    monkeypatch.setattr(
+        "fetchnow_release.health.compose_files_include_delivery", lambda _paths: True
+    )
+
+    def rows(_inp):  # noqa: ANN001
+        return [
+            {
+                "Service": svc,
+                "State": "running",
+                "Health": "healthy",
+                "ID": f"cid-{svc}",
+                "Image": f"fetchnow-api:{rev}",
+            }
+            for svc in ("gateway", "api", "worker", "delivery", "postgres", "web")
+        ]
+
+    def inspect(_cid: str) -> dict:
+        raise HealthError("inspected-runtime")
+
+    monkeypatch.setattr("fetchnow_release.health._ps_services", rows)
+    monkeypatch.setattr("fetchnow_release.health._inspect", inspect)
+    env = tmp_path / ".env"
+    env.write_text("X=1\n")
+    result = run_health(
+        HealthInput(
+            project_name="fetchnow-health-test-pr8aaaaaa",
+            env_file=env,
+            compose_files=(compose,),
+            expected_revision=rev,
+            repo_root=tmp_path,
+        )
+    )
+    assert not result.ok
+    assert "inspected-runtime" in result.messages[0]
+    assert "storage-init" not in result.messages[0]
+    assert "missing service" not in result.messages[0]
 
 
 def test_preflight_tag_revision_mismatch_via_env(

@@ -64,6 +64,7 @@ from fetchnow_release.manifest import load_manifest, manifest_path  # noqa: E402
 from fetchnow_release.migration_compatibility import load_compatibility_contract  # noqa: E402
 from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
 from fetchnow_release.recover import RecoverInput, recover_deployment  # noqa: E402
+from fetchnow_release.diagnostics import format_rollout_failure_diagnostics  # noqa: E402
 from fetchnow_release.rollout import RolloutInput, rollout_release  # noqa: E402
 from fetchnow_release.rollout_project import (  # noqa: E402
     assert_rollout_project,
@@ -637,16 +638,60 @@ def main(argv: list[str] | None = None) -> int:
         )
         if bad_boot.ok:
             raise RuntimeError(
-                f"unhealthy bootstrap unexpectedly succeeded: {bad_boot.messages}"
+                "unhealthy bootstrap unexpectedly succeeded:\n"
+                + format_rollout_failure_diagnostics(
+                    status=bad_boot.status,
+                    messages=bad_boot.messages,
+                    deployment_id=bad_boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
             )
         if bad_boot.status != STATUS_FAILED:
             raise RuntimeError(
-                f"unhealthy bootstrap did not publish failed result: {bad_boot.messages}"
+                "unhealthy bootstrap did not publish failed result:\n"
+                + format_rollout_failure_diagnostics(
+                    status=bad_boot.status,
+                    messages=bad_boot.messages,
+                    deployment_id=bad_boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
             )
         if not bad_boot.deployment_id:
             raise RuntimeError("unhealthy bootstrap missing deployment_id")
+        if "OK: storage-init completed" not in bad_boot.messages:
+            raise RuntimeError(
+                "unhealthy PR9 bootstrap did not complete storage-init "
+                "before application mutation:\n"
+                + format_rollout_failure_diagnostics(
+                    status=bad_boot.status,
+                    messages=bad_boot.messages,
+                    deployment_id=bad_boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
+            )
 
-        audit = parse_bootstrap_cleanup_audit(bad_boot.messages)
+        try:
+            audit = parse_bootstrap_cleanup_audit(bad_boot.messages)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc}\n"
+                + format_rollout_failure_diagnostics(
+                    status=bad_boot.status,
+                    messages=bad_boot.messages,
+                    deployment_id=bad_boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
+            ) from exc
+        if any(
+            item.get("service") == "postgres" or item.get("compose_service") == "postgres"
+            for item in audit
+        ):
+            raise RuntimeError("bootstrap cleanup removed postgres")
+        foreign = {item.get("compose_project") for item in audit} - {project, None}
+        if foreign:
+            raise RuntimeError(
+                f"bootstrap cleanup cross-project removal possible: {sorted(foreign)}"
+            )
         if len(audit) < len(RUNTIME_APPLICATION_SERVICES):
             raise RuntimeError(
                 "unhealthy bootstrap did not create all application containers "
@@ -775,7 +820,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not boot.ok or boot.status != "committed":
             raise RuntimeError(
-                f"healthy bootstrap after terminal failure failed: {boot.messages}"
+                "healthy bootstrap after terminal failure failed:\n"
+                + format_rollout_failure_diagnostics(
+                    status=boot.status,
+                    messages=boot.messages,
+                    deployment_id=boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
+            )
+        if "OK: storage-init completed" not in boot.messages:
+            raise RuntimeError(
+                "healthy PR9 bootstrap skipped storage-init:\n"
+                + format_rollout_failure_diagnostics(
+                    status=boot.status,
+                    messages=boot.messages,
+                    deployment_id=boot.deployment_id,
+                    deploy_root=deploy_root,
+                )
             )
         api_labels = container_labels(compose, clone, "api")
         if api_labels.get(LABEL_DEPLOYMENT_ID) != boot.deployment_id:

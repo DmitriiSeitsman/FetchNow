@@ -113,3 +113,19 @@ def test_managed_download_root_from_env(
     run()
     assert created.is_dir()
     assert oct(created.stat().st_mode & 0o777) == "0o700"
+
+
+def test_storage_init_fails_closed_when_parent_not_writable(tmp_path: Path) -> None:
+    volume = tmp_path / "tmp"
+    volume.mkdir(mode=0o755)
+    os.chmod(volume, 0o555)
+    root = volume / "downloads"
+    try:
+        with pytest.raises(DownloadError) as exc:
+            ensure_download_root(str(root))
+        assert exc.value.code == DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+        assert not root.exists()
+        st = volume.stat()
+        assert oct(st.st_mode & 0o777) == "0o555"
+    finally:
+        os.chmod(volume, 0o700)

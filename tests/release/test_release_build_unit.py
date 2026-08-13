@@ -48,9 +48,16 @@ from fetchnow_release.manifest import (  # noqa: E402
     parse_manifest,
     validate_manifest,
 )
+from fetchnow_release.override import compose_files_include_storage_init  # noqa: E402
 from fetchnow_release.prepare import _remove_path  # noqa: E402
 from fetchnow_release.redact import redact  # noqa: E402
 from fetchnow_release.revision import RevisionError, validate_full_sha  # noqa: E402
+from pr8_compose_fixture import (  # noqa: E402
+    PR8_COMPOSE_PATH,
+    PR8_REVISION,
+    assert_pr8_fixture_provenance,
+    pr8_compose_bytes,
+)
 
 
 def _make_tar(
@@ -532,3 +539,14 @@ def test_subprocess_list_form_no_shell() -> None:
     assert "shell=True" not in inspect.getsource(archive._run_git)
     assert "shell=True" not in inspect.getsource(git_checks._run_git)
     assert "shell=True" not in inspect.getsource(archive.stream_git_archive)
+
+
+def test_pr8_compose_fixture_materializes_without_git_history(tmp_path: Path) -> None:
+    assert_pr8_fixture_provenance()
+    dest = tmp_path / "compose.yaml"
+    dest.write_bytes(pr8_compose_bytes())
+    assert dest.is_file()
+    assert compose_files_include_storage_init((dest,)) is False
+    assert compose_files_include_storage_init((PR8_COMPOSE_PATH,)) is False
+    assert compose_files_include_storage_init((ROOT / "compose.yaml",)) is True
+    assert PR8_REVISION == "b4a5c6174222a7b0ae711aed0dda1700ec799769"

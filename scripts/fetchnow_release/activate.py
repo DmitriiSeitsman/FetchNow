@@ -132,6 +132,11 @@ def build_storage_init_argv(
 
     Rollout uses ``--no-deps`` for application ``up``; this run is explicit and
     also ``--no-deps`` so depends_on is never the activation mechanism.
+
+    ``compose run`` does not accept ``--no-build`` (that flag is ``up``-only).
+    Not building is the default; ``--pull never`` plus the immutable image
+    override pin the already-prepared API image. ``-T`` disables a TTY so
+    captured rollout logs cannot fail with "input device is not a TTY".
     """
     argv = [
         "docker",
@@ -148,7 +153,7 @@ def build_storage_init_argv(
             "run",
             "--rm",
             "--no-deps",
-            "--no-build",
+            "-T",
             "--pull",
             "never",
             STORAGE_INIT_SERVICE,
@@ -173,8 +178,14 @@ def run_storage_init(
     joined = " ".join(argv)
     if "--no-deps" not in argv or "--rm" not in argv:
         raise ActivateError("storage-init argv missing --no-deps/--rm")
-    if "--no-build" not in argv or "--pull" not in argv or "never" not in argv:
-        raise ActivateError("storage-init argv missing --no-build/--pull never")
+    if "--no-build" in argv:
+        raise ActivateError(
+            "storage-init argv must not pass --no-build; compose run rejects it"
+        )
+    if "-T" not in argv and "--no-TTY" not in argv:
+        raise ActivateError("storage-init argv missing --no-TTY")
+    if "--pull" not in argv or "never" not in argv:
+        raise ActivateError("storage-init argv missing --pull never")
     if "postgres" in argv:
         raise ActivateError("storage-init argv must not include postgres")
     if STORAGE_INIT_SERVICE not in argv:
