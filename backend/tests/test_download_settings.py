@@ -102,6 +102,40 @@ def test_orphan_grace_must_stay_above_publication_race_window() -> None:
     assert s.media_download_orphan_grace_seconds == 60
 
 
+def test_muxing_disabled_by_default() -> None:
+    s = Settings(APP_ENV="test", DATABASE_URL=_DB)
+    assert s.media_muxing_enabled is False
+    assert s.media_muxing_ffmpeg_path == ""
+    assert s.media_muxing_ffprobe_path == ""
+
+
+def test_api_settings_muxing_enabled_without_tool_paths() -> None:
+    """API may enable muxing projection without worker ffmpeg/ffprobe paths."""
+    s = Settings(
+        APP_ENV="test",
+        DATABASE_URL=_DB,
+        MEDIA_MUXING_ENABLED=True,
+    )
+    assert s.media_muxing_enabled is True
+    assert s.media_muxing_ffmpeg_path == ""
+    assert s.media_muxing_ffprobe_path == ""
+
+
+def test_muxing_tool_paths_must_be_absolute_when_set() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL=_DB,
+            MEDIA_MUXING_FFMPEG_PATH="usr/bin/ffmpeg",
+        )
+    with pytest.raises(ValidationError):
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL=_DB,
+            MEDIA_MUXING_FFPROBE_PATH="usr/bin/ffprobe",
+        )
+
+
 def test_worker_execution_settings_fail_closed_without_ytdlp(
     tmp_path: Path,
 ) -> None:

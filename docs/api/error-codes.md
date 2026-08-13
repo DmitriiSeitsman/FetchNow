@@ -118,6 +118,10 @@ status exposes `artifactReady` only.
 | `DOWNLOAD_EXPIRED` | 410 | Download job or artifact expired | no | no | Storage keys |
 | `DELIVERY_DISABLED` | 503 | Artifact delivery is not available | yes | later | Feature flags, roots |
 | `DOWNLOAD_NOT_READY` | 409 | Download artifact is not ready for delivery | soft | yes (poll status) | Internal job state details beyond catalog |
+| `MUXING_UNAVAILABLE` | 422 | Combined video and audio file is not available | no | no | Tokens, pairing math, feature flags |
+| `MUXING_FAILED` | 422 | Combining video and audio failed | soft | yes (limited) | argv, stderr, paths |
+| `MUXING_TIMEOUT` | 504 | Combining video and audio timed out | soft | yes (limited) | argv, stderr, paths |
+| `MUXED_OUTPUT_INVALID` | 422 | Combined file could not be validated | no | no | ffprobe JSON, paths |
 
 | Endpoint | Notes |
 |---|---|
@@ -125,6 +129,15 @@ status exposes `artifactReady` only.
 | `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. |
 
 See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
+
+## Bounded muxing (PR9)
+
+Stream-copy muxing is **disabled by default** (`MEDIA_MUXING_ENABLED=false`).
+When inspection cannot offer an executable free option (no progressive file
+and muxing off or no compatible pair), download create returns
+`MUXING_UNAVAILABLE`. ffmpeg/ffprobe paths are worker-only.
+
+See [ADR 0013](../adr/0013-bounded-media-muxing.md).
 
 ## Browser client (PR8)
 
@@ -142,4 +155,5 @@ generic fallback. See [browser download flow](browser-download-flow.md).
 - [ADR 0009 — PostgreSQL media-job orchestration](../adr/0009-postgresql-media-job-orchestration.md)
 - [ADR 0010 — durable download execution](../adr/0010-durable-download-execution-and-private-artifact-boundary.md)
 - [ADR 0012 — browser download flow](../adr/0012-browser-download-flow.md)
+- [ADR 0013 — bounded media muxing](../adr/0013-bounded-media-muxing.md)
 - [Capacity policy](../operations/capacity-policy.md)

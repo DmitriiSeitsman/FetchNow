@@ -27,6 +27,7 @@ def test_argv_shape_url_after_separator_shell_false() -> None:
     assert "--no-netrc" in argv
     assert "--ignore-config" in argv
     assert "--no-playlist" in argv
+    assert "--no-part" in argv
     assert "--skip-download" not in argv
     # Callers must use create_subprocess_exec (shell=False); argv is a list.
     assert isinstance(argv, list)

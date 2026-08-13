@@ -46,6 +46,7 @@ async def _read_bounded(
     *,
     limit: int,
     which: str,
+    overflow_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
 ) -> bytes:
     if stream is None:
         return b""
@@ -58,7 +59,7 @@ async def _read_bounded(
         total += len(block)
         if total > limit:
             raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+                overflow_code,
                 internal_reason=f"{which.upper()}_LIMIT",
             )
         chunks.append(block)
@@ -86,6 +87,15 @@ class DownloadProcessRunner:
         max_output_bytes: int | None = None,
         min_free_bytes: int | None = None,
         root_for_disk: str | None = None,
+        extra_size_dirs: tuple[str, ...] = (),
+        capture_stdout: bool = False,
+        overflow_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+        too_large_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_TOO_LARGE,
+        storage_code: DownloadErrorCode = (
+            DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+        ),
+        spawn_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+        started: asyncio.Event | None = None,
     ) -> ProcessResult:
         if not argv:
             raise_download_error(
@@ -104,18 +114,21 @@ class DownloadProcessRunner:
             )
         except OSError:
             raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+                spawn_code,
                 internal_reason="PROCESS_SPAWN_FAILED",
             )
 
         pgid = proc.pid
+        if started is not None:
+            started.set()
         stdout_task: asyncio.Task[bytes] | None = None
         stderr_task: asyncio.Task[bytes] | None = None
         monitor_task: asyncio.Task[None] | None = None
         failure_path = False
         limit_code: DownloadErrorCode | None = None
+        captured_stdout = b""
         watching = (
-            output_dir is not None
+            (output_dir is not None or extra_size_dirs)
             and max_output_bytes is not None
             and max_output_bytes > 0
         ) or (
@@ -123,43 +136,60 @@ class DownloadProcessRunner:
             and min_free_bytes > 0
             and root_for_disk is not None
         )
+        size_roots = tuple(
+            Path(p)
+            for p in ((output_dir,) if output_dir is not None else ()) + extra_size_dirs
+        )
 
         async def _communicate() -> None:
-            nonlocal stdout_task, stderr_task
+            nonlocal stdout_task, stderr_task, captured_stdout
             assert proc.stdout is not None
             assert proc.stderr is not None
             stdout_task = asyncio.create_task(
-                _read_bounded(proc.stdout, limit=stdout_limit_bytes, which="stdout")
+                _read_bounded(
+                    proc.stdout,
+                    limit=stdout_limit_bytes,
+                    which="stdout",
+                    overflow_code=overflow_code,
+                )
             )
             stderr_task = asyncio.create_task(
-                _read_bounded(proc.stderr, limit=stderr_limit_bytes, which="stderr")
+                _read_bounded(
+                    proc.stderr,
+                    limit=stderr_limit_bytes,
+                    which="stderr",
+                    overflow_code=overflow_code,
+                )
             )
             try:
-                await asyncio.gather(stdout_task, stderr_task)
+                stdout_bytes, _stderr_bytes = await asyncio.gather(
+                    stdout_task, stderr_task
+                )
+                if capture_stdout:
+                    captured_stdout = stdout_bytes
             except Exception:
                 stdout_task.cancel()
                 stderr_task.cancel()
-                await asyncio.gather(
-                    stdout_task, stderr_task, return_exceptions=True
-                )
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
                 raise
             await proc.wait()
 
+        def _watched_bytes() -> int:
+            return sum(ArtifactStore.output_tree_byte_size(path) for path in size_roots)
+
         async def _size_monitor() -> None:
             nonlocal limit_code
-            output_path = Path(output_dir) if output_dir is not None else None
             while True:
                 await asyncio.sleep(0.2)
                 if (
-                    output_path is not None
+                    size_roots
                     and max_output_bytes is not None
                     and max_output_bytes > 0
+                    and _watched_bytes() > max_output_bytes
                 ):
-                    size = ArtifactStore.output_tree_byte_size(output_path)
-                    if size > max_output_bytes:
-                        limit_code = DownloadErrorCode.DOWNLOAD_TOO_LARGE
-                        await _terminate_download_group(proc, pgid=pgid)
-                        return
+                    limit_code = too_large_code
+                    await _terminate_download_group(proc, pgid=pgid)
+                    return
                 if (
                     min_free_bytes is not None
                     and min_free_bytes > 0
@@ -168,11 +198,11 @@ class DownloadProcessRunner:
                     try:
                         free = int(shutil.disk_usage(root_for_disk).free)
                     except OSError:
-                        limit_code = DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+                        limit_code = storage_code
                         await _terminate_download_group(proc, pgid=pgid)
                         return
                     if free < min_free_bytes:
-                        limit_code = DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+                        limit_code = storage_code
                         await _terminate_download_group(proc, pgid=pgid)
                         return
 
@@ -211,13 +241,12 @@ class DownloadProcessRunner:
             else:
                 # Final budget check after the tool exits (monitor samples ~0.2s).
                 if (
-                    output_dir is not None
+                    size_roots
                     and max_output_bytes is not None
                     and max_output_bytes > 0
+                    and _watched_bytes() > max_output_bytes
                 ):
-                    final_size = ArtifactStore.output_tree_byte_size(Path(output_dir))
-                    if final_size > max_output_bytes:
-                        limit_code = DownloadErrorCode.DOWNLOAD_TOO_LARGE
+                    limit_code = too_large_code
                 if (
                     min_free_bytes is not None
                     and min_free_bytes > 0
@@ -226,12 +255,10 @@ class DownloadProcessRunner:
                     try:
                         free = int(shutil.disk_usage(root_for_disk).free)
                     except OSError:
-                        limit_code = DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+                        limit_code = storage_code
                     else:
                         if free < min_free_bytes:
-                            limit_code = (
-                                DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
-                            )
+                            limit_code = storage_code
                 if limit_code is not None:
                     failure_path = True
                     await _cancel_aux()
@@ -245,16 +272,15 @@ class DownloadProcessRunner:
             raise_download_error(
                 limit_code,
                 internal_reason=(
-                    "OUTPUT_BUDGET"
-                    if limit_code is DownloadErrorCode.DOWNLOAD_TOO_LARGE
-                    else "DISK_HEADROOM"
+                    "OUTPUT_BUDGET" if limit_code is too_large_code else "DISK_HEADROOM"
                 ),
             )
 
+        stdout_out = captured_stdout if capture_stdout else b""
         if timed_out:
             return ProcessResult(
                 exit_code=proc.returncode,
-                stdout=b"",
+                stdout=stdout_out if capture_stdout else b"",
                 stderr=b"",
                 timed_out=True,
                 cancelled=False,
@@ -264,10 +290,9 @@ class DownloadProcessRunner:
         code = proc.returncode
         if code is not None and code < 0:
             signal_number = -code
-        # Always empty buffers — never leak tool output to callers.
         return ProcessResult(
             exit_code=code,
-            stdout=b"",
+            stdout=stdout_out,
             stderr=b"",
             timed_out=False,
             cancelled=False,

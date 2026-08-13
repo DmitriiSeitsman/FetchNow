@@ -71,6 +71,16 @@ Download jobs (PR6) additionally forbid logging or publicizing:
 Download create/status reuse the parent MediaJob Bearer and return
 `Cache-Control: no-store`.
 
+Bounded muxing (PR9) additionally forbids logging or publicizing:
+
+- provider video/audio format tokens;
+- ffmpeg/ffprobe argv;
+- raw ffprobe JSON;
+- local workspace paths;
+- submitted/canonical query.
+
+Tool executable paths are never returned in API responses or web build args.
+
 The browser download flow (PR8) never writes the access token, submitted URL,
 canonical provider URL, or `Authorization` header to `console`, DOM attributes,
 error text, or analytics. Thrown UI errors use catalog copy only. A tab-scoped

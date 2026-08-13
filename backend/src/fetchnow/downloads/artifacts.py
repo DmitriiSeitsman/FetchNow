@@ -77,6 +77,9 @@ class AttemptWorkspace:
     path: Path
     home: Path
     cache: Path
+    video: Path
+    audio: Path
+    mux: Path
     output: Path
 
 
@@ -234,15 +237,11 @@ class ArtifactStore:
         try:
             if not output_dir.exists() or output_dir.is_symlink():
                 return 0
-            for dirpath, dirnames, filenames in os.walk(
-                output_dir, followlinks=False
-            ):
+            for dirpath, dirnames, filenames in os.walk(output_dir, followlinks=False):
                 base = Path(dirpath)
                 # Never descend through symlink directories.
                 dirnames[:] = [
-                    name
-                    for name in dirnames
-                    if not (base / name).is_symlink()
+                    name for name in dirnames if not (base / name).is_symlink()
                 ]
                 for name in filenames:
                     path = base / name
@@ -321,7 +320,7 @@ class ArtifactStore:
         attempt: int,
         fence: int,
     ) -> AttemptWorkspace:
-        """Create ``root/{job_id}/{attempt}_{fence}/{home,cache,output}/`` (0700)."""
+        """Create the per-attempt private workspace tree under the managed root."""
         if attempt < 1 or fence < 0:
             raise_download_error(
                 DownloadErrorCode.INTERNAL_ERROR,
@@ -332,6 +331,9 @@ class ArtifactStore:
         workspace = self._resolve_under_root(str(job_id), attempt_name)
         home = self._resolve_under_root(str(job_id), attempt_name, "home")
         cache = self._resolve_under_root(str(job_id), attempt_name, "cache")
+        video = self._resolve_under_root(str(job_id), attempt_name, "video")
+        audio = self._resolve_under_root(str(job_id), attempt_name, "audio")
+        mux = self._resolve_under_root(str(job_id), attempt_name, "mux")
         output = self._resolve_under_root(str(job_id), attempt_name, "output")
         try:
             self._mkdir_private(job_dir, exist_ok=True)
@@ -343,6 +345,9 @@ class ArtifactStore:
             self._mkdir_private(workspace, exist_ok=False)
             self._mkdir_private(home, exist_ok=False)
             self._mkdir_private(cache, exist_ok=False)
+            self._mkdir_private(video, exist_ok=False)
+            self._mkdir_private(audio, exist_ok=False)
+            self._mkdir_private(mux, exist_ok=False)
             self._mkdir_private(output, exist_ok=False)
         except DownloadError:
             with suppress(Exception):
@@ -356,6 +361,9 @@ class ArtifactStore:
             path=workspace,
             home=home,
             cache=cache,
+            video=video,
+            audio=audio,
+            mux=mux,
             output=output,
         )
 
@@ -500,6 +508,176 @@ class ArtifactStore:
                 internal_reason="MULTIPLE_OUTPUTS",
             )
         return found[0]
+
+    def find_single_regular_file_in(
+        self,
+        directory: Path,
+        *,
+        allowed_suffixes: frozenset[str],
+        error_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT,
+    ) -> Path:
+        """Require exactly one regular file under a private workspace directory."""
+        self._reject_symlink_path(directory, reason="STREAM_DIR_SYMLINK")
+        found: list[Path] = []
+        try:
+            for entry in directory.iterdir():
+                if entry.is_symlink():
+                    raise_download_error(
+                        error_code,
+                        internal_reason="SYMLINK_OUTPUT",
+                    )
+                try:
+                    st = entry.lstat()
+                except OSError:
+                    raise_download_error(
+                        error_code,
+                        internal_reason="OUTPUT_STAT_FAILED",
+                    )
+                if stat.S_ISDIR(st.st_mode):
+                    raise_download_error(
+                        error_code,
+                        internal_reason="NESTED_TREE",
+                    )
+                if not stat.S_ISREG(st.st_mode):
+                    raise_download_error(
+                        error_code,
+                        internal_reason="NON_REGULAR_OUTPUT",
+                    )
+                if st.st_nlink != 1:
+                    raise_download_error(
+                        error_code,
+                        internal_reason="HARDLINK_OUTPUT",
+                    )
+                if st.st_size <= 0:
+                    raise_download_error(
+                        error_code,
+                        internal_reason="EMPTY_ARTIFACT",
+                    )
+                if st.st_size > self._max_bytes:
+                    raise_download_error(
+                        DownloadErrorCode.DOWNLOAD_TOO_LARGE,
+                        internal_reason="ARTIFACT_TOO_LARGE",
+                    )
+                if st.st_uid != os.getuid():
+                    raise_download_error(
+                        error_code,
+                        internal_reason="OUTPUT_OWNER",
+                    )
+                suffix = entry.suffix.lstrip(".").lower()
+                if suffix not in allowed_suffixes:
+                    raise_download_error(
+                        error_code,
+                        internal_reason="EXTENSION_MISMATCH",
+                    )
+                found.append(entry)
+        except DownloadError:
+            raise
+        except OSError:
+            raise_download_error(
+                error_code,
+                internal_reason="OUTPUT_LIST_FAILED",
+            )
+        if len(found) == 0:
+            raise_download_error(
+                error_code,
+                internal_reason="EMPTY_OUTPUT",
+            )
+        if len(found) > 1:
+            raise_download_error(
+                error_code,
+                internal_reason="MULTIPLE_OUTPUTS",
+            )
+        return found[0]
+
+    def stage_muxed_output(
+        self,
+        workspace: AttemptWorkspace,
+        mux_path: Path,
+        *,
+        container: str,
+    ) -> Path:
+        """Move a validated mux file into output/artifact.{container} (0600).
+
+        Uses ``link``+``unlink`` on the same volume so peak disk is not doubled
+        by a second copy of the muxed artifact.
+        """
+        key = container.strip().lower()
+        if key not in {"mp4", "webm"}:
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="CONTAINER_NOT_ALLOWED",
+            )
+        dest = workspace.output / f"artifact.{key}"
+        if dest.parent != workspace.output or dest.name != f"artifact.{key}":
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="OUTPUT_NAME",
+            )
+        self._reject_symlink_path(mux_path, reason="MUX_PATH_SYMLINK")
+        self._reject_symlink_path(workspace.output, reason="OUTPUT_DIR_SYMLINK")
+        if dest.is_symlink() or dest.exists():
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="OUTPUT_EXISTS",
+            )
+        try:
+            st = mux_path.lstat()
+        except OSError:
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="MUX_STAT_FAILED",
+            )
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="MUX_NOT_REGULAR",
+            )
+        if st.st_uid != os.getuid() or st.st_size <= 0 or st.st_size > self._max_bytes:
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="MUX_METADATA",
+            )
+        try:
+            os.link(mux_path, dest)
+            os.unlink(mux_path)
+        except FileExistsError:
+            raise_download_error(
+                DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                internal_reason="OUTPUT_EXISTS",
+            )
+        except OSError:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                internal_reason="MUX_STAGE_FAILED",
+            )
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            dest_fd = os.open(dest, flags)
+            try:
+                after = os.fstat(dest_fd)
+                if (
+                    not stat.S_ISREG(after.st_mode)
+                    or after.st_nlink != 1
+                    or after.st_uid != os.getuid()
+                    or after.st_size != st.st_size
+                ):
+                    raise_download_error(
+                        DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                        internal_reason="MUX_STAGE_METADATA",
+                    )
+                os.fchmod(dest_fd, 0o600)
+            finally:
+                os.close(dest_fd)
+        except DownloadError:
+            raise
+        except OSError:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                internal_reason="MUX_STAGE_FAILED",
+            )
+        return dest
 
     def _open_output_dirfd(self, output_dir: Path) -> int:
         """Open the controlled output directory itself, never a link to it."""
@@ -740,20 +918,14 @@ class ArtifactStore:
                 DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT,
                 internal_reason="CONTAINER_NOT_ALLOWED",
             )
-        source = self._find_single_regular_file(
-            workspace, expected_container=container
-        )
+        source = self._find_single_regular_file(workspace, expected_container=container)
         src_fd = self._open_validated_regular(workspace.output, source.name)
         try:
-            size_bytes, sha256_hex = self._sha256_fd(
-                src_fd, max_bytes=self._max_bytes
-            )
+            size_bytes, sha256_hex = self._sha256_fd(src_fd, max_bytes=self._max_bytes)
             content_type = content_type_for_container(container)
             artifact_id = uuid.uuid4()
             published_dir = self._published_dir()
-            partial = self._resolve_under_root(
-                "published", f".partial_{artifact_id}"
-            )
+            partial = self._resolve_under_root("published", f".partial_{artifact_id}")
             final = self._resolve_under_root("published", str(artifact_id))
             if partial.exists() or final.exists():
                 raise_download_error(
@@ -1063,11 +1235,7 @@ class ArtifactStore:
             return removed
 
         published = self._root / "published"
-        if (
-            not published.is_dir()
-            or published.is_symlink()
-            or removed >= limit
-        ):
+        if not published.is_dir() or published.is_symlink() or removed >= limit:
             return removed
 
         try:
@@ -1108,10 +1276,14 @@ class ArtifactStore:
                         removed += 1
                     continue
 
-                keep = artifact_id in referenced_artifact_ids or (
-                    manifest["downloadJobId"],
-                    manifest["fence"],
-                ) in active_attempts
+                keep = (
+                    artifact_id in referenced_artifact_ids
+                    or (
+                        manifest["downloadJobId"],
+                        manifest["fence"],
+                    )
+                    in active_attempts
+                )
                 if keep:
                     continue
                 if self._safe_rmtree(entry):

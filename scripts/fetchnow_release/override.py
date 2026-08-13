@@ -17,6 +17,7 @@ from .manifest import ImageRecord, ReleaseManifest
 
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DELIVERY_SERVICE_RE = re.compile(r"(?m)^  delivery:\s*(?:#.*)?$")
+_STORAGE_INIT_SERVICE_RE = re.compile(r"(?m)^  storage-init:\s*(?:#.*)?$")
 
 
 class OverrideError(ValueError):
@@ -33,6 +34,23 @@ def compose_files_include_delivery(compose_files: tuple[Path, ...]) -> bool:
     for path in compose_files:
         try:
             if path.name == "compose.yaml" and _DELIVERY_SERVICE_RE.search(
+                path.read_text(encoding="utf-8")
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def compose_files_include_storage_init(compose_files: tuple[Path, ...]) -> bool:
+    """Return whether a verified Compose source declares the PR9 oneshot.
+
+    Older prepared releases (through PR8) intentionally lack storage-init.
+    Rollback/recovery must not introduce a phantom oneshot via override alone.
+    """
+    for path in compose_files:
+        try:
+            if path.name == "compose.yaml" and _STORAGE_INIT_SERVICE_RE.search(
                 path.read_text(encoding="utf-8")
             ):
                 return True
@@ -67,6 +85,7 @@ def render_images_override(
     deployment_id: str | None = None,
     release_revision: str | None = None,
     include_delivery: bool = False,
+    include_storage_init: bool = False,
 ) -> str:
     """Render a Compose override pinning app services; excludes postgres."""
     for svc in APPLICATION_SERVICES:
@@ -114,6 +133,14 @@ def render_images_override(
             lines.append("    labels:")
             lines.append(f"      {LABEL_DEPLOYMENT_ID}: \"{deployment_id}\"")
             lines.append(f"      {LABEL_RELEASE_REVISION}: \"{release_revision}\"")
+    if include_storage_init:
+        lines.append("  storage-init:")
+        lines.append(f"    image: {image_ids['api']}")
+        lines.append("    pull_policy: never")
+        if deployment_id is not None and release_revision is not None:
+            lines.append("    labels:")
+            lines.append(f"      {LABEL_DEPLOYMENT_ID}: \"{deployment_id}\"")
+            lines.append(f"      {LABEL_RELEASE_REVISION}: \"{release_revision}\"")
     lines.append("")
     return "\n".join(lines)
 
@@ -125,6 +152,7 @@ def write_images_override(
     deployment_id: str | None = None,
     release_revision: str | None = None,
     include_delivery: bool = False,
+    include_storage_init: bool = False,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / IMAGES_OVERRIDE_NAME
@@ -133,6 +161,7 @@ def write_images_override(
         deployment_id=deployment_id,
         release_revision=release_revision,
         include_delivery=include_delivery,
+        include_storage_init=include_storage_init,
     )
     if "postgres" in text.split("services:", 1)[-1].split("\n")[0:20]:
         # Belt-and-suspenders: body after services: must not define postgres.

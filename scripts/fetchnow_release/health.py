@@ -21,6 +21,7 @@ from .manifest import ManifestError, load_manifest, manifest_path
 from .override import (
     OverrideError,
     compose_files_include_delivery,
+    compose_files_include_storage_init,
     image_ids_from_manifest,
 )
 from .redact import redact
@@ -175,6 +176,11 @@ def run_health(inp: HealthInput) -> HealthResult:
             for svc in EXPECTED_SERVICES
             if svc != "delivery" or compose_files_include_delivery(inp.compose_files)
         )
+        oneshot_services = frozenset(
+            {"storage-init"}
+            if compose_files_include_storage_init(inp.compose_files)
+            else ()
+        )
         by_service: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             # Compose v2/v5 field names vary: Service / Name / Project
@@ -194,9 +200,17 @@ def run_health(inp: HealthInput) -> HealthResult:
                     f"service {expected} has {len(by_service[expected])} containers; expected 1"
                 )
 
-        unknown = sorted(set(by_service) - set(runtime_expected))
+        unknown = sorted(set(by_service) - set(runtime_expected) - oneshot_services)
         if unknown:
             raise HealthError(f"unknown/orphan services present: {', '.join(unknown)}")
+        for oneshot in sorted(oneshot_services & set(by_service)):
+            for row in by_service[oneshot]:
+                state = str(row.get("State") or row.get("state") or "").lower()
+                if state == "running":
+                    raise HealthError(
+                        f"{oneshot} oneshot is still running; health does not "
+                        "require it and it must not remain up"
+                    )
 
         api_image_id = None
         worker_image_id = None

@@ -100,6 +100,74 @@ describe("browser flow integration", () => {
     expect(controller.snapshot().downloadEligible).toBe(true);
   });
 
+  it("selects a derived quality when muxingRequired is false", async () => {
+    const token = generateAccessToken();
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(inspectedPayload())),
+      createDownloadJob: vi.fn(async () =>
+        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
+      ),
+      getDownloadJob: vi.fn(),
+    };
+    const store = new Map<string, string>();
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession({
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => {
+          store.set(k, v);
+        },
+        removeItem: (k) => {
+          store.delete(k);
+        },
+      }),
+      generateToken: () => token,
+      pickerSupported: () => true,
+      documentHidden: () => false,
+    });
+    await controller.submit("https://vk.com/video-1_2");
+    expect(controller.snapshot().muxingBlocked).toBe(false);
+    controller.selectFormat(OPTION_ID);
+    expect(controller.snapshot().downloadEligible).toBe(true);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enqueue when muxingRequired means no executable option", async () => {
+    const token = generateAccessToken();
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () =>
+        parseInspectionJob(inspectedPayload({ muxingRequired: true })),
+      ),
+      createDownloadJob: vi.fn(),
+      getDownloadJob: vi.fn(),
+    };
+    const store = new Map<string, string>();
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession({
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => {
+          store.set(k, v);
+        },
+        removeItem: (k) => {
+          store.delete(k);
+        },
+      }),
+      generateToken: () => token,
+      pickerSupported: () => true,
+      documentHidden: () => false,
+    });
+    await controller.submit("https://vk.com/video-1_2");
+    expect(controller.snapshot().muxingBlocked).toBe(true);
+    controller.selectFormat(OPTION_ID);
+    expect(controller.snapshot().downloadEligible).toBe(false);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).not.toHaveBeenCalled();
+  });
+
   it("does not issue API calls when the feature flag is off", async () => {
     const { parseMediaFlowFlag } = await import("./flag");
     expect(parseMediaFlowFlag("false")).toBe(false);

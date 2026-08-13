@@ -72,7 +72,7 @@ def _find_format(
 def _assert_format_eligible(fmt: MediaFormat, *, muxing_required: bool) -> None:
     if muxing_required:
         raise_download_error(
-            DownloadErrorCode.FORMAT_NOT_ELIGIBLE,
+            DownloadErrorCode.MUXING_UNAVAILABLE,
             internal_reason="MUXING_REQUIRED",
         )
     if not fmt.free_tier_eligible:

@@ -65,6 +65,25 @@ def test_roundtrip_media_metadata() -> None:
     assert all("url" not in fmt for fmt in payload["formats"])
 
 
+def test_pr8_snapshot_without_muxing_required_still_loads() -> None:
+    payload = media_metadata_to_jsonable(_sample_metadata(), max_bytes=65_536)
+    del payload["muxingRequired"]
+    restored = media_metadata_from_jsonable(payload, max_bytes=65_536)
+    assert restored.muxing_required is False
+    split = dict(payload)
+    split["formats"] = [
+        {
+            **payload["formats"][0],
+            "hasAudio": False,
+            "category": "video_only",
+            "audioCodec": "none",
+            "freeTierEligible": False,
+        }
+    ]
+    restored_split = media_metadata_from_jsonable(split, max_bytes=65_536)
+    assert restored_split.muxing_required is True
+
+
 def test_byte_bound_enforced() -> None:
     metadata = _sample_metadata()
     with pytest.raises(JobError) as exc_info:

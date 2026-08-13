@@ -29,6 +29,7 @@ APP_SERVICES_BEFORE_GATEWAY = ("api", "worker", "delivery", "web")
 
 # Journal / result statuses
 STATUS_PLANNED = "planned"
+STATUS_INITIALIZING_STORAGE = "initializing_storage"
 STATUS_ACTIVATING_APP = "activating_app"
 STATUS_APP_HEALTHY = "app_healthy"
 STATUS_ACTIVATING_GATEWAY = "activating_gateway"
@@ -54,7 +55,10 @@ TERMINAL_RESULT_STATUSES = frozenset(
 
 # Legal transitions for the in-memory / event phase marker.
 LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
-    STATUS_PLANNED: frozenset({STATUS_ACTIVATING_APP, STATUS_FAILED}),
+    STATUS_PLANNED: frozenset(
+        {STATUS_INITIALIZING_STORAGE, STATUS_ACTIVATING_APP, STATUS_FAILED}
+    ),
+    STATUS_INITIALIZING_STORAGE: frozenset({STATUS_ACTIVATING_APP, STATUS_FAILED}),
     STATUS_ACTIVATING_APP: frozenset(
         {STATUS_APP_HEALTHY, STATUS_ROLLBACK_STARTED}
     ),

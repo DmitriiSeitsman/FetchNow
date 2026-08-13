@@ -20,6 +20,7 @@ from fetchnow.media_inspection.models import (
     require_finite_non_negative,
     sanitize_title,
 )
+from fetchnow.media_inspection.mux_pairing import derive_mux_options
 
 if TYPE_CHECKING:
     from fetchnow.core.config import Settings
@@ -36,6 +37,7 @@ _VIDEO_CODEC_MAP: dict[str, CodecFamily] = {
     "hevc": CodecFamily.HEVC,
     "h265": CodecFamily.HEVC,
     "h.265": CodecFamily.HEVC,
+    "vp8": CodecFamily.VP8,
     "vp9": CodecFamily.VP9,
     "vp09": CodecFamily.VP9,
     "av01": CodecFamily.AV1,
@@ -61,12 +63,14 @@ def normalize_codec(raw: str | None, *, kind: str) -> CodecFamily:
     token = raw.strip().lower()
     if not token or token == "none":
         return CodecFamily.NONE
-    base = token.split(".")[0]
     table = _VIDEO_CODEC_MAP if kind == "video" else _AUDIO_CODEC_MAP
-    if base in table:
-        return table[base]
     if token in table:
         return table[token]
+    # Profiled fourcc (avc1.64001F, mp4a.40.2, av01.0.04M.08). Require the alias
+    # as a full dotted prefix so lookalikes (notavc1, avc1x, mp4audio) miss.
+    for alias, family in table.items():
+        if token.startswith(alias + "."):
+            return family
     return CodecFamily.UNKNOWN
 
 
@@ -96,14 +100,10 @@ def _token_digest(token: str | None) -> str:
     return digest[:12]
 
 
-def format_option_id_for(
-    candidate: InternalFormatCandidate, quality_label: str
-) -> str:
+def format_option_id_for(candidate: InternalFormatCandidate, quality_label: str) -> str:
     """Build a bounded server-side option id independent of input order."""
     category = _category_for(candidate.has_video, candidate.has_audio).value
-    fps_milli = (
-        0 if candidate.fps is None else int(round(float(candidate.fps) * 1000))
-    )
+    fps_milli = 0 if candidate.fps is None else int(round(float(candidate.fps) * 1000))
     material = "|".join(
         [
             quality_label,
@@ -128,11 +128,7 @@ def _candidate_sort_key(
     candidate: InternalFormatCandidate, option_id: str
 ) -> tuple[int, int, int, int, int, str]:
     """Deterministic preference: progressive, height, size, width, fps, id."""
-    progressive = (
-        0
-        if candidate.has_video and candidate.has_audio
-        else 1
-    )
+    progressive = 0 if candidate.has_video and candidate.has_audio else 1
     return (
         progressive,
         -(candidate.height or 0),
@@ -233,8 +229,48 @@ def project_metadata(
     if len(projected) > max_formats:
         projected = projected[:max_formats]
 
-    has_progressive = any(
-        f.category is FormatCategory.PROGRESSIVE for f in projected
+    has_free_progressive = any(
+        f.category is FormatCategory.PROGRESSIVE and f.free_tier_eligible
+        for f in projected
+    )
+    if settings.media_muxing_enabled and not has_free_progressive:
+        derived = derive_mux_options(draft.candidates, settings)
+        for item in derived:
+            existing = by_option.get(item.public.format_option_id)
+            if existing is None:
+                by_option[item.public.format_option_id] = item.public
+                projected.append(item.public)
+                continue
+            if existing != item.public:
+                raise_inspection_error(
+                    InspectionErrorKind.INSPECTION_POLICY_REJECTED,
+                    internal_reason="OPTION_AMBIGUOUS",
+                )
+        projected.sort(
+            key=lambda fmt: (
+                0 if fmt.category is FormatCategory.PROGRESSIVE else 1,
+                -(fmt.height or 0),
+                fmt.format_option_id,
+            )
+        )
+        if len(projected) > max_formats:
+            projected = projected[:max_formats]
+
+    has_executable = any(
+        f.category is FormatCategory.PROGRESSIVE
+        and f.free_tier_eligible
+        and f.has_video
+        and f.has_audio
+        for f in projected
+    )
+    # Video-only / audio-only rows stay internal for pairing. Public options are
+    # finished files only — never split streams as a user-facing download choice.
+    public = tuple(
+        fmt
+        for fmt in projected
+        if fmt.category is FormatCategory.PROGRESSIVE
+        and fmt.has_video
+        and fmt.has_audio
     )
     return MediaMetadata(
         provider_id=trusted_provider_id,
@@ -242,8 +278,8 @@ def project_metadata(
         media_id=trusted_media_id,
         title=title,
         duration_seconds=duration,
-        formats=tuple(projected),
+        formats=public,
         extraction_tool="ytdlp",
         extraction_tool_version=draft.tool_version,
-        muxing_required=not has_progressive,
+        muxing_required=not has_executable,
     )

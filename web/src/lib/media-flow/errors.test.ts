@@ -10,5 +10,8 @@ describe("error copy", () => {
     expect(unknown.userMessage).not.toContain(token);
     expect(userMessageForCode("INVALID_ACCESS_TOKEN").text).not.toContain(token);
     expect(userMessageForCode("INVALID_ACCESS_TOKEN").text).not.toMatch(/Bearer/i);
+    expect(userMessageForCode("MUXING_UNAVAILABLE").text).not.toMatch(/ffmpeg|token|muxing is not offered/i);
+    expect(userMessageForCode("MUXING_FAILED").retryable).toBe(true);
+    expect(userMessageForCode("MUXED_OUTPUT_INVALID").retryable).toBe(false);
   });
 });

@@ -30,10 +30,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_HOME=/app \
     TEMP_STORAGE_PATH=/var/lib/fetchnow/tmp
 
+# ffmpeg/ffprobe: Debian bookworm official apt package (not compiled here).
+# Version token is the distro package; worker logs never dump `--version` text.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 10001 fetchnow \
     && useradd --system --uid 10001 --gid fetchnow --home-dir /app --shell /usr/sbin/nologin fetchnow \
-    && mkdir -p /app /var/lib/fetchnow/tmp \
-    && chown -R fetchnow:fetchnow /app /var/lib/fetchnow
+    && mkdir -p /app \
+        /var/lib/fetchnow/tmp/downloads \
+        /var/lib/fetchnow/tmp/media_inspection \
+    && chown -R fetchnow:fetchnow /app /var/lib/fetchnow \
+    && chmod 0700 /var/lib/fetchnow/tmp \
+        /var/lib/fetchnow/tmp/downloads \
+        /var/lib/fetchnow/tmp/media_inspection
 
 WORKDIR /app
 

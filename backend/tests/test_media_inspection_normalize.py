@@ -19,6 +19,7 @@ from fetchnow.media_inspection.models import (
 )
 from fetchnow.media_inspection.normalize import (
     format_option_id_for,
+    normalize_codec,
     project_metadata,
 )
 from fetchnow.media_inspection.ytdlp_parse import parse_ytdlp_json
@@ -342,6 +343,40 @@ def test_muxing_required_when_no_progressive() -> None:
     assert all(not f.free_tier_eligible for f in meta.formats)
 
 
+def test_muxing_enabled_derives_executable_options() -> None:
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["formats"] = [
+        {
+            "format_id": "v",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "protocol": "https",
+            "url": "https://example.invalid/v",
+        },
+        {
+            "format_id": "a",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/a",
+        },
+    ]
+    draft = _parse(payload)
+    meta = _project(draft, MEDIA_MUXING_ENABLED=True)
+    assert meta.muxing_required is False
+    executable = [
+        f for f in meta.formats if f.free_tier_eligible and f.has_video and f.has_audio
+    ]
+    assert executable
+    blob = repr(meta) + "".join(repr(f) for f in meta.formats)
+    assert "format_id" not in blob
+    assert "example.invalid" not in blob
+
+
 def test_generic_extractor_rejected() -> None:
     payload = copy.deepcopy(VK_FIXTURE)
     payload["extractor_key"] = "generic"
@@ -457,3 +492,55 @@ def test_format_repr_hides_secrets() -> None:
         free_tier_eligible=True,
     )
     assert "url720" not in repr(fmt)
+
+
+def test_codec_aliases_and_lookalikes() -> None:
+    assert normalize_codec("avc1.64001F", kind="video") is CodecFamily.AVC
+    assert normalize_codec("h264", kind="video") is CodecFamily.AVC
+    assert normalize_codec("h.264", kind="video") is CodecFamily.AVC
+    assert normalize_codec("mp4a.40.2", kind="audio") is CodecFamily.AAC
+    assert normalize_codec("aac", kind="audio") is CodecFamily.AAC
+    assert normalize_codec("av01.0.04M.08", kind="video") is CodecFamily.AV1
+    assert normalize_codec("notavc1.64001F", kind="video") is CodecFamily.UNKNOWN
+    assert normalize_codec("avc1x", kind="video") is CodecFamily.UNKNOWN
+    assert normalize_codec("mp4audio", kind="audio") is CodecFamily.UNKNOWN
+    assert normalize_codec("h2640", kind="video") is CodecFamily.UNKNOWN
+    assert normalize_codec("haac", kind="audio") is CodecFamily.UNKNOWN
+    assert normalize_codec(None, kind="video") is CodecFamily.NONE
+
+
+def test_public_formats_omit_split_streams() -> None:
+    draft = _parse(VK_FIXTURE)
+    meta = _project(draft)
+    assert all(
+        f.category is FormatCategory.PROGRESSIVE and f.has_video and f.has_audio
+        for f in meta.formats
+    )
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["formats"] = [
+        {
+            "format_id": "v",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "protocol": "https",
+            "url": "https://example.invalid/v",
+        },
+        {
+            "format_id": "a",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/a",
+        },
+    ]
+    meta_split = _project(_parse(payload))
+    assert meta_split.muxing_required is True
+    assert meta_split.formats == ()
+    meta_mux = _project(_parse(payload), MEDIA_MUXING_ENABLED=True)
+    assert meta_mux.muxing_required is False
+    assert meta_mux.formats
+    assert all(f.has_video and f.has_audio for f in meta_mux.formats)

@@ -21,12 +21,73 @@ class ComposeContractError(ValueError):
     """Rendered Compose contract failure."""
 
 
+OPTIONAL_ONESHOT_SERVICES = frozenset({"storage-init"})
+
+
 def _services(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg.get("services") or {}
 
 
 def _published_ports(service: dict[str, Any]) -> list[dict[str, Any]]:
     return list(service.get("ports") or [])
+
+
+def _service_environment(service: dict[str, Any]) -> dict[str, str]:
+    raw = service.get("environment") or {}
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        out: dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, str) and "=" in item:
+                key, value = item.split("=", 1)
+                out[key] = value
+        return out
+    return {}
+
+
+def _validate_storage_init(service: dict[str, Any], *, expected_api: str) -> None:
+    """Optional PR9 oneshot: same API image, no secrets, no network, no ports."""
+    image = service.get("image") or ""
+    if image != expected_api:
+        raise ComposeContractError(
+            f"storage-init image {image!r} != {expected_api!r}"
+        )
+    if _published_ports(service):
+        raise ComposeContractError("storage-init must not publish host ports")
+    restart = str(service.get("restart") or "no")
+    if restart not in {"no", "n", "false", ""}:
+        raise ComposeContractError("storage-init must not restart")
+    command = service.get("command")
+    text = " ".join(command) if isinstance(command, list) else str(command or "")
+    if "fetchnow-storage-init" not in text:
+        raise ComposeContractError("storage-init command must be fetchnow-storage-init")
+    if "sleep" in text.lower():
+        raise ComposeContractError("storage-init command must not sleep")
+    env = _service_environment(service)
+    forbidden = (
+        "DATABASE_URL",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_DB",
+        "MEDIA_INSPECTION_YTDLP_PATH",
+        "MEDIA_MUXING_FFMPEG_PATH",
+        "MEDIA_MUXING_FFPROBE_PATH",
+    )
+    leaked = [key for key in forbidden if key in env]
+    if leaked:
+        raise ComposeContractError(
+            f"storage-init must not receive {', '.join(leaked)}"
+        )
+    network_mode = str(service.get("network_mode") or "")
+    networks = service.get("networks")
+    if network_mode != "none":
+        raise ComposeContractError("storage-init must use network_mode none")
+    if networks:
+        raise ComposeContractError("storage-init must not join compose networks")
+    user = str(service.get("user") or "")
+    if not user or user in {"0", "root", "0:0"}:
+        raise ComposeContractError("storage-init must not run as root")
 
 
 def validate_staging_rendered(
@@ -44,10 +105,15 @@ def validate_staging_rendered(
     missing = [s for s in EXPECTED_SERVICES if s not in services]
     if missing:
         raise ComposeContractError(f"missing services: {', '.join(missing)}")
-    unknown = sorted(set(services) - set(EXPECTED_SERVICES))
+    unknown = sorted(set(services) - set(EXPECTED_SERVICES) - OPTIONAL_ONESHOT_SERVICES)
     if unknown:
         raise ComposeContractError(
             f"unknown services in staging render: {', '.join(unknown)}"
+        )
+
+    if "storage-init" in services:
+        _validate_storage_init(
+            services["storage-init"], expected_api=f"fetchnow-api:{rev}"
         )
 
     for name in ("api", "worker", "delivery", "web", "postgres"):

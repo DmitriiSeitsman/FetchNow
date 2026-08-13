@@ -107,6 +107,9 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     if (show) {
       for (const format of snapshot.formats) {
         const eligible = !snapshot.muxingBlocked && isDownloadEligible(format);
+        if (format.category !== "progressive" || !format.hasVideo || !format.hasAudio) {
+          continue;
+        }
         const item = document.createElement("label");
         item.className = "format" + (eligible ? "" : " format-disabled");
         const radio = document.createElement("input");
