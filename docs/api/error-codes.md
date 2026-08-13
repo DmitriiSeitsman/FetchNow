@@ -98,6 +98,8 @@ the job record; they are not an inline API yt-dlp path.
 Durable download execution is **disabled by default**
 (`MEDIA_DOWNLOADS_ENABLED=false`). When disabled, create returns
 `DOWNLOADS_DISABLED` (503). PR6 does **not** deliver media bytes to clients —
+that is PR7 (`GET /api/v1/media/download-jobs/{id}/content` on the dedicated
+delivery service, disabled by default).
 status exposes `artifactReady` only.
 
 | Code | HTTP | Public message policy | Retryable | Client should offer retry | Forbidden details to clients |
@@ -114,6 +116,8 @@ status exposes `artifactReady` only.
 | `DOWNLOAD_INVALID_OUTPUT` | 422 | Invalid produced invalid output | no | no | Filesystem paths |
 | `DOWNLOAD_STORAGE_UNAVAILABLE` | 503 | Storage temporarily unavailable | yes | yes | Disk paths, free-byte counts |
 | `DOWNLOAD_EXPIRED` | 410 | Download job or artifact expired | no | no | Storage keys |
+| `DELIVERY_DISABLED` | 503 | Artifact delivery is not available | yes | later | Feature flags, roots |
+| `DOWNLOAD_NOT_READY` | 409 | Download artifact is not ready for delivery | soft | yes (poll status) | Internal job state details beyond catalog |
 
 | Endpoint | Notes |
 |---|---|

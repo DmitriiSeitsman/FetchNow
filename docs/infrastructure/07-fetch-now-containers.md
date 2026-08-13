@@ -8,7 +8,8 @@
 |---|---|---|---|---|
 | `gateway` | `fetchnow-gateway:${FETCHNOW_RELEASE_REVISION}` (`local` or full SHA), `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет; OCI revision label |
 | `web` | `fetchnow-web:${FETCHNOW_RELEASE_REVISION}`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; dependency/volume нет; OCI revision label |
-| `api` | `fetchnow-api:${FETCHNOW_RELEASE_REVISION}`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; volume `tmp`; OCI revision label |
+| `api` | `fetchnow-api:${FETCHNOW_RELEASE_REVISION}`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; **без** volume `tmp` (PR7); OCI revision label |
+| `delivery` | тот же `fetchnow-api` image, `fetchnow-delivery` | `8000` internal only; host port нет | UID 10001 | read-only `tmp`; `MEDIA_DELIVERY_*` only; код не вызывает yt-dlp и не получает configured path (binary в shared image остаётся; lean image — follow-up) |
 | `worker` | тот же `fetchnow-api` image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; volume `tmp`; inherits API image label |
 | `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
 
@@ -19,11 +20,11 @@
 
 ### gateway и web
 
-Оба non-root (UID 10001), persistent state отсутствует. Restart запускает тот же container/image, recreate создаёт container заново. Gateway передаёт request ID и пишет access log в stdout. Логи: `docker compose ... logs gateway web`.
+Оба non-root (UID 10001), persistent state отсутствует. Restart запускает тот же container/image, recreate создаёт container заново. Gateway передаёт request ID и пишет access log в stdout. Upstream `api` и `web` резолвятся при загрузке конфига, поэтому их отсутствие не даст gateway стартовать; `delivery` резолвится per-request через Docker DNS, так что мёртвый delivery даёт 502 только на content route и не роняет фронтенд. Логи: `docker compose ... logs gateway web`.
 
 ### api
 
-Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (development `local`, staging full SHA); процесс non-root UID 10001 и подключает logical volume `tmp` к `/var/lib/fetchnow/tmp` (Docker name `{project}_tmp`). Final stage несёт `org.opencontainers.image.revision`. Operator release builds (PRD1C2) materialize an exact `git archive` snapshot and build revision tags from that snapshot — not from a dirty worktree; see [глава 25](25-release-materialization-build.md). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет. См. [главу 24](24-release-preflight-health.md).
+Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (development `local`, staging full SHA); процесс non-root UID 10001. С PR7 api не монтирует volume `tmp`: приватные артефакты видят только `worker` (read-write) и `delivery` (read-only). Final stage несёт `org.opencontainers.image.revision`. Operator release builds (PRD1C2) materialize an exact `git archive` snapshot and build revision tags from that snapshot — not from a dirty worktree; see [глава 25](25-release-materialization-build.md). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Логи: service `api`; liveness не проверяет БД, readiness проверяет. См. [главу 24](24-release-preflight-health.md).
 
 ### worker
 
@@ -36,7 +37,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 ## Volumes
 
 - `pgdata` → `{project}_pgdata` — persistent database state.
-- `tmp` → `{project}_tmp` — общий временный storage API/worker; worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume (private; не публичный delivery).
+- `tmp` → `{project}_tmp` — общий временный storage: `worker` монтирует read-write, `delivery` — read-only, `api` не монтирует вовсе (PR7). Worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume и отдаются наружу только через authenticated delivery route; публичного static-доступа нет.
 
 При `COMPOSE_PROJECT_NAME=fetchnow` имена совпадают с историческими `fetchnow_pgdata` / `fetchnow_tmp`. Staging (`fetchnow-staging`) получает отдельные volumes. Explicit global `name:` больше не используется (PRD1A).
 

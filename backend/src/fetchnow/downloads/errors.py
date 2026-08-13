@@ -26,6 +26,8 @@ class DownloadErrorCode(StrEnum):
     DOWNLOAD_INVALID_OUTPUT = "DOWNLOAD_INVALID_OUTPUT"
     DOWNLOAD_STORAGE_UNAVAILABLE = "DOWNLOAD_STORAGE_UNAVAILABLE"
     DOWNLOAD_EXPIRED = "DOWNLOAD_EXPIRED"
+    DELIVERY_DISABLED = "DELIVERY_DISABLED"
+    DOWNLOAD_NOT_READY = "DOWNLOAD_NOT_READY"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -46,6 +48,10 @@ _PUBLIC_MESSAGES: dict[DownloadErrorCode, str] = {
         "Download storage is temporarily unavailable."
     ),
     DownloadErrorCode.DOWNLOAD_EXPIRED: "The download job or artifact expired.",
+    DownloadErrorCode.DELIVERY_DISABLED: "Artifact delivery is not available.",
+    DownloadErrorCode.DOWNLOAD_NOT_READY: (
+        "The download artifact is not ready for delivery."
+    ),
     DownloadErrorCode.INTERNAL_ERROR: "An unexpected error occurred.",
 }
 
@@ -62,6 +68,8 @@ _HTTP_STATUS: dict[DownloadErrorCode, int] = {
     DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT: 422,
     DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE: 503,
     DownloadErrorCode.DOWNLOAD_EXPIRED: 410,
+    DownloadErrorCode.DELIVERY_DISABLED: 503,
+    DownloadErrorCode.DOWNLOAD_NOT_READY: 409,
     DownloadErrorCode.INTERNAL_ERROR: 500,
 }
 

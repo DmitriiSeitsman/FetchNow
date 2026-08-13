@@ -39,6 +39,16 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
 
+  delivery:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.staging}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.staging}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.staging}
+
   web:
     image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
     build:

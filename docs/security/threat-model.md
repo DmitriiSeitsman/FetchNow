@@ -164,8 +164,18 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Attack | Guess download UUID; steal parent Bearer; flood download enqueue; fill disk with artifacts |
 | Impact | Unauthorized status read; capacity/disk exhaustion |
 | Mitigation | Parent MediaJob credential authorizes download create/status; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; private artifact root never exposed; `artifactReady` boolean only; `MEDIA_DOWNLOAD_CONCURRENCY` exactly 1; min free disk before claim; runtime output size monitor; feature default off |
-| Residual risk | yt-dlp own HTTP outside SafeHTTPClient; no client file delivery yet (delivery PR still pending) |
-| Planned PR | Signed/direct delivery + stronger isolation in later PRs |
+| Residual risk | yt-dlp own HTTP outside SafeHTTPClient |
+| Planned PR | Stronger isolation / rate limits in later PRs |
+
+### Artifact delivery abuse (PR7)
+
+| Field | Detail |
+|---|---|
+| Attack | Guess download UUID for content; steal parent Bearer; path/symlink escape; Range abuse; API process reads private store |
+| Impact | Unauthorized byte exfiltration; resource exhaustion |
+| Mitigation | Dedicated `delivery` service; parent Bearer required; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; FD-relative `O_NOFOLLOW` opens; single bounded Range; API/gateway do not mount artifact root; delivery mount read-only; feature default off; process-local concurrency only |
+| Residual risk | Stolen Bearer until TTL; no cross-replica download rate limit; full-file digest not recomputed per GET; shared image still contains yt-dlp (delivery never invokes / no configured path); shared `DATABASE_URL` is not an enforced read-only DB role |
+| Planned PR | Optional offline integrity scans / abuse quotas |
 
 ### Media inspection SSRF / extractor escape (PR4)
 

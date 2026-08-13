@@ -50,7 +50,7 @@ def validate_staging_rendered(
             f"unknown services in staging render: {', '.join(unknown)}"
         )
 
-    for name in ("api", "worker", "web", "postgres"):
+    for name in ("api", "worker", "delivery", "web", "postgres"):
         if _published_ports(services[name]):
             raise ComposeContractError(f"{name} must not publish host ports")
 
@@ -106,6 +106,7 @@ def validate_staging_rendered(
 
     api_image = services["api"].get("image") or ""
     worker_image = services["worker"].get("image") or ""
+    delivery_image = services["delivery"].get("image") or ""
     web_image = services["web"].get("image") or ""
     gateway_image = services["gateway"].get("image") or ""
     postgres_image = services["postgres"].get("image") or ""
@@ -117,6 +118,10 @@ def validate_staging_rendered(
         raise ComposeContractError(f"api image {api_image!r} != {expected_api!r}")
     if worker_image != expected_api:
         raise ComposeContractError(f"worker image {worker_image!r} != {expected_api!r}")
+    if delivery_image != expected_api:
+        raise ComposeContractError(
+            f"delivery image {delivery_image!r} != {expected_api!r}"
+        )
     if web_image != expected_web:
         raise ComposeContractError(f"web image {web_image!r} != {expected_web!r}")
     if gateway_image != expected_gateway:

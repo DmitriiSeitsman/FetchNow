@@ -66,7 +66,7 @@ from .journal import (
     write_result,
 )
 from .manifest import load_manifest, manifest_path
-from .override import write_images_override
+from .override import compose_files_include_delivery, write_images_override
 from .redact import redact
 from .rollout_lock import RolloutLock
 from .stabilize import StabilizationPolicy, stabilize_full_health, wait_services_healthy
@@ -97,13 +97,16 @@ class RecoverResult:
     recovery_id: str | None = None
 
 
-def _compose_with_override(release_directory: Path, override: Path) -> tuple[Path, ...]:
+def _release_compose_files(release_directory: Path) -> tuple[Path, ...]:
     source = release_directory / SOURCE_DIRNAME
     return (
         (source / "compose.yaml").resolve(),
         (source / "compose.staging.yaml").resolve(),
-        override.resolve(),
     )
+
+
+def _compose_with_override(release_directory: Path, override: Path) -> tuple[Path, ...]:
+    return (*_release_compose_files(release_directory), override.resolve())
 
 
 def _idempotent_if_resolved(dep_dir: Path) -> RecoverResult | None:
@@ -189,6 +192,9 @@ def _execute_accept_target(
         plan.target_image_ids,
         deployment_id=plan.deployment_id,
         release_revision=plan.target_revision,
+        include_delivery=compose_files_include_delivery(
+            _release_compose_files(release)
+        ),
     )
     compose_files = _compose_with_override(release, override)
     health_inp = HealthInput(
@@ -275,6 +281,9 @@ def _execute_rollback(
         plan.previous_image_ids,
         deployment_id=plan.deployment_id,
         release_revision=prev,
+        include_delivery=compose_files_include_delivery(
+            _release_compose_files(prev_release)
+        ),
     )
     compose_files = _compose_with_override(prev_release, override)
     cwd = prev_release / SOURCE_DIRNAME

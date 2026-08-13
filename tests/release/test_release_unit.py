@@ -34,6 +34,10 @@ def _good_cfg(rev: str) -> dict:
         "services": {
             "api": {"image": f"fetchnow-api:{rev}", "volumes": []},
             "worker": {"image": f"fetchnow-api:{rev}", "command": ["fetchnow-worker"]},
+            "delivery": {
+                "image": f"fetchnow-api:{rev}",
+                "command": ["fetchnow-delivery"],
+            },
             "web": {"image": f"fetchnow-web:{rev}"},
             "gateway": {
                 "image": f"fetchnow-gateway:{rev}",
@@ -367,7 +371,7 @@ def test_health_unhealthy_and_duplicate(
 
     def all_services_dup(_inp):  # noqa: ANN001
         rows = []
-        for svc in ("gateway", "api", "worker", "postgres", "web"):
+        for svc in ("gateway", "api", "worker", "delivery", "postgres", "web"):
             rows.append(
                 {
                     "Service": svc,
@@ -375,7 +379,7 @@ def test_health_unhealthy_and_duplicate(
                     "Health": "healthy",
                     "ID": f"id-{svc}",
                     "Image": f"fetchnow-api:{rev}"
-                    if svc in {"api", "worker"}
+                    if svc in {"api", "worker", "delivery"}
                     else f"fetchnow-{svc}:{rev}".replace(
                         "fetchnow-postgres", "postgres:16.9-alpine"
                     ),
@@ -413,13 +417,17 @@ def test_health_wrong_project_label(
     rev = "e" * 40
     monkeypatch.setattr("fetchnow_release.health.require_compose_v2", lambda: None)
     monkeypatch.setattr("fetchnow_release.health.require_docker_daemon", lambda: None)
+    monkeypatch.setattr(
+        "fetchnow_release.health.compose_files_include_delivery", lambda _paths: True
+    )
 
     def rows(_inp):  # noqa: ANN001
         out = []
-        for svc in ("gateway", "api", "worker", "postgres", "web"):
+        for svc in ("gateway", "api", "worker", "delivery", "postgres", "web"):
             image = {
                 "api": f"fetchnow-api:{rev}",
                 "worker": f"fetchnow-api:{rev}",
+                "delivery": f"fetchnow-api:{rev}",
                 "web": f"fetchnow-web:{rev}",
                 "gateway": f"fetchnow-gateway:{rev}",
                 "postgres": "postgres:16.9-alpine",
@@ -445,7 +453,11 @@ def test_health_wrong_project_label(
                 },
                 "Image": f"img-{svc}",
             },
-            "Image": "sha256:shared" if svc in {"api", "worker"} else f"sha256:{svc}",
+            "Image": (
+                "sha256:shared"
+                if svc in {"api", "worker", "delivery"}
+                else f"sha256:{svc}"
+            ),
             "State": {"Status": "running", "Health": {"Status": "healthy"}},
             "RestartCount": 0,
         }
@@ -474,6 +486,9 @@ def test_health_wrong_oci_and_exited(
     rev = "f" * 40
     monkeypatch.setattr("fetchnow_release.health.require_compose_v2", lambda: None)
     monkeypatch.setattr("fetchnow_release.health.require_docker_daemon", lambda: None)
+    monkeypatch.setattr(
+        "fetchnow_release.health.compose_files_include_delivery", lambda _paths: True
+    )
 
     def rows(_inp):  # noqa: ANN001
         return [
@@ -485,12 +500,13 @@ def test_health_wrong_oci_and_exited(
                 "Image": {
                     "api": f"fetchnow-api:{rev}",
                     "worker": f"fetchnow-api:{rev}",
+                    "delivery": f"fetchnow-api:{rev}",
                     "web": f"fetchnow-web:{rev}",
                     "gateway": f"fetchnow-gateway:{rev}",
                     "postgres": "postgres:16.9-alpine",
                 }[svc],
             }
-            for svc in ("gateway", "api", "worker", "postgres", "web")
+            for svc in ("gateway", "api", "worker", "delivery", "postgres", "web")
         ]
 
     def inspect(cid: str) -> dict:

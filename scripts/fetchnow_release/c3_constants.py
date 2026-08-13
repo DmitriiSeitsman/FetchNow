@@ -21,8 +21,11 @@ PLAN_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 EVENT_SCHEMA_VERSION = 1
 
+# Persisted application image identity remains backward-compatible with
+# pre-PR7 current.json: delivery shares the immutable API image ID.
 APPLICATION_SERVICES = ("api", "worker", "web", "gateway")
-APP_SERVICES_BEFORE_GATEWAY = ("api", "worker", "web")
+RUNTIME_APPLICATION_SERVICES = ("api", "worker", "delivery", "web", "gateway")
+APP_SERVICES_BEFORE_GATEWAY = ("api", "worker", "delivery", "web")
 
 # Journal / result statuses
 STATUS_PLANNED = "planned"

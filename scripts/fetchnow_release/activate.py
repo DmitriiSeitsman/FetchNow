@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .c3_constants import APP_SERVICES_BEFORE_GATEWAY, APPLICATION_SERVICES
+from .c3_constants import APP_SERVICES_BEFORE_GATEWAY, RUNTIME_APPLICATION_SERVICES
 from .redact import redact
 
 
@@ -27,7 +27,7 @@ def build_activate_argv(
     bad = set(services) & forbidden
     if bad:
         raise ActivateError(f"refusing to mutate postgres in rollout: {sorted(bad)}")
-    unknown = set(services) - set(APPLICATION_SERVICES)
+    unknown = set(services) - set(RUNTIME_APPLICATION_SERVICES)
     if unknown:
         raise ActivateError(f"unknown application services: {sorted(unknown)}")
     argv = [

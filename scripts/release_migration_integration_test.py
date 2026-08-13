@@ -280,7 +280,7 @@ def read_sentinel(compose: list[str], clone: Path, marker: str) -> str:
 
 def container_ids(compose: list[str], clone: Path) -> dict[str, str]:
     ids: dict[str, str] = {}
-    for svc in ("api", "worker", "web", "gateway", "postgres"):
+    for svc in ("api", "worker", "delivery", "web", "gateway", "postgres"):
         cid = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
         if not cid:
             raise RuntimeError(f"missing running container for {svc}")

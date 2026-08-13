@@ -10,15 +10,35 @@ from .c3_constants import (
     IMAGES_OVERRIDE_NAME,
     LABEL_DEPLOYMENT_ID,
     LABEL_RELEASE_REVISION,
+    RUNTIME_APPLICATION_SERVICES,
 )
 from .journal_io import JournalIOError, atomic_write_text
 from .manifest import ImageRecord, ReleaseManifest
 
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_DELIVERY_SERVICE_RE = re.compile(r"(?m)^  delivery:\s*(?:#.*)?$")
 
 
 class OverrideError(ValueError):
     """Invalid image override generation."""
+
+
+def compose_files_include_delivery(compose_files: tuple[Path, ...]) -> bool:
+    """Return whether a verified Compose source declares the PR7 service.
+
+    Older prepared releases (through PR6) intentionally lack delivery. This
+    keeps rollback/recovery from introducing a phantom service through an
+    override file alone.
+    """
+    for path in compose_files:
+        try:
+            if path.name == "compose.yaml" and _DELIVERY_SERVICE_RE.search(
+                path.read_text(encoding="utf-8")
+            ):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def image_ids_from_manifest(manifest: ReleaseManifest) -> dict[str, str]:
@@ -46,6 +66,7 @@ def render_images_override(
     *,
     deployment_id: str | None = None,
     release_revision: str | None = None,
+    include_delivery: bool = False,
 ) -> str:
     """Render a Compose override pinning app services; excludes postgres."""
     for svc in APPLICATION_SERVICES:
@@ -79,9 +100,15 @@ def render_images_override(
         "# Do not edit. Pins application services only.",
         "services:",
     ]
-    for svc in APPLICATION_SERVICES:
+    runtime_services = tuple(
+        svc
+        for svc in RUNTIME_APPLICATION_SERVICES
+        if svc != "delivery" or include_delivery
+    )
+    for svc in runtime_services:
+        image_key = "api" if svc == "delivery" else svc
         lines.append(f"  {svc}:")
-        lines.append(f"    image: {image_ids[svc]}")
+        lines.append(f"    image: {image_ids[image_key]}")
         lines.append("    pull_policy: never")
         if deployment_id is not None and release_revision is not None:
             lines.append("    labels:")
@@ -97,6 +124,7 @@ def write_images_override(
     *,
     deployment_id: str | None = None,
     release_revision: str | None = None,
+    include_delivery: bool = False,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / IMAGES_OVERRIDE_NAME
@@ -104,6 +132,7 @@ def write_images_override(
         image_ids,
         deployment_id=deployment_id,
         release_revision=release_revision,
+        include_delivery=include_delivery,
     )
     if "postgres" in text.split("services:", 1)[-1].split("\n")[0:20]:
         # Belt-and-suspenders: body after services: must not define postgres.

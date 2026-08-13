@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -133,13 +134,14 @@ def check_dev_config() -> None:
     _check_no_container_name(cfg, "dev")
     _check_volumes_project_scoped(cfg, "dev")
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web"):
+    for required in ("gateway", "api", "worker", "postgres", "web", "delivery"):
         _assert(required in services, f"dev: missing service {required}")
     # Local override publishes gateway 8080 and api 8000.
     _assert(_has_host_ports(services["gateway"]), "dev: gateway should publish a port")
     _assert(_has_host_ports(services["api"]), "dev: api debug port expected via override")
     _assert(not _has_host_ports(services["postgres"]), "dev: postgres must not publish")
     _assert(not _has_host_ports(services["worker"]), "dev: worker must not publish")
+    _assert(not _has_host_ports(services["delivery"]), "dev: delivery must not publish")
     _assert(not _has_host_ports(services["web"]), "dev: web must not publish")
     _assert(
         services["api"].get("image") == "fetchnow-api:local",
@@ -148,6 +150,10 @@ def check_dev_config() -> None:
     _assert(
         services["worker"].get("image") == "fetchnow-api:local",
         "dev: worker must share fetchnow-api:local",
+    )
+    _assert(
+        services["delivery"].get("image") == "fetchnow-api:local",
+        "dev: delivery must share fetchnow-api:local",
     )
     _assert(
         services["web"].get("image") == "fetchnow-web:local",
@@ -216,10 +222,10 @@ def check_staging_config() -> None:
     _check_no_reload_command(cfg, "staging")
 
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web"):
+    for required in ("gateway", "api", "worker", "postgres", "web", "delivery"):
         _assert(required in services, f"staging: missing service {required}")
 
-    for name in ("api", "worker", "web", "postgres"):
+    for name in ("api", "worker", "web", "postgres", "delivery"):
         _assert(
             not _has_host_ports(services[name]),
             f"staging: {name} must not publish host ports",
@@ -251,6 +257,10 @@ def check_staging_config() -> None:
     _assert(
         services["worker"].get("image") == f"fetchnow-api:{revision}",
         "staging: worker must share api image tag",
+    )
+    _assert(
+        services["delivery"].get("image") == f"fetchnow-api:{revision}",
+        "staging: delivery must share api image tag",
     )
     _assert(
         services["web"].get("image") == f"fetchnow-web:{revision}",
@@ -404,6 +414,7 @@ def check_media_jobs_env_split() -> None:
     services = _services(cfg)
     api_env = services["api"].get("environment") or {}
     worker_env = services["worker"].get("environment") or {}
+    delivery_env = services["delivery"].get("environment") or {}
     _assert(
         "MEDIA_INSPECTION_YTDLP_PATH" not in api_env,
         "base: api must not receive MEDIA_INSPECTION_YTDLP_PATH",
@@ -413,6 +424,18 @@ def check_media_jobs_env_split() -> None:
         "base: api must not receive MEDIA_DOWNLOAD_TEMP_ROOT",
     )
     _assert(
+        "MEDIA_DELIVERY_ROOT" not in api_env,
+        "base: api must not receive MEDIA_DELIVERY_ROOT",
+    )
+    _assert(
+        "MEDIA_INSPECTION_YTDLP_PATH" not in delivery_env,
+        "base: delivery must not receive MEDIA_INSPECTION_YTDLP_PATH",
+    )
+    _assert(
+        "MEDIA_DOWNLOAD_TEMP_ROOT" not in delivery_env,
+        "base: delivery must not receive MEDIA_DOWNLOAD_TEMP_ROOT",
+    )
+    _assert(
         str(api_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
         "base: MEDIA_JOBS_ENABLED must default false on api",
     )
@@ -420,6 +443,11 @@ def check_media_jobs_env_split() -> None:
         str(api_env.get("MEDIA_DOWNLOADS_ENABLED", "false")).lower()
         in {"false", "0"},
         "base: MEDIA_DOWNLOADS_ENABLED must default false on api",
+    )
+    _assert(
+        str(delivery_env.get("MEDIA_DELIVERY_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_DELIVERY_ENABLED must default false on delivery",
     )
     _assert(
         str(worker_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
@@ -448,7 +476,108 @@ def check_media_jobs_env_split() -> None:
         path.endswith("/yt-dlp") or path == "/opt/venv/bin/yt-dlp",
         f"base: unexpected worker yt-dlp path {path!r}",
     )
+
+    def _volume_sources(svc: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for mount in svc.get("volumes") or []:
+            if isinstance(mount, dict):
+                out.append(str(mount.get("source") or ""))
+            elif isinstance(mount, str):
+                out.append(mount.split(":", 1)[0])
+        return out
+
+    def _mount_read_only(svc: dict[str, Any], source: str) -> bool | None:
+        for mount in svc.get("volumes") or []:
+            if isinstance(mount, dict) and str(mount.get("source") or "") == source:
+                return bool(mount.get("read_only"))
+            if isinstance(mount, str) and mount.startswith(f"{source}:"):
+                return mount.rstrip(":").endswith(":ro") or ":ro:" in f"{mount}:"
+        return None
+
+    api_vols = _volume_sources(services["api"])
+    gateway_vols = _volume_sources(services["gateway"])
+    delivery_vols = _volume_sources(services["delivery"])
+    worker_vols = _volume_sources(services["worker"])
+    _assert("tmp" not in api_vols, "base: api must not mount artifact tmp volume")
+    _assert(
+        "tmp" not in gateway_vols,
+        "base: gateway must not mount artifact tmp volume",
+    )
+    _assert("tmp" in delivery_vols, "base: delivery must mount tmp volume")
+    _assert("tmp" in worker_vols, "base: worker must mount tmp volume")
+    _assert(
+        _mount_read_only(services["delivery"], "tmp") is True,
+        "base: delivery tmp mount must be read-only",
+    )
+    _assert(
+        _mount_read_only(services["worker"], "tmp") is not True,
+        "base: worker tmp mount must remain read-write",
+    )
+    _assert(
+        not _has_host_ports(services["delivery"]),
+        "base: delivery must not publish host ports",
+    )
     print("OK: media jobs env split (api vs worker)")
+    print(
+        "OK: delivery isolation (ro volume, no configured yt-dlp path, no host port)"
+    )
+
+
+def _nginx_config_test(
+    image: str, conf: Path, hosts: tuple[str, ...]
+) -> subprocess.CompletedProcess[str]:
+    add_hosts: list[str] = []
+    for host in hosts:
+        add_hosts += ["--add-host", f"{host}:127.0.0.1"]
+    return subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{conf}:/etc/nginx/nginx.conf:ro",
+            *add_hosts,
+            image,
+            "nginx",
+            "-t",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def check_gateway_nginx_config() -> None:
+    """Load the shipped nginx.conf with the pinned nginx image.
+
+    A location regex with unquoted braces (``{36}``) parses as a block opener
+    and makes the gateway exit at startup, so reading the file is not enough.
+    Upstream names are stubbed because nginx resolves them when loading config.
+    """
+    dockerfile = (ROOT / "deploy" / "nginx" / "Dockerfile").read_text(encoding="utf-8")
+    base = re.search(r"(?m)^FROM\s+(nginx:\S+)", dockerfile)
+    _assert(base is not None, "gateway: cannot resolve pinned nginx base image")
+    assert base is not None
+    image = base.group(1)
+    conf = ROOT / "deploy" / "nginx" / "nginx.conf"
+
+    full = _nginx_config_test(image, conf, ("api", "web", "delivery"))
+    _assert(
+        full.returncode == 0,
+        f"gateway: nginx -t rejected nginx.conf:\n{full.stderr or full.stdout}",
+    )
+    print("OK: gateway nginx config loads under the pinned nginx image")
+
+    # Delivery must stay a per-request lookup. A static upstream is resolved when
+    # the config loads, so an absent delivery would stop the whole gateway.
+    degraded = _nginx_config_test(image, conf, ("api", "web"))
+    _assert(
+        degraded.returncode == 0,
+        "gateway: nginx.conf must load while delivery is unresolvable:\n"
+        f"{degraded.stderr or degraded.stdout}",
+    )
+    print("OK: gateway nginx config loads while delivery is unresolvable")
 
 
 def main() -> int:
@@ -459,6 +588,7 @@ def main() -> int:
     check_staging_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
+    check_gateway_nginx_config()
     print("All Compose contract checks passed.")
     return 0
 

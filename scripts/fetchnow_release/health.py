@@ -18,7 +18,11 @@ from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import sha256_file
 from .journal_io import JournalIOError
 from .manifest import ManifestError, load_manifest, manifest_path
-from .override import OverrideError, image_ids_from_manifest
+from .override import (
+    OverrideError,
+    compose_files_include_delivery,
+    image_ids_from_manifest,
+)
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
 
@@ -39,7 +43,7 @@ class HealthInput:
     # exclusively from validated schema-v2 current state and its release manifest.
     deploy_root: Path | None = None
     # When set (PRD1C3A image-ID activation), require exact inspect IDs for
-    # api/worker/web/gateway instead of tag-string matching alone. This internal
+    # api/worker/delivery/web/gateway instead of tag-string matching alone. This internal
     # field is used by rollout/recovery; managed standalone health must not set it.
     expected_image_ids: dict[str, str] | None = None
 
@@ -166,6 +170,11 @@ def run_health(inp: HealthInput) -> HealthResult:
             assert_isolated_tag_health_project(inp.project_name)
 
         rows = _ps_services(inp)
+        runtime_expected = tuple(
+            svc
+            for svc in EXPECTED_SERVICES
+            if svc != "delivery" or compose_files_include_delivery(inp.compose_files)
+        )
         by_service: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             # Compose v2/v5 field names vary: Service / Name / Project
@@ -177,7 +186,7 @@ def run_health(inp: HealthInput) -> HealthResult:
                 svc = parts[-2] if len(parts) >= 2 else name
             by_service.setdefault(str(svc), []).append(row)
 
-        for expected in EXPECTED_SERVICES:
+        for expected in runtime_expected:
             if expected not in by_service:
                 raise HealthError(f"missing service container: {expected}")
             if len(by_service[expected]) != 1:
@@ -185,14 +194,15 @@ def run_health(inp: HealthInput) -> HealthResult:
                     f"service {expected} has {len(by_service[expected])} containers; expected 1"
                 )
 
-        unknown = sorted(set(by_service) - set(EXPECTED_SERVICES))
+        unknown = sorted(set(by_service) - set(runtime_expected))
         if unknown:
             raise HealthError(f"unknown/orphan services present: {', '.join(unknown)}")
 
         api_image_id = None
         worker_image_id = None
+        delivery_image_id = None
 
-        for svc_name in EXPECTED_SERVICES:
+        for svc_name in runtime_expected:
             row = by_service[svc_name][0]
             state = str(row.get("State") or row.get("state") or "").lower()
             health = str(row.get("Health") or row.get("health") or "").lower()
@@ -229,15 +239,15 @@ def run_health(inp: HealthInput) -> HealthResult:
             image_ref = str(row.get("Image") or image)
             image_id = str(info.get("Image") or "")
 
-            if svc_name in {"api", "worker", "web", "gateway"}:
+            if svc_name in {"api", "worker", "delivery", "web", "gateway"}:
                 oci = labels.get(OCI_REVISION_LABEL)
                 if oci != rev:
                     raise HealthError(
                         f"{svc_name} OCI revision label {oci!r} != {rev!r}"
                     )
                 if expected_ids is not None:
-                    # Worker shares the API image ID contract.
-                    key = "api" if svc_name == "worker" else svc_name
+                    # Worker and delivery share the API image ID contract.
+                    key = "api" if svc_name in {"worker", "delivery"} else svc_name
                     want = expected_ids.get(key)
                     if not want:
                         raise HealthError(f"missing expected image ID for {key}")
@@ -246,7 +256,7 @@ def run_health(inp: HealthInput) -> HealthResult:
                             f"{svc_name} image ID {image_id!r} != expected {want!r}"
                         )
                 else:
-                    if svc_name in {"api", "worker"}:
+                    if svc_name in {"api", "worker", "delivery"}:
                         if (
                             f":{rev}" not in image_ref
                             and not image_ref.endswith(f":{rev}")
@@ -280,6 +290,8 @@ def run_health(inp: HealthInput) -> HealthResult:
                 api_image_id = image_id
             if svc_name == "worker":
                 worker_image_id = image_id
+            if svc_name == "delivery":
+                delivery_image_id = image_id
 
             # Health from inspect when configured. Worker has healthcheck disabled.
             health_obj = (info.get("State") or {}).get("Health")
@@ -299,6 +311,8 @@ def run_health(inp: HealthInput) -> HealthResult:
 
         if api_image_id and worker_image_id and api_image_id != worker_image_id:
             raise HealthError("api and worker must share the same image ID")
+        if api_image_id and delivery_image_id and api_image_id != delivery_image_id:
+            raise HealthError("api and delivery must share the same image ID")
 
         for path in ("/api/v1/health/live", "/api/v1/health/ready"):
             result = check_endpoint(inp.gateway_base_url, path)

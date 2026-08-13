@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5) + **durable download execution foundation** (PR6: private artifacts, create/status only; **disabled by default**). **FetchNow still does not deliver media bytes to clients.** There is no public file download endpoint or ffmpeg pipeline. Job create/status never run yt-dlp in the API process.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5) + **durable download execution foundation** (PR6: private artifacts, create/status only; **disabled by default**) + **authenticated private artifact delivery** (PR7: dedicated `delivery` service; **disabled by default**). There is no ffmpeg pipeline and no permanent storage.
 
 ## Architecture
 
@@ -12,11 +12,12 @@ FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro sta
 |---|---|
 | `gateway` | Nginx reverse proxy; only published entrypoint |
 | `web` | Astro static site served by Nginx |
-| `api` | FastAPI HTTP API |
+| `api` | FastAPI HTTP API (validate/probe/resolve/jobs create+status) |
+| `delivery` | Authenticated artifact streaming; read-only artifact mount; shared image (no configured yt-dlp path) |
 | `worker` | Claims inspection/download jobs when enabled; same Python package |
 | `postgres` | PostgreSQL (durable media/download job queues; no Redis) |
 
-Named volumes (project-scoped): `{project}_pgdata` (database), `{project}_tmp` (future temporary media files). With local `COMPOSE_PROJECT_NAME=fetchnow` these resolve to `fetchnow_pgdata` / `fetchnow_tmp`.
+Named volumes (project-scoped): `{project}_pgdata` (database), `{project}_tmp` (worker/delivery private artifacts). With local `COMPOSE_PROJECT_NAME=fetchnow` these resolve to `fetchnow_pgdata` / `fetchnow_tmp`. The `api` and `gateway` services do **not** mount the artifact volume.
 
 ## Security posture
 
@@ -28,6 +29,7 @@ Security and product boundaries are documented **before** media processing ships
 - Media inspection foundation: metadata-only VK/Rutube adapter behind a hardened yt-dlp subprocess boundary ([ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md)). Disabled by default; no media bytes downloaded; direct media URLs stay internal.
 - Durable media-inspection jobs: PostgreSQL queue with client-generated access tokens, `SKIP LOCKED` claims, and lease fencing ([ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md)). Defaults off; API does not run yt-dlp.
 - Durable download execution foundation: progressive download jobs, exact option rebinding, private artifact store ([ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md)). Defaults off; no client file delivery in PR6.
+- Authenticated private artifact delivery: dedicated `delivery` process, parent Bearer auth, FD-based streaming ([ADR 0011](docs/adr/0011-authenticated-private-artifact-delivery.md)). Defaults off; API does not mount artifact storage; delivery never invokes yt-dlp and receives no tool path (shared image still contains the binary; DB role is not read-only).
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).

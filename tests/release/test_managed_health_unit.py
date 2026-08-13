@@ -123,6 +123,9 @@ def _patch_healthy_runtime(
     monkeypatch.setattr("fetchnow_release.health.require_compose_v2", lambda: None)
     monkeypatch.setattr("fetchnow_release.health.require_docker_daemon", lambda: None)
     monkeypatch.setattr(
+        "fetchnow_release.health.compose_files_include_delivery", lambda _paths: True
+    )
+    monkeypatch.setattr(
         "fetchnow_release.health.assert_release_images_present",
         lambda manifest: image_ids_from_manifest(manifest),
     )
@@ -135,15 +138,23 @@ def _patch_healthy_runtime(
                 "Health": "" if service == "worker" else "healthy",
                 "ID": f"cid-{service}",
                 # Managed health must not require this to contain a revision tag.
-                "Image": ids.get(service, "postgres:16.9-alpine"),
+                "Image": (
+                    ids["api"]
+                    if service == "delivery"
+                    else ids.get(service, "postgres:16.9-alpine")
+                ),
             }
-            for service in ("gateway", "api", "worker", "postgres", "web")
+            for service in ("gateway", "api", "worker", "delivery", "postgres", "web")
         ],
     )
 
     def inspect(container_id: str) -> dict[str, object]:
         service = container_id.removeprefix("cid-")
-        image_id = ids.get(service, "sha256:" + ("9" * 64))
+        image_id = (
+            ids["api"]
+            if service == "delivery"
+            else ids.get(service, "sha256:" + ("9" * 64))
+        )
         state: dict[str, object] = {"Status": "running"}
         if service != "worker":
             state["Health"] = {"Status": "healthy"}
@@ -320,6 +331,7 @@ def test_isolated_tag_mode_still_passes_for_health_test_project(
     tagged = {
         "api": f"fetchnow-api:{REVISION}",
         "worker": f"fetchnow-api:{REVISION}",
+        "delivery": f"fetchnow-api:{REVISION}",
         "web": f"fetchnow-web:{REVISION}",
         "gateway": f"fetchnow-gateway:{REVISION}",
     }
@@ -331,7 +343,7 @@ def test_isolated_tag_mode_still_passes_for_health_test_project(
             "ID": f"cid-{service}",
             "Image": tagged.get(service, "postgres:16.9-alpine"),
         }
-        for service in ("gateway", "api", "worker", "postgres", "web")
+        for service in ("gateway", "api", "worker", "delivery", "postgres", "web")
     ]
     monkeypatch.setattr("fetchnow_release.health._ps_services", lambda _inp: original_ps)
     result = run_health(

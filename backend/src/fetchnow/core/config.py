@@ -371,6 +371,34 @@ class Settings(BaseSettings):
         le=120,
     )
 
+    # Authenticated private artifact delivery (PR7) — fail closed / disabled by
+    # default. Delivery process only; API never mounts the artifact root.
+    media_delivery_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_DELIVERY_ENABLED",
+    )
+    media_delivery_root: str = Field(
+        default="",
+        alias="MEDIA_DELIVERY_ROOT",
+    )
+    media_delivery_chunk_bytes: int = Field(
+        default=65_536,
+        alias="MEDIA_DELIVERY_CHUNK_BYTES",
+        ge=4_096,
+        le=1_048_576,
+    )
+    # Process-local concurrency only — not a cross-replica rate limit.
+    media_delivery_concurrency: int = Field(
+        default=8,
+        alias="MEDIA_DELIVERY_CONCURRENCY",
+        ge=1,
+        le=64,
+    )
+    media_delivery_range_enabled: bool = Field(
+        default=True,
+        alias="MEDIA_DELIVERY_RANGE_ENABLED",
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -464,6 +492,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MEDIA_DOWNLOAD_CONCURRENCY must be 1 until cross-worker "
                 "disk reservation is implemented"
+            )
+        delivery_root = self.media_delivery_root.strip()
+        if delivery_root and not os.path.isabs(delivery_root):
+            raise ValueError("MEDIA_DELIVERY_ROOT must be absolute when set")
+        if self.media_delivery_enabled and not delivery_root:
+            raise ValueError(
+                "MEDIA_DELIVERY_ROOT is required when MEDIA_DELIVERY_ENABLED is true"
             )
         return self
 
