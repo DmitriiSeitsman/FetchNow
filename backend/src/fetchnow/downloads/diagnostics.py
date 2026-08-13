@@ -30,6 +30,12 @@ class FailureClass(StrEnum):
     HTTP_AUTH_REQUIRED = "HTTP_AUTH_REQUIRED"
     HTTP_FORBIDDEN = "HTTP_FORBIDDEN"
     HTTP_NOT_FOUND = "HTTP_NOT_FOUND"
+    NETWORK_DNS_FAILED = "NETWORK_DNS_FAILED"
+    NETWORK_CONNECT_FAILED = "NETWORK_CONNECT_FAILED"
+    NETWORK_TIMEOUT = "NETWORK_TIMEOUT"
+    TLS_FAILED = "TLS_FAILED"
+    GEO_RESTRICTED = "GEO_RESTRICTED"
+    MEDIA_TRANSFER_FAILED = "MEDIA_TRANSFER_FAILED"
     PROVIDER_RESPONSE_CHANGED = "PROVIDER_RESPONSE_CHANGED"
     MUX_FAILED = "MUX_FAILED"
     VERIFY_FAILED = "VERIFY_FAILED"
@@ -166,6 +172,57 @@ def classify_tool_failure(
             return FailureClass.HTTP_FORBIDDEN
         if b"http error 404" in lowered or b"not found" in lowered:
             return FailureClass.HTTP_NOT_FOUND
+        if any(
+            marker in lowered
+            for marker in (
+                b"temporary failure in name resolution",
+                b"name or service not known",
+                b"nodename nor servname provided",
+                b"getaddrinfo failed",
+                b"no address associated with hostname",
+            )
+        ):
+            return FailureClass.NETWORK_DNS_FAILED
+        if any(
+            marker in lowered
+            for marker in (
+                b"certificate verify failed",
+                b"tlsv1 alert",
+                b"ssl: certificate",
+                b"ssl certificate",
+            )
+        ):
+            return FailureClass.TLS_FAILED
+        if any(
+            marker in lowered
+            for marker in (
+                b"not available in your country",
+                b"not available from your location",
+                b"geo-restricted",
+                b"georestricted",
+            )
+        ):
+            return FailureClass.GEO_RESTRICTED
+        if any(
+            marker in lowered
+            for marker in (
+                b"connection timed out",
+                b"read operation timed out",
+                b"the read operation timed out",
+            )
+        ):
+            return FailureClass.NETWORK_TIMEOUT
+        if any(
+            marker in lowered
+            for marker in (
+                b"connection refused",
+                b"network is unreachable",
+                b"no route to host",
+                b"remote end closed connection",
+                b"connection reset by peer",
+            )
+        ):
+            return FailureClass.NETWORK_CONNECT_FAILED
         if (
             b"requested format is not available" in lowered
             or b"requested format not available" in lowered
@@ -173,6 +230,16 @@ def classify_tool_failure(
             return FailureClass.FORMAT_UNAVAILABLE
         if b"unable to extract" in lowered or b"no video formats found" in lowered:
             return FailureClass.PROVIDER_RESPONSE_CHANGED
+        if any(
+            marker in lowered
+            for marker in (
+                b"unable to download video data",
+                b"unable to download webpage",
+                b"fragment not found",
+                b"unable to continue",
+            )
+        ):
+            return FailureClass.MEDIA_TRANSFER_FAILED
         return default
     except Exception:
         return FailureClass.TOOL_EXIT_NONZERO

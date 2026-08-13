@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,69 @@ _SAFE_EXTRA_FIELDS = (
     "internal_reason",
 )
 
+# These fields are safe only after the download diagnostics emitter has
+# validated them. Keep this boundary logger-specific so an unrelated logger
+# cannot smuggle arbitrary strings into structured production output merely by
+# choosing one of the diagnostic field names.
+_DOWNLOAD_DIAGNOSTICS_LOGGER = "fetchnow.downloads.diagnostics"
+_DOWNLOAD_DIAGNOSTIC_FIELDS = (
+    "download_job_id",
+    "media_job_id",
+    "attempt_count",
+    "fence_token",
+    "stage",
+    "duration_ms",
+    "retryable",
+    "error_code",
+    "failure_class",
+    "process_exit_category",
+    "stdout_byte_count",
+    "stderr_byte_count",
+    "diagnostic_fingerprint",
+)
+_SAFE_DIAGNOSTIC_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+_SAFE_DIAGNOSTIC_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_SAFE_DIAGNOSTIC_FINGERPRINT = re.compile(r"^[0-9a-f]{8,32}$")
+
+
+def _safe_download_diagnostic_value(field: str, value: Any) -> Any | None:
+    """Validate diagnostic extras again at the final serialization boundary."""
+    if field in {"download_job_id", "media_job_id"}:
+        if isinstance(value, str) and _SAFE_DIAGNOSTIC_ID.fullmatch(value):
+            return value.lower()
+        return None
+    if field in {
+        "attempt_count",
+        "fence_token",
+        "stdout_byte_count",
+        "stderr_byte_count",
+    }:
+        return value if type(value) is int and 0 <= value <= 10**12 else None
+    if field == "duration_ms":
+        return value if type(value) is int and 0 <= value <= 86_400_000 else None
+    if field == "retryable":
+        return value if type(value) is bool else None
+    if field in {
+        "stage",
+        "error_code",
+        "failure_class",
+        "process_exit_category",
+    }:
+        if isinstance(value, str) and _SAFE_DIAGNOSTIC_TOKEN.fullmatch(value):
+            return value
+        return None
+    if field == "diagnostic_fingerprint":
+        if (
+            isinstance(value, str)
+            and _SAFE_DIAGNOSTIC_FINGERPRINT.fullmatch(value)
+        ):
+            return value
+        return None
+    return None
+
 
 class JsonFormatter(logging.Formatter):
     """Format log records as single-line JSON objects."""
@@ -37,8 +101,22 @@ class JsonFormatter(logging.Formatter):
         }
         for field in _SAFE_EXTRA_FIELDS:
             value = getattr(record, field, None)
+            if record.name == _DOWNLOAD_DIAGNOSTICS_LOGGER:
+                # The exact diagnostics logger has a smaller, independently
+                # validated field set. In particular it never serializes
+                # internal_reason or other general-purpose string extras.
+                if field not in {"duration_ms", "error_code"}:
+                    continue
+                value = _safe_download_diagnostic_value(field, value)
             if value is not None:
                 payload[field] = value
+        if record.name == _DOWNLOAD_DIAGNOSTICS_LOGGER:
+            for field in _DOWNLOAD_DIAGNOSTIC_FIELDS:
+                value = _safe_download_diagnostic_value(
+                    field, getattr(record, field, None)
+                )
+                if value is not None:
+                    payload[field] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

@@ -93,6 +93,11 @@ Allowed stage-event extras: `download_job_id`, `media_job_id`, `attempt_count`,
 `error_code`, allowlisted `failure_class`, `process_exit_category`,
 stdout/stderr **byte counts**, and a fingerprint over those categorical fields.
 
+The final JSON formatter accepts those diagnostic extras only from the exact
+`fetchnow.downloads.diagnostics` logger and revalidates UUID, token, integer,
+boolean, and fingerprint shapes. Network/CDN failure classes are categorical
+only; raw exception text, hostnames, IPs, and media URLs remain forbidden.
+
 The browser session key is `fetchnow.media-flow.v2`. Schema v1 records are
 deleted on read. The token may live in tab-scoped `sessionStorage` only; it is
 never logged.
