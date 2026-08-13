@@ -701,8 +701,22 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("database sentinel changed during unhealthy bootstrap")
         print("OK: postgres container ID and database sentinel preserved")
 
-        if project_volumes(project) != volumes_before:
-            raise RuntimeError("named volumes changed during unhealthy bootstrap")
+        volumes_after = project_volumes(project)
+        removed_volumes = volumes_before - volumes_after
+        if removed_volumes:
+            raise RuntimeError(
+                "named volumes removed during unhealthy bootstrap: "
+                f"{sorted(removed_volumes)}"
+            )
+        # `api` no longer mounts the scratch volume, so Compose first materializes
+        # it when the bootstrap creates worker/delivery. An empty scratch volume
+        # is not durable state; losing a pre-existing one would be.
+        created_volumes = volumes_after - volumes_before - {f"{project}_tmp"}
+        if created_volumes:
+            raise RuntimeError(
+                "unexpected named volumes created during unhealthy bootstrap: "
+                f"{sorted(created_volumes)}"
+            )
         if project_networks(project) != networks_before:
             raise RuntimeError("project network changed during unhealthy bootstrap")
         print("OK: network and named volumes preserved")

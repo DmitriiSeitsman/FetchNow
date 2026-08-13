@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -522,6 +523,63 @@ def check_media_jobs_env_split() -> None:
     )
 
 
+def _nginx_config_test(
+    image: str, conf: Path, hosts: tuple[str, ...]
+) -> subprocess.CompletedProcess[str]:
+    add_hosts: list[str] = []
+    for host in hosts:
+        add_hosts += ["--add-host", f"{host}:127.0.0.1"]
+    return subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{conf}:/etc/nginx/nginx.conf:ro",
+            *add_hosts,
+            image,
+            "nginx",
+            "-t",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def check_gateway_nginx_config() -> None:
+    """Load the shipped nginx.conf with the pinned nginx image.
+
+    A location regex with unquoted braces (``{36}``) parses as a block opener
+    and makes the gateway exit at startup, so reading the file is not enough.
+    Upstream names are stubbed because nginx resolves them when loading config.
+    """
+    dockerfile = (ROOT / "deploy" / "nginx" / "Dockerfile").read_text(encoding="utf-8")
+    base = re.search(r"(?m)^FROM\s+(nginx:\S+)", dockerfile)
+    _assert(base is not None, "gateway: cannot resolve pinned nginx base image")
+    assert base is not None
+    image = base.group(1)
+    conf = ROOT / "deploy" / "nginx" / "nginx.conf"
+
+    full = _nginx_config_test(image, conf, ("api", "web", "delivery"))
+    _assert(
+        full.returncode == 0,
+        f"gateway: nginx -t rejected nginx.conf:\n{full.stderr or full.stdout}",
+    )
+    print("OK: gateway nginx config loads under the pinned nginx image")
+
+    # Delivery must stay a per-request lookup. A static upstream is resolved when
+    # the config loads, so an absent delivery would stop the whole gateway.
+    degraded = _nginx_config_test(image, conf, ("api", "web"))
+    _assert(
+        degraded.returncode == 0,
+        "gateway: nginx.conf must load while delivery is unresolvable:\n"
+        f"{degraded.stderr or degraded.stdout}",
+    )
+    print("OK: gateway nginx config loads while delivery is unresolvable")
+
+
 def main() -> int:
     check_base_only_config()
     check_dev_config()
@@ -530,6 +588,7 @@ def main() -> int:
     check_staging_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
+    check_gateway_nginx_config()
     print("All Compose contract checks passed.")
     return 0
 

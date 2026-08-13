@@ -89,7 +89,11 @@ CSP, and a server-generated ASCII
 
 Gateway proxies only the exact content path regex to `delivery`; other `/api/`
 traffic stays on `api`. No new host port. Feature flag
-`MEDIA_DELIVERY_ENABLED` defaults to `false`.
+`MEDIA_DELIVERY_ENABLED` defaults to `false`. That route resolves `delivery`
+per request instead of through an `upstream` block: names in an `upstream` are
+resolved when the config loads, so an absent or crash-looping delivery would
+otherwise keep the gateway — and with it the frontend — from starting. The
+failure is confined to a 502 on the content route.
 
 ### Concurrency
 

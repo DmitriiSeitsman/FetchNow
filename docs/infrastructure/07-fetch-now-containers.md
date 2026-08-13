@@ -20,11 +20,11 @@
 
 ### gateway и web
 
-Оба non-root (UID 10001), persistent state отсутствует. Restart запускает тот же container/image, recreate создаёт container заново. Gateway передаёт request ID и пишет access log в stdout. Логи: `docker compose ... logs gateway web`.
+Оба non-root (UID 10001), persistent state отсутствует. Restart запускает тот же container/image, recreate создаёт container заново. Gateway передаёт request ID и пишет access log в stdout. Upstream `api` и `web` резолвятся при загрузке конфига, поэтому их отсутствие не даст gateway стартовать; `delivery` резолвится per-request через Docker DNS, так что мёртвый delivery даёт 502 только на content route и не роняет фронтенд. Логи: `docker compose ... logs gateway web`.
 
 ### api
 
-Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (development `local`, staging full SHA); процесс non-root UID 10001 и подключает logical volume `tmp` к `/var/lib/fetchnow/tmp` (Docker name `{project}_tmp`). Final stage несёт `org.opencontainers.image.revision`. Operator release builds (PRD1C2) materialize an exact `git archive` snapshot and build revision tags from that snapshot — not from a dirty worktree; see [глава 25](25-release-materialization-build.md). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Restart не теряет named volume. Логи: service `api`; liveness не проверяет БД, readiness проверяет. См. [главу 24](24-release-preflight-health.md).
+Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (development `local`, staging full SHA); процесс non-root UID 10001. С PR7 api не монтирует volume `tmp`: приватные артефакты видят только `worker` (read-write) и `delivery` (read-only). Final stage несёт `org.opencontainers.image.revision`. Operator release builds (PRD1C2) materialize an exact `git archive` snapshot and build revision tags from that snapshot — not from a dirty worktree; see [глава 25](25-release-materialization-build.md). Внутри API process живут `URLValidator` и один pooled `SafeHTTPClient`: lifespan создаёт их вместе с DNS resolver, а при shutdown закрывает HTTP client и DB engine. API не запускает migrations при старте. Логи: service `api`; liveness не проверяет БД, readiness проверяет. См. [главу 24](24-release-preflight-health.md).
 
 ### worker
 
@@ -37,7 +37,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 ## Volumes
 
 - `pgdata` → `{project}_pgdata` — persistent database state.
-- `tmp` → `{project}_tmp` — общий временный storage API/worker; worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume (private; не публичный delivery).
+- `tmp` → `{project}_tmp` — общий временный storage: `worker` монтирует read-write, `delivery` — read-only, `api` не монтирует вовсе (PR7). Worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume и отдаются наружу только через authenticated delivery route; публичного static-доступа нет.
 
 При `COMPOSE_PROJECT_NAME=fetchnow` имена совпадают с историческими `fetchnow_pgdata` / `fetchnow_tmp`. Staging (`fetchnow-staging`) получает отдельные volumes. Explicit global `name:` больше не используется (PRD1A).
 
