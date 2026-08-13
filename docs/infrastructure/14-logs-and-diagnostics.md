@@ -61,6 +61,13 @@ sudo ss -lntup
 пути и исходный stderr. Fingerprint строится только из sanitized categorical
 полей.
 
+JSON formatter повторно валидирует download diagnostic extras на последней
+границе сериализации и принимает их только от logger
+`fetchnow.downloads.diagnostics`. Для сетевых/CDN отказов используются только
+категории `NETWORK_DNS_FAILED`, `NETWORK_CONNECT_FAILED`, `NETWORK_TIMEOUT`,
+`TLS_FAILED`, `HTTP_FORBIDDEN`, `GEO_RESTRICTED` и `MEDIA_TRANSFER_FAILED`;
+исходный stderr и адрес CDN по-прежнему отбрасываются.
+
 ## Диагностика validate/probe
 
 ### `UNSUPPORTED_PROVIDER` от validate
