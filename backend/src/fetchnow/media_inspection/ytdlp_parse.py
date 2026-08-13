@@ -22,6 +22,7 @@ from fetchnow.media_inspection.normalize import normalize_codec
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _CONTAINER_RE = re.compile(r"^[a-z0-9]{1,16}$")
+_PROTOCOL_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 # Structural limits after JSON decode (stdout byte limit is not enough).
 _DEFAULT_MAX_JSON_DEPTH = 12
@@ -309,6 +310,13 @@ def _parse_formats(
         provider_token = (
             token if isinstance(token, str) and 0 < len(token) <= 64 else None
         )
+        protocol_raw = item.get("protocol")
+        protocol: str | None = None
+        if isinstance(protocol_raw, str):
+            proto = protocol_raw.strip().lower()
+            if _PROTOCOL_RE.fullmatch(proto):
+                protocol = proto
+        has_drm = item.get("has_drm") is True
         candidates.append(
             InternalFormatCandidate(
                 container=container,
@@ -321,6 +329,8 @@ def _parse_formats(
                 audio_codec=audio_codec,
                 approx_bytes=approx_bytes,
                 provider_format_token=provider_token,
+                protocol=protocol,
+                has_drm=has_drm,
             )
         )
     return tuple(candidates)

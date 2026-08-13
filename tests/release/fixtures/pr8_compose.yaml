@@ -1,0 +1,289 @@
+# Environment-neutral Compose topology for FetchNow.
+# Project name must come from COMPOSE_PROJECT_NAME / --project-name (no top-level name:).
+# Local defaults: compose.override.yaml (auto-loaded).
+# Staging: compose.yaml + compose.staging.yaml with --project-name fetchnow-staging.
+
+services:
+  postgres:
+    image: postgres:16.9-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fetchnow}
+      POSTGRES_USER: ${POSTGRES_USER:-fetchnow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fetchnow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - fetchnow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fetchnow} -d ${POSTGRES_DB:-fetchnow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    # No host ports published; reachable only on the Compose network.
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    command: ["fetchnow-api"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      API_CONCURRENCY_LIMIT: ${API_CONCURRENCY_LIMIT:-32}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      URL_ALLOWED_SCHEMES: ${URL_ALLOWED_SCHEMES:-http,https}
+      URL_ALLOWED_PORTS: ${URL_ALLOWED_PORTS:-80,443}
+      URL_MAX_LENGTH: ${URL_MAX_LENGTH:-4096}
+      URL_MAX_REDIRECTS: ${URL_MAX_REDIRECTS:-5}
+      DNS_RESOLUTION_TIMEOUT_SECONDS: ${DNS_RESOLUTION_TIMEOUT_SECONDS:-3}
+      PROVIDER_VK_ENABLED: ${PROVIDER_VK_ENABLED:-true}
+      PROVIDER_RUTUBE_ENABLED: ${PROVIDER_RUTUBE_ENABLED:-true}
+      OUTBOUND_CONNECT_TIMEOUT_SECONDS: ${OUTBOUND_CONNECT_TIMEOUT_SECONDS:-5}
+      OUTBOUND_READ_TIMEOUT_SECONDS: ${OUTBOUND_READ_TIMEOUT_SECONDS:-10}
+      OUTBOUND_TOTAL_TIMEOUT_SECONDS: ${OUTBOUND_TOTAL_TIMEOUT_SECONDS:-15}
+      OUTBOUND_MAX_RESPONSE_BYTES: ${OUTBOUND_MAX_RESPONSE_BYTES:-1048576}
+      OUTBOUND_PROBE_BODY_BYTES: ${OUTBOUND_PROBE_BODY_BYTES:-131072}
+      OUTBOUND_USER_AGENT: ${OUTBOUND_USER_AGENT:-FetchNow/1.0}
+      OUTBOUND_ALLOWED_CONTENT_TYPES: ${OUTBOUND_ALLOWED_CONTENT_TYPES:-text/html,application/json,text/plain}
+      WRAPPER_RESOLUTION_MAX_DEPTH: ${WRAPPER_RESOLUTION_MAX_DEPTH:-3}
+      MEDIA_JOBS_ENABLED: ${MEDIA_JOBS_ENABLED:-false}
+      MEDIA_JOB_LEASE_SECONDS: ${MEDIA_JOB_LEASE_SECONDS:-60}
+      MEDIA_JOB_SHUTDOWN_GRACE_SECONDS: ${MEDIA_JOB_SHUTDOWN_GRACE_SECONDS:-15}
+      MEDIA_JOB_MAX_ATTEMPTS: ${MEDIA_JOB_MAX_ATTEMPTS:-3}
+      MEDIA_JOB_RETRY_BASE_SECONDS: ${MEDIA_JOB_RETRY_BASE_SECONDS:-2}
+      MEDIA_JOB_RETRY_MAX_SECONDS: ${MEDIA_JOB_RETRY_MAX_SECONDS:-60}
+      MEDIA_JOB_ABSOLUTE_TTL_SECONDS: ${MEDIA_JOB_ABSOLUTE_TTL_SECONDS:-86400}
+      MEDIA_JOB_RESULT_MAX_BYTES: ${MEDIA_JOB_RESULT_MAX_BYTES:-65536}
+      MEDIA_DOWNLOADS_ENABLED: ${MEDIA_DOWNLOADS_ENABLED:-false}
+      MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS: ${MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS:-3600}
+      MEDIA_DOWNLOAD_MAX_ATTEMPTS: ${MEDIA_DOWNLOAD_MAX_ATTEMPTS:-3}
+    # Intentionally no tmp/artifact volume: API must not see private artifacts.
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  delivery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    command: ["fetchnow-delivery"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      # Delivery-safe settings only: no yt-dlp, no worker lease, no write tooling.
+      MEDIA_DELIVERY_ENABLED: ${MEDIA_DELIVERY_ENABLED:-false}
+      MEDIA_DELIVERY_ROOT: ${MEDIA_DELIVERY_ROOT:-/var/lib/fetchnow/tmp/downloads}
+      MEDIA_DELIVERY_CHUNK_BYTES: ${MEDIA_DELIVERY_CHUNK_BYTES:-65536}
+      MEDIA_DELIVERY_CONCURRENCY: ${MEDIA_DELIVERY_CONCURRENCY:-8}
+      MEDIA_DELIVERY_RANGE_ENABLED: ${MEDIA_DELIVERY_RANGE_ENABLED:-true}
+    volumes:
+      # Read-only mount of the shared tmp volume so delivery can open published
+      # artifacts under MEDIA_DELIVERY_ROOT without write capability.
+      - tmp:/var/lib/fetchnow/tmp:ro
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    command: ["fetchnow-worker"]
+    environment:
+      APP_NAME: FetchNow
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fetchnow}:${POSTGRES_PASSWORD:-fetchnow}@postgres:5432/${POSTGRES_DB:-fetchnow}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      TEMP_STORAGE_PATH: /var/lib/fetchnow/tmp
+      TEMP_STORAGE_MAX_BYTES: ${TEMP_STORAGE_MAX_BYTES:-10737418240}
+      URL_ALLOWED_SCHEMES: ${URL_ALLOWED_SCHEMES:-http,https}
+      URL_ALLOWED_PORTS: ${URL_ALLOWED_PORTS:-80,443}
+      URL_MAX_LENGTH: ${URL_MAX_LENGTH:-4096}
+      URL_MAX_REDIRECTS: ${URL_MAX_REDIRECTS:-5}
+      DNS_RESOLUTION_TIMEOUT_SECONDS: ${DNS_RESOLUTION_TIMEOUT_SECONDS:-3}
+      PROVIDER_VK_ENABLED: ${PROVIDER_VK_ENABLED:-true}
+      PROVIDER_RUTUBE_ENABLED: ${PROVIDER_RUTUBE_ENABLED:-true}
+      MEDIA_JOBS_ENABLED: ${MEDIA_JOBS_ENABLED:-false}
+      MEDIA_JOB_LEASE_SECONDS: ${MEDIA_JOB_LEASE_SECONDS:-60}
+      MEDIA_JOB_SHUTDOWN_GRACE_SECONDS: ${MEDIA_JOB_SHUTDOWN_GRACE_SECONDS:-15}
+      MEDIA_JOB_MAX_ATTEMPTS: ${MEDIA_JOB_MAX_ATTEMPTS:-3}
+      MEDIA_JOB_RETRY_BASE_SECONDS: ${MEDIA_JOB_RETRY_BASE_SECONDS:-2}
+      MEDIA_JOB_RETRY_MAX_SECONDS: ${MEDIA_JOB_RETRY_MAX_SECONDS:-60}
+      MEDIA_JOB_ABSOLUTE_TTL_SECONDS: ${MEDIA_JOB_ABSOLUTE_TTL_SECONDS:-86400}
+      MEDIA_JOB_RESULT_MAX_BYTES: ${MEDIA_JOB_RESULT_MAX_BYTES:-65536}
+      MEDIA_INSPECTION_ENABLED: ${MEDIA_INSPECTION_ENABLED:-false}
+      MEDIA_INSPECTION_YTDLP_PATH: ${MEDIA_INSPECTION_YTDLP_PATH:-/opt/venv/bin/yt-dlp}
+      MEDIA_INSPECTION_TIMEOUT_SECONDS: ${MEDIA_INSPECTION_TIMEOUT_SECONDS:-30}
+      MEDIA_INSPECTION_SOCKET_TIMEOUT_SECONDS: ${MEDIA_INSPECTION_SOCKET_TIMEOUT_SECONDS:-10}
+      MEDIA_INSPECTION_STDOUT_MAX_BYTES: ${MEDIA_INSPECTION_STDOUT_MAX_BYTES:-1048576}
+      MEDIA_INSPECTION_STDERR_MAX_BYTES: ${MEDIA_INSPECTION_STDERR_MAX_BYTES:-262144}
+      MEDIA_INSPECTION_TEMP_ROOT: ${MEDIA_INSPECTION_TEMP_ROOT:-/var/lib/fetchnow/tmp/media_inspection}
+      MAX_SOURCE_DURATION_SECONDS: ${MAX_SOURCE_DURATION_SECONDS:-3600}
+      MAX_SOURCE_FILE_BYTES: ${MAX_SOURCE_FILE_BYTES:-536870912}
+      MEDIA_DOWNLOADS_ENABLED: ${MEDIA_DOWNLOADS_ENABLED:-false}
+      MEDIA_DOWNLOAD_TEMP_ROOT: ${MEDIA_DOWNLOAD_TEMP_ROOT:-/var/lib/fetchnow/tmp/downloads}
+      MEDIA_DOWNLOAD_CONCURRENCY: ${MEDIA_DOWNLOAD_CONCURRENCY:-1}
+      MEDIA_DOWNLOAD_MAX_BYTES: ${MEDIA_DOWNLOAD_MAX_BYTES:-536870912}
+      MEDIA_DOWNLOAD_TIMEOUT_SECONDS: ${MEDIA_DOWNLOAD_TIMEOUT_SECONDS:-120}
+      MEDIA_DOWNLOAD_SOCKET_TIMEOUT_SECONDS: ${MEDIA_DOWNLOAD_SOCKET_TIMEOUT_SECONDS:-30}
+      MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS: ${MEDIA_DOWNLOAD_ARTIFACT_TTL_SECONDS:-3600}
+      MEDIA_DOWNLOAD_MIN_FREE_BYTES: ${MEDIA_DOWNLOAD_MIN_FREE_BYTES:-2147483648}
+      MEDIA_DOWNLOAD_STDOUT_MAX_BYTES: ${MEDIA_DOWNLOAD_STDOUT_MAX_BYTES:-1048576}
+      MEDIA_DOWNLOAD_STDERR_MAX_BYTES: ${MEDIA_DOWNLOAD_STDERR_MAX_BYTES:-262144}
+      MEDIA_DOWNLOAD_MAX_ATTEMPTS: ${MEDIA_DOWNLOAD_MAX_ATTEMPTS:-3}
+      MEDIA_DOWNLOAD_RETRY_BASE_SECONDS: ${MEDIA_DOWNLOAD_RETRY_BASE_SECONDS:-2}
+      MEDIA_DOWNLOAD_RETRY_MAX_SECONDS: ${MEDIA_DOWNLOAD_RETRY_MAX_SECONDS:-60}
+      MEDIA_DOWNLOAD_ORPHAN_GRACE_SECONDS: ${MEDIA_DOWNLOAD_ORPHAN_GRACE_SECONDS:-300}
+      MEDIA_DOWNLOAD_LEASE_SECONDS: ${MEDIA_DOWNLOAD_LEASE_SECONDS:-120}
+    volumes:
+      - tmp:/var/lib/fetchnow/tmp
+    networks:
+      - fetchnow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost}
+        PUBLIC_MEDIA_FLOW_ENABLED: ${PUBLIC_MEDIA_FLOW_ENABLED:-false}
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    networks:
+      - fetchnow
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
+  gateway:
+    build:
+      context: ./deploy/nginx
+      dockerfile: Dockerfile
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
+    image: fetchnow-gateway:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    # Host ports are published only by compose.override.yaml (local) or
+    # compose.staging.yaml / deploy/compose/compose.prod.yaml.
+    networks:
+      - fetchnow
+    depends_on:
+      api:
+        condition: service_healthy
+      delivery:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:8080/api/v1/health/live",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
+networks:
+  fetchnow:
+    driver: bridge
+
+# Logical volume keys. Compose prefixes them with the project name, e.g.
+# fetchnow_pgdata / fetchnow-staging_pgdata. Do not set explicit volume name:.
+volumes:
+  pgdata:
+  tmp:

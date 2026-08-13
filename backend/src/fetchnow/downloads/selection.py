@@ -15,6 +15,7 @@ from fetchnow.media_inspection.models import (
     InternalFormatCandidate,
     MediaFormat,
 )
+from fetchnow.media_inspection.mux_pairing import derive_mux_options
 from fetchnow.media_inspection.normalize import (
     format_option_id_for,
     quality_label_for,
@@ -29,7 +30,7 @@ _CONTAINER_RE = re.compile(r"^[a-z0-9]{1,8}$")
 
 @dataclass(frozen=True, slots=True, repr=False)
 class ResolvedDownloadSelection:
-    """Sealed in-memory selection for one download attempt.
+    """Sealed in-memory selection for one direct progressive download attempt.
 
     ``provider_format_token`` is ephemeral and must never be persisted, logged,
     or included in repr/str of public objects.
@@ -50,7 +51,7 @@ class ResolvedDownloadSelection:
 
     def __repr__(self) -> str:
         return (
-            "ResolvedDownloadSelection("
+            "DirectDownloadSelection("
             f"format_option_id={self.format_option_id!r}, "
             f"container={self.container!r}, "
             f"width={self.width!r}, "
@@ -59,6 +60,45 @@ class ResolvedDownloadSelection:
             f"quality_label={self.quality_label!r}, "
             f"free_tier_eligible={self.free_tier_eligible!r})"
         )
+
+
+DirectDownloadSelection = ResolvedDownloadSelection
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class MuxedDownloadSelection:
+    """Sealed in-memory selection for one server-side stream-copy mux attempt."""
+
+    format_option_id: str
+    container: str
+    width: int | None
+    height: int | None
+    fps: float | None
+    has_video: bool
+    has_audio: bool
+    category: FormatCategory
+    quality_label: str
+    free_tier_eligible: bool
+    approx_bytes: int | None
+    video_approx_bytes: int | None
+    audio_approx_bytes: int | None
+    expected_duration_seconds: float | None
+    video_format_token: str = field(repr=False)
+    audio_format_token: str = field(repr=False)
+
+    def __repr__(self) -> str:
+        return (
+            "MuxedDownloadSelection("
+            f"format_option_id={self.format_option_id!r}, "
+            f"container={self.container!r}, "
+            f"width={self.width!r}, "
+            f"height={self.height!r}, "
+            f"quality_label={self.quality_label!r}, "
+            f"free_tier_eligible={self.free_tier_eligible!r})"
+        )
+
+
+DownloadSelection = DirectDownloadSelection | MuxedDownloadSelection
 
 
 def format_snapshot_from_media_format(fmt: MediaFormat) -> dict[str, object]:
@@ -157,7 +197,7 @@ def resolve_selection_from_draft(
     settings: Settings,
     requested_option_id: str,
     persisted_format: MediaFormat,
-) -> ResolvedDownloadSelection:
+) -> DownloadSelection:
     """Build an ephemeral option→token map and require an exact durable match.
 
     No closest/best/first fallback. Missing, drifted, or ambiguous options raise
@@ -174,6 +214,7 @@ def resolve_selection_from_draft(
     max_bytes = settings.max_source_file_bytes
 
     prepared: list[tuple[str, InternalFormatCandidate]] = []
+    bounded: list[InternalFormatCandidate] = []
     for candidate in draft.candidates:
         if not candidate.has_video and not candidate.has_audio:
             continue
@@ -183,11 +224,9 @@ def resolve_selection_from_draft(
             continue
         if candidate.width is not None and candidate.width > max_width:
             continue
-        if (
-            candidate.approx_bytes is not None
-            and candidate.approx_bytes > max_bytes
-        ):
+        if candidate.approx_bytes is not None and candidate.approx_bytes > max_bytes:
             continue
+        bounded.append(candidate)
         label = quality_label_for(candidate.height, has_video=candidate.has_video)
         option_id = format_option_id_for(candidate, label)
         prepared.append((option_id, candidate))
@@ -208,26 +247,45 @@ def resolve_selection_from_draft(
         # Byte-equivalent for binding: collapse duplicates.
 
     matched = by_option.get(requested_option_id)
-    if matched is None:
-        raise_download_error(
-            DownloadErrorCode.FORMAT_UNAVAILABLE,
-            internal_reason="OPTION_MISSING",
-        )
+    if matched is not None:
+        return _resolve_direct(matched, persisted_format, requested_option_id)
 
-    raw_token = matched.provider_format_token
+    muxed = _resolve_muxed(
+        tuple(bounded),
+        settings,
+        requested_option_id,
+        persisted_format,
+        duration_seconds=draft.duration_seconds,
+    )
+    if muxed is not None:
+        return muxed
+    raise_download_error(
+        DownloadErrorCode.FORMAT_UNAVAILABLE,
+        internal_reason="OPTION_MISSING",
+    )
+
+
+def _validate_token(raw_token: str | None) -> str:
     if not isinstance(raw_token, str) or not raw_token.strip():
         raise_download_error(
             DownloadErrorCode.FORMAT_UNAVAILABLE,
             internal_reason="TOKEN_MISSING",
         )
     try:
-        token = validate_provider_format_token(raw_token)
+        return validate_provider_format_token(raw_token)
     except ValueError:
         raise_download_error(
             DownloadErrorCode.FORMAT_UNAVAILABLE,
             internal_reason="TOKEN_INVALID",
         )
 
+
+def _resolve_direct(
+    matched: InternalFormatCandidate,
+    persisted_format: MediaFormat,
+    requested_option_id: str,
+) -> DirectDownloadSelection:
+    token = _validate_token(matched.provider_format_token)
     if not _props_match(matched, persisted_format):
         raise_download_error(
             DownloadErrorCode.FORMAT_UNAVAILABLE,
@@ -248,7 +306,7 @@ def resolve_selection_from_draft(
 
     category = _category_for(matched.has_video, matched.has_audio)
     label = quality_label_for(matched.height, has_video=matched.has_video)
-    return ResolvedDownloadSelection(
+    return DirectDownloadSelection(
         format_option_id=requested_option_id,
         container=matched.container,
         width=matched.width,
@@ -261,4 +319,55 @@ def resolve_selection_from_draft(
         free_tier_eligible=True,
         approx_bytes=matched.approx_bytes,
         provider_format_token=token,
+    )
+
+
+def _resolve_muxed(
+    candidates: tuple[InternalFormatCandidate, ...],
+    settings: Settings,
+    requested_option_id: str,
+    persisted_format: MediaFormat,
+    *,
+    duration_seconds: float | int | None,
+) -> MuxedDownloadSelection | None:
+    if not settings.media_muxing_enabled:
+        return None
+    if persisted_format.category is not FormatCategory.PROGRESSIVE:
+        return None
+    if not (
+        persisted_format.has_video
+        and persisted_format.has_audio
+        and persisted_format.free_tier_eligible
+    ):
+        return None
+    derived = derive_mux_options(candidates, settings)
+    by_id = {item.public.format_option_id: item for item in derived}
+    matched = by_id.get(requested_option_id)
+    if matched is None:
+        return None
+    if matched.public != persisted_format:
+        raise_download_error(
+            DownloadErrorCode.FORMAT_UNAVAILABLE,
+            internal_reason="PROPS_MISMATCH",
+        )
+    video_token = _validate_token(matched.video.provider_format_token)
+    audio_token = _validate_token(matched.audio.provider_format_token)
+    expected_duration = None if duration_seconds is None else float(duration_seconds)
+    return MuxedDownloadSelection(
+        format_option_id=requested_option_id,
+        container=matched.output_container,
+        width=matched.public.width,
+        height=matched.public.height,
+        fps=matched.public.fps,
+        has_video=True,
+        has_audio=True,
+        category=FormatCategory.PROGRESSIVE,
+        quality_label=matched.public.quality_label,
+        free_tier_eligible=True,
+        approx_bytes=matched.public.approx_bytes,
+        video_approx_bytes=matched.video.approx_bytes,
+        audio_approx_bytes=matched.audio.approx_bytes,
+        expected_duration_seconds=expected_duration,
+        video_format_token=video_token,
+        audio_format_token=audio_token,
     )

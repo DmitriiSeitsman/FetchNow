@@ -25,6 +25,7 @@ class CodecFamily(StrEnum):
 
     AVC = "avc"
     HEVC = "hevc"
+    VP8 = "vp8"
     VP9 = "vp9"
     AV1 = "av1"
     AAC = "aac"
@@ -202,6 +203,9 @@ class InternalFormatCandidate:
     approx_bytes: int | None
     # Secret-bearing provider format token — never logged or repr'd.
     provider_format_token: str | None = field(default=None, repr=False)
+    # Bounded transport token from yt-dlp (http/https/m3u8/...). Never a URL.
+    protocol: str | None = None
+    has_drm: bool = False
 
     def __repr__(self) -> str:
         return (

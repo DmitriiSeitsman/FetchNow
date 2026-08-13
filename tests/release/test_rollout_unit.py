@@ -7,11 +7,17 @@ from pathlib import Path
 
 import pytest
 
+from pr8_compose_fixture import pr8_compose_text
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from fetchnow_release.activate import ActivateError, build_activate_argv  # noqa: E402
+from fetchnow_release.activate import (  # noqa: E402
+    ActivateError,
+    build_activate_argv,
+    build_storage_init_argv,
+)
 from fetchnow_release.c3_constants import (  # noqa: E402
     BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
     BOOTSTRAP_FAILURE_TRANSITIONS,
@@ -27,6 +33,7 @@ from fetchnow_release.c3_constants import (  # noqa: E402
     STATUS_BOOTSTRAP_CLEANUP_STARTED,
     STATUS_COMMITTED,
     STATUS_FAILED,
+    STATUS_INITIALIZING_STORAGE,
     STATUS_PLANNED,
     STATUS_ROLLBACK_FAILED,
     STATUS_ROLLBACK_STARTED,
@@ -65,6 +72,7 @@ from fetchnow_release.journal import (  # noqa: E402
 )
 from fetchnow_release.override import (  # noqa: E402
     OverrideError,
+    compose_files_include_storage_init,
     render_images_override,
 )
 from fetchnow_release.recover import RecoverInput, recover_deployment  # noqa: E402
@@ -382,6 +390,52 @@ def test_images_override_delivery_is_release_shape_aware() -> None:
     assert "\n  delivery:\n" not in legacy
     assert "\n  delivery:\n" in current
     assert current.count("sha256:" + ("a" * 64)) >= 3
+
+
+def test_images_override_storage_init_pins_api_image_id() -> None:
+    legacy = render_images_override(_ids(), include_storage_init=False)
+    current = render_images_override(_ids(), include_storage_init=True)
+    assert "\n  storage-init:\n" not in legacy
+    assert "\n  storage-init:\n" in current
+    assert f"    image: sha256:{'a' * 64}" in current
+    assert current.count("sha256:" + ("a" * 64)) >= 3
+
+
+def test_storage_init_detected_from_verified_compose_source(tmp_path: Path) -> None:
+    pr9 = tmp_path / "compose.yaml"
+    pr9.write_text("services:\n  storage-init:\n    image: x\n", encoding="utf-8")
+    pr8 = tmp_path / "other.yaml"
+    pr8.write_text("services:\n  api:\n    image: x\n", encoding="utf-8")
+    named = tmp_path / "compose.staging.yaml"
+    named.write_text("services:\n  storage-init:\n    image: x\n", encoding="utf-8")
+    assert compose_files_include_storage_init((pr9,)) is True
+    assert compose_files_include_storage_init((pr8,)) is False
+    assert compose_files_include_storage_init((named,)) is False
+
+
+def test_storage_init_argv_contract() -> None:
+    argv = build_storage_init_argv(
+        project_name="fetchnow-staging",
+        env_file=Path("/tmp/env"),
+        compose_files=(Path("/tmp/compose.yaml"), Path("/tmp/override.yaml")),
+    )
+    assert "--rm" in argv
+    assert "--no-deps" in argv
+    assert "--no-build" not in argv
+    assert "-T" in argv
+    assert "--pull" in argv and "never" in argv
+    assert "postgres" not in argv
+    assert "up" not in argv
+    assert argv[-1] == "storage-init"
+
+
+def test_initializing_storage_journal_transitions() -> None:
+    assert_legal_transition(STATUS_PLANNED, STATUS_INITIALIZING_STORAGE)
+    assert_legal_transition(STATUS_PLANNED, STATUS_ACTIVATING_APP)
+    assert_legal_transition(STATUS_INITIALIZING_STORAGE, STATUS_ACTIVATING_APP)
+    assert_legal_transition(STATUS_INITIALIZING_STORAGE, STATUS_FAILED)
+    with pytest.raises(JournalError, match="illegal"):
+        assert_legal_transition(STATUS_INITIALIZING_STORAGE, STATUS_COMMITTED)
 
 
 def test_activate_argv_contract() -> None:
@@ -1115,3 +1169,558 @@ def test_automatic_rollback_checks_compatibility_before_activate(
     assert result.ok is False
     assert result.status == "rollback_failed"
     assert calls == ["compat"]
+
+
+def _write_release_compose(release: Path, *, storage_init: bool) -> None:
+    source = release / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    if storage_init:
+        compose = "services:\n  storage-init:\n    image: fetchnow-api:x\n"
+    else:
+        compose = "services:\n  api:\n    image: fetchnow-api:x\n"
+    (source / "compose.yaml").write_text(compose, encoding="utf-8")
+    (source / "compose.staging.yaml").write_text("services: {}\n", encoding="utf-8")
+
+
+def _patch_bootstrap_rollout(
+    monkeypatch: pytest.MonkeyPatch, deploy: Path
+) -> list[str]:
+    from contextlib import nullcontext
+
+    from fetchnow_release.verify_release import VerifyResult
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.validate_deploy_root",
+        lambda path, repo_root=None: path,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.ensure_rollout_layout",
+        lambda _deploy: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.verify_prepared_release",
+        lambda *_a, **_k: VerifyResult(ok=True, messages=("OK",)),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_and_resolve_current_state",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.find_unresolved_deployments",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.migration_journal.find_unresolved_migrations",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.release_dir",
+        lambda _deploy, rev: deploy / "releases" / rev,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_manifest",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_release_images_present",
+        lambda _manifest: _ids(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.sha256_file",
+        lambda _path: "e" * 64,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.manifest_path",
+        lambda release: release / "release.json",
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.target_heads_from_release_source",
+        lambda _release: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.database_heads_via_postgres",
+        lambda **_k: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout._app_containers_present",
+        lambda **_k: False,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout._postgres_healthy",
+        lambda **_k: True,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.RolloutLock",
+        lambda *a, **k: nullcontext(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout_project.assert_rollout_project",
+        lambda _name: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.wait_services_healthy",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.stabilize_full_health",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.write_current_state",
+        lambda *_a, **_k: None,
+    )
+
+    def _init(**_k: object) -> None:
+        calls.append("storage-init")
+
+    def _activate(**_k: object) -> None:
+        calls.append("activate")
+
+    def _gateway(**_k: object) -> None:
+        calls.append("gateway")
+
+    monkeypatch.setattr("fetchnow_release.rollout.run_storage_init", _init)
+    monkeypatch.setattr("fetchnow_release.rollout.activate_app_tier", _activate)
+    monkeypatch.setattr("fetchnow_release.rollout.activate_gateway", _gateway)
+    return calls
+
+
+def test_storage_init_runs_before_app_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    target = deploy / "releases" / rev
+    _write_release_compose(target, storage_init=True)
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+        )
+    )
+    assert result.ok is True
+    assert calls[:2] == ["storage-init", "activate"]
+    assert calls.count("activate") == 1
+    assert calls.count("gateway") == 1
+    overrides = list((deploy / "deployments").glob("*/overrides/images.yaml"))
+    assert len(overrides) == 1
+    text = overrides[0].read_text(encoding="utf-8")
+    assert "storage-init:" in text
+    assert f"image: sha256:{'a' * 64}" in text
+    events = list((deploy / "deployments").glob("*/events/*.json"))
+    names = sorted(p.name for p in events)
+    assert any("initializing_storage" in name for name in names)
+    assert any("activating_app" in name for name in names)
+
+
+def test_storage_init_failure_prevents_app_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.activate import ActivateError
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    _write_release_compose(deploy / "releases" / rev, storage_init=True)
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+
+    def _fail(**_k: object) -> None:
+        calls.append("storage-init")
+        raise ActivateError("storage-init failed: exit 1")
+
+    monkeypatch.setattr("fetchnow_release.rollout.run_storage_init", _fail)
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+        )
+    )
+    assert result.ok is False
+    assert result.status == STATUS_FAILED
+    assert calls == ["storage-init"]
+    assert not any(
+        msg.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX) for msg in result.messages
+    )
+    events = list((deploy / "deployments").glob("*/events/*.json"))
+    names = sorted(p.name for p in events)
+    assert any("initializing_storage" in name for name in names)
+    assert any("_failed.json" in name for name in names)
+    assert not any("activating_app" in name for name in names)
+
+
+def test_pr8_rollback_skips_storage_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.application_compatibility import CompatibilityDecision
+    from fetchnow_release.current_state import (
+        ApplicationState,
+        DatabaseState,
+        ResolvedCurrentState,
+    )
+    from fetchnow_release.journal import (
+        PlanDocument,
+        append_event,
+        deployment_dir,
+        write_plan,
+    )
+    from fetchnow_release.rollout import RolloutInput, _perform_rollback
+    from fetchnow_release.verify_release import VerifyResult
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "deployments").mkdir()
+    (deploy / "state").mkdir()
+    prev = "a" * 40
+    target = "b" * 40
+    prev_release = deploy / "releases" / prev
+    _write_release_compose(prev_release, storage_init=False)
+    dep_id = "12345678-1234-1234-1234-123456789abc"
+    dep_dir = deployment_dir(deploy, dep_id)
+    write_plan(
+        dep_dir,
+        PlanDocument(
+            schema_version=1,
+            deployment_id=dep_id,
+            target_revision=target,
+            previous_revision=prev,
+            bootstrap=False,
+            target_image_ids=_ids(),
+            previous_image_ids=_ids(),
+            release_manifest_sha256="d" * 64,
+            database_heads=("0001_baseline",),
+            created_at_utc="2026-01-01T00:00:00Z",
+            project_name="fetchnow-rollout-test-abcd1234",
+        ),
+    )
+    append_event(dep_dir, STATUS_PLANNED)
+    append_event(dep_dir, STATUS_ACTIVATING_APP)
+    current = ResolvedCurrentState(
+        schema_version=2,
+        application=ApplicationState(
+            revision=prev,
+            release_manifest_sha256="d" * 64,
+            image_ids=_ids(),
+            deployment_id=dep_id,
+        ),
+        database=DatabaseState(
+            heads=("0001_baseline",),
+            schema_release_revision=prev,
+            last_migration_id=None,
+            compatibility_contract_sha256=None,
+            compatible_application_revisions=(prev,),
+        ),
+        updated_at_utc="2026-01-01T00:00:00Z",
+        legacy_v1=False,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.verify_prepared_release",
+        lambda *_a, **_k: VerifyResult(ok=True, messages=("OK",)),
+    )
+    monkeypatch.setattr("fetchnow_release.rollout.load_manifest", lambda _p: object())
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_release_images_present",
+        lambda _m: _ids(),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.load_and_resolve_current_state",
+        lambda *_a, **_k: current,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.database_heads_via_postgres",
+        lambda **_k: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_live_matches_saved_database_heads",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.target_heads_from_release_source",
+        lambda _r: frozenset({"0001_baseline"}),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_application_compatible_with_database",
+        lambda **_k: CompatibilityDecision(
+            allowed=True,
+            reason="equal heads",
+            via_equal_heads=True,
+            via_recorded_envelope=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.wait_services_healthy",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.stabilize_full_health",
+        lambda *_a, **_k: None,
+    )
+
+    def _init(**_k: object) -> None:
+        calls.append("storage-init")
+
+    def _activate(**_k: object) -> None:
+        calls.append("activate")
+
+    def _gateway(**_k: object) -> None:
+        calls.append("gateway")
+
+    monkeypatch.setattr("fetchnow_release.rollout.run_storage_init", _init)
+    monkeypatch.setattr("fetchnow_release.rollout.activate_app_tier", _activate)
+    monkeypatch.setattr("fetchnow_release.rollout.activate_gateway", _gateway)
+    result = _perform_rollback(
+        inp=RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=target,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+        ),
+        dep_dir=dep_dir,
+        deployment_id=dep_id,
+        previous_revision=prev,
+        previous_ids=_ids(),
+        messages=[],
+        mutation_began=True,
+    )
+    assert result.ok is False
+    assert result.status == STATUS_ROLLED_BACK
+    assert calls == ["activate", "gateway"]
+    override = dep_dir / "overrides" / "images.yaml"
+    text = override.read_text(encoding="utf-8")
+    assert "storage-init:" not in text
+
+
+def test_pr8_materialized_compose_has_no_storage_init(tmp_path: Path) -> None:
+    dest = tmp_path / "compose.yaml"
+    dest.write_text(pr8_compose_text(), encoding="utf-8")
+    assert compose_files_include_storage_init((dest,)) is False
+    assert compose_files_include_storage_init((ROOT / "compose.yaml",)) is True
+
+
+def test_pr8_release_without_storage_init_bootstraps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    target = deploy / "releases" / rev
+    source = target / "source"
+    source.mkdir(parents=True)
+    (source / "compose.yaml").write_text(pr8_compose_text(), encoding="utf-8")
+    (source / "compose.staging.yaml").write_text("services: {}\n", encoding="utf-8")
+    assert compose_files_include_storage_init((source / "compose.yaml",)) is False
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+        )
+    )
+    assert result.ok is True
+    assert result.status == STATUS_COMMITTED
+    assert calls[0] == "activate"
+    assert "storage-init" not in calls
+    overrides = list((deploy / "deployments").glob("*/overrides/images.yaml"))
+    assert len(overrides) == 1
+    text = overrides[0].read_text(encoding="utf-8")
+    assert "storage-init:" not in text
+    events = list((deploy / "deployments").glob("*/events/*.json"))
+    names = sorted(p.name for p in events)
+    assert any("activating_app" in name for name in names)
+    assert not any("initializing_storage" in name for name in names)
+
+
+def test_post_activation_failure_emits_cleanup_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.bootstrap_cleanup import RemovedBootstrapContainer
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+    from fetchnow_release.stabilize import StabilizeError
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    _write_release_compose(deploy / "releases" / rev, storage_init=True)
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+
+    def _unhealthy(**_k: object) -> None:
+        calls.append("health")
+        raise StabilizeError("gateway returned 503")
+
+    monkeypatch.setattr("fetchnow_release.rollout.wait_services_healthy", _unhealthy)
+    owned = [
+        RemovedBootstrapContainer(
+            container_id=f"cid-{svc}",
+            service=svc,
+            labels={
+                "com.docker.compose.project": "fetchnow-rollout-test-abcd1234",
+                "com.docker.compose.service": svc,
+                "com.fetchnow.deployment-id": "ignored",
+                "com.fetchnow.release-revision": rev,
+            },
+        )
+        for svc in ("api", "worker", "delivery", "web")
+    ]
+    monkeypatch.setattr(
+        "fetchnow_release.bootstrap_cleanup.discover_owned_bootstrap_containers",
+        lambda **_k: owned,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.remove_owned_bootstrap_containers",
+        lambda **_k: tuple(owned),
+    )
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+        )
+    )
+    assert result.ok is False
+    assert result.status == STATUS_FAILED
+    assert calls[:3] == ["storage-init", "activate", "health"]
+    audit_lines = [
+        msg for msg in result.messages if msg.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX)
+    ]
+    assert audit_lines
+    payload = audit_lines[0][len(BOOTSTRAP_CLEANUP_AUDIT_PREFIX) :]
+    import json
+
+    items = json.loads(payload)
+    services = {item["service"] for item in items}
+    assert "postgres" not in services
+    assert services == {"api", "worker", "delivery", "web"}
+
+
+def test_bootstrap_cleanup_skips_postgres_and_foreign_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fetchnow_release.bootstrap_cleanup import (
+        COMPOSE_PROJECT_LABEL,
+        COMPOSE_SERVICE_LABEL,
+        discover_owned_bootstrap_containers,
+    )
+
+    project = "fetchnow-rollout-test-abcd1234"
+    other = "fetchnow-rollout-test-ffff9999"
+    dep = "12345678-1234-1234-1234-123456789abc"
+    rev = "a" * 40
+    rows = [
+        {"Service": "postgres", "ID": "cid-pg"},
+        {"Service": "api", "ID": "cid-api"},
+        {"Service": "api", "ID": "cid-foreign"},
+    ]
+    labels = {
+        "cid-pg": {
+            COMPOSE_PROJECT_LABEL: project,
+            COMPOSE_SERVICE_LABEL: "postgres",
+            LABEL_DEPLOYMENT_ID: dep,
+            LABEL_RELEASE_REVISION: rev,
+        },
+        "cid-api": {
+            COMPOSE_PROJECT_LABEL: project,
+            COMPOSE_SERVICE_LABEL: "api",
+            LABEL_DEPLOYMENT_ID: dep,
+            LABEL_RELEASE_REVISION: rev,
+        },
+        "cid-foreign": {
+            COMPOSE_PROJECT_LABEL: other,
+            COMPOSE_SERVICE_LABEL: "api",
+            LABEL_DEPLOYMENT_ID: dep,
+            LABEL_RELEASE_REVISION: rev,
+        },
+    }
+    monkeypatch.setattr(
+        "fetchnow_release.bootstrap_cleanup._compose_ps_json",
+        lambda **_k: rows,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.bootstrap_cleanup._inspect_labels",
+        lambda cid: labels[cid],
+    )
+    owned = discover_owned_bootstrap_containers(
+        project_name=project,
+        env_file=Path("/tmp/env"),
+        compose_files=(Path("/tmp/c.yaml"),),
+        cwd=Path("/tmp"),
+        deployment_id=dep,
+        release_revision=rev,
+    )
+    assert [item.service for item in owned] == ["api"]
+    assert owned[0].container_id == "cid-api"
+
+
+def test_failure_diagnostics_expose_sanitized_primary_reason(tmp_path: Path) -> None:
+    from fetchnow_release.diagnostics import format_rollout_failure_diagnostics
+
+    dep_id = "12345678-1234-1234-1234-123456789abc"
+    dep = tmp_path / "deployments" / dep_id
+    events = dep / "events"
+    events.mkdir(parents=True)
+    (events / "0001_planned.json").write_text("{}", encoding="utf-8")
+    (events / "0002_initializing_storage.json").write_text("{}", encoding="utf-8")
+    (dep / "result.json").write_text(
+        '{"status": "failed"}',
+        encoding="utf-8",
+    )
+    secret = "supersecret-password-value"
+    basic = "hunter2-basic"
+    text = format_rollout_failure_diagnostics(
+        status="failed",
+        messages=(
+            f"FAIL: storage-init failed: unknown flag: --no-build "
+            f"DATABASE_URL=postgresql://u:{secret}@host/db?sslmode=require "
+            "http://127.0.0.1:8091/callback?token=abc#frag "
+            f"https://deploy:{basic}@example.test/v1?q=1#frag",
+        ),
+        deployment_id=dep_id,
+        deploy_root=tmp_path,
+    )
+    assert "status=failed" in text
+    assert dep_id in text
+    assert "unknown flag: --no-build" in text
+    assert "journal_phases=planned,initializing_storage" in text
+    assert "journal_result=failed" in text
+    assert secret not in text
+    assert "token=abc" not in text
+    assert "#frag" not in text
+    assert "sslmode=require" not in text
+    assert "DATABASE_URL=<redacted>" in text
+    assert basic not in text
+    assert "deploy:" not in text

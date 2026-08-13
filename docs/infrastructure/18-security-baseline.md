@@ -31,4 +31,4 @@ Validate/probe не являются downloader или yt-dlp metadata extractio
 
 ## Planned/not implemented
 
-Нет yt-dlp/ffmpeg, media download pipeline, direct tickets/jobs, PostgreSQL queue, worker job processing, anonymous sessions, Turbo/payments/recovery links, runtime lifecycle/cleanup, rate limiting, deployment/backup/rollback automation, отдельного StorageProvider или S3 implementation. Полный threat model и logging rules находятся в [security docs](../security/threat-model.md), их не следует дублировать здесь целиком.
+Нет Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, application-level rate limiting, host Nginx/TLS staging publish automation beyond existing operator tooling, отдельный StorageProvider или S3 implementation. ffmpeg/ffprobe присутствуют в shared backend image (Debian bookworm package); API/delivery не получают paths и не запускают tools. Полный threat model и logging rules находятся в [security docs](../security/threat-model.md), их не следует дублировать здесь целиком.

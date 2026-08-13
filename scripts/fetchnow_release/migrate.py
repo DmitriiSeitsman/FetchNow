@@ -66,6 +66,7 @@ from .migration_project import MigrationProjectError, assert_migration_project
 from .override import (
     OverrideError,
     compose_files_include_delivery,
+    compose_files_include_storage_init,
     write_images_override,
 )
 from .redact import redact
@@ -546,6 +547,9 @@ def run_migration(inp: MigrationInput) -> MigrationResult:
                 mig_dir / OVERRIDES_DIRNAME,
                 target_ids,
                 include_delivery=compose_files_include_delivery(
+                    _release_compose_files(target_release)
+                ),
+                include_storage_init=compose_files_include_storage_init(
                     _release_compose_files(target_release)
                 ),
             )

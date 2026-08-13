@@ -154,6 +154,27 @@ def media_metadata_to_jsonable(
     return payload
 
 
+def _muxing_required_from_payload(
+    payload: dict[str, Any], formats: list[MediaFormat]
+) -> bool:
+    """Read muxingRequired; PR8 snapshots always had it, missing is derived."""
+    if "muxingRequired" not in payload:
+        return not any(
+            fmt.category is FormatCategory.PROGRESSIVE
+            and fmt.free_tier_eligible
+            and fmt.has_video
+            and fmt.has_audio
+            for fmt in formats
+        )
+    raw = payload["muxingRequired"]
+    if not isinstance(raw, bool):
+        raise_job_error(
+            JobErrorCode.INTERNAL_ERROR,
+            internal_reason="METADATA_INVALID",
+        )
+    return raw
+
+
 def media_metadata_from_jsonable(
     payload: Any,
     *,
@@ -220,7 +241,7 @@ def media_metadata_from_jsonable(
             formats=tuple(formats),
             extraction_tool=str(payload["extractionTool"]),
             extraction_tool_version=payload.get("extractionToolVersion"),
-            muxing_required=bool(payload["muxingRequired"]),
+            muxing_required=_muxing_required_from_payload(payload, formats),
         )
     except (KeyError, TypeError, ValueError):
         raise_job_error(

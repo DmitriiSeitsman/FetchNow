@@ -87,6 +87,9 @@ def test_atomic_publish(tmp_path: Path) -> None:
     workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=3)
     assert workspace.home.is_dir()
     assert workspace.cache.is_dir()
+    assert workspace.video.is_dir()
+    assert workspace.audio.is_dir()
+    assert workspace.mux.is_dir()
     assert workspace.output.is_dir()
     (workspace.home / "marker").write_text("home-ok", encoding="utf-8")
     (workspace.cache / "marker").write_text("cache-ok", encoding="utf-8")
@@ -628,3 +631,50 @@ def test_partial_os_write_does_not_truncate_artifact(
     assert published.size_bytes == len(payload)
     manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["size"] == len(payload)
+
+
+def test_mux_stream_dir_rejects_symlink_and_fifo(tmp_path: Path) -> None:
+    store = _store(tmp_path / "root")
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    target = workspace.video / "real.mp4"
+    target.write_bytes(b"abc")
+    link = workspace.video / "stream.mp4"
+    link.symlink_to(target)
+    target.unlink()
+    with pytest.raises(DownloadError) as exc:
+        store.find_single_regular_file_in(
+            workspace.video, allowed_suffixes=frozenset({"mp4"})
+        )
+    assert exc.value.code == DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT
+    fifo = workspace.audio / "stream.m4a"
+    os.mkfifo(fifo)
+    with pytest.raises(DownloadError) as fifo_exc:
+        store.find_single_regular_file_in(
+            workspace.audio, allowed_suffixes=frozenset({"m4a"})
+        )
+    assert fifo_exc.value.code == DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT
+    part = workspace.video / "stream.mp4.part"
+    (workspace.video / "ok.mp4").write_bytes(b"abc")
+    part.write_bytes(b"partial")
+    with pytest.raises(DownloadError) as part_exc:
+        store.find_single_regular_file_in(
+            workspace.video, allowed_suffixes=frozenset({"mp4"})
+        )
+    assert part_exc.value.code == DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT
+
+
+def test_stage_muxed_output_moves_without_second_copy(tmp_path: Path) -> None:
+    store = _store(tmp_path / "root")
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    payload = b"muxed-artifact!!"
+    mux_path = workspace.mux / "artifact.mp4"
+    mux_path.write_bytes(payload)
+    os.chmod(mux_path, 0o600)
+    dest = store.stage_muxed_output(workspace, mux_path, container="mp4")
+    assert dest == workspace.output / "artifact.mp4"
+    assert dest.read_bytes() == payload
+    assert not mux_path.exists()
+    assert dest.stat().st_nlink == 1
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o600

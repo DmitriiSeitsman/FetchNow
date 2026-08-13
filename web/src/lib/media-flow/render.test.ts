@@ -85,4 +85,29 @@ describe("render", () => {
     expect(duration?.textContent).toBe("Duration unavailable");
     expect(duration?.textContent).not.toMatch(/NaN/);
   });
+
+  it("enables derived progressive options and hides the unavailable hint", () => {
+    document.body.innerHTML = `
+      <div data-flow-formats></div>
+      <p data-flow-mux>placeholder</p>
+    `;
+    renderFlow(document, snapshot({ muxingBlocked: false }));
+    const radio = document.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.disabled).toBe(false);
+    const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
+    expect(mux?.hidden).toBe(true);
+  });
+
+  it("shows the unavailable hint only when no executable option exists", () => {
+    document.body.innerHTML = `
+      <div data-flow-formats></div>
+      <p data-flow-mux>This media is not available in the current free download mode.</p>
+    `;
+    renderFlow(document, snapshot({ muxingBlocked: true, downloadEligible: false }));
+    const radio = document.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.disabled).toBe(true);
+    const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
+    expect(mux?.hidden).toBe(false);
+    expect(mux?.textContent ?? "").not.toMatch(/muxing is not offered/i);
+  });
 });

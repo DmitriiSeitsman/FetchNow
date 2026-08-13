@@ -101,6 +101,10 @@ class _WritingRunner:
     async def run(self, argv: list[str], **kwargs: object) -> ProcessResult:
         del argv
         self.calls += 1
+        started = kwargs.get("started")
+        setter = getattr(started, "set", None)
+        if callable(setter):
+            setter()
         output_dir = kwargs.get("output_dir")
         assert isinstance(output_dir, str)
         Path(output_dir).mkdir(parents=True, exist_ok=True)

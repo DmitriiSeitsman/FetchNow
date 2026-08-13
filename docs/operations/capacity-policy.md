@@ -72,6 +72,13 @@ PR8 does not add application-level rate limiting. The browser poller is
 client-bounded (backoff, hidden-tab slowdown, absolute deadline). Enabling
 `PUBLIC_MEDIA_FLOW_ENABLED` does not raise server concurrency.
 
+PR9 muxing peak reservation is `video input + audio input + muxed output`
+plus `MEDIA_DOWNLOAD_MIN_FREE_BYTES`. It does **not** count only the final
+artifact. Muxing uses the same `MEDIA_DOWNLOAD_CONCURRENCY=1` bound.
+Cross-worker global disk reservation is **not** implemented.
+`MEDIA_MUXING_ENABLED` defaults false. ffmpeg/ffprobe timeouts and
+stdout/stderr ceilings are worker-only Settings.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.

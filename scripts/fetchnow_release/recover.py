@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .activate import activate_app_tier, activate_gateway
+from .activate import activate_app_tier, activate_gateway, run_storage_init
 from .application_compatibility import (
     CompatibilityError,
     DatabaseDriftError,
@@ -66,7 +66,11 @@ from .journal import (
     write_result,
 )
 from .manifest import load_manifest, manifest_path
-from .override import compose_files_include_delivery, write_images_override
+from .override import (
+    compose_files_include_delivery,
+    compose_files_include_storage_init,
+    write_images_override,
+)
 from .redact import redact
 from .rollout_lock import RolloutLock
 from .stabilize import StabilizationPolicy, stabilize_full_health, wait_services_healthy
@@ -195,6 +199,9 @@ def _execute_accept_target(
         include_delivery=compose_files_include_delivery(
             _release_compose_files(release)
         ),
+        include_storage_init=compose_files_include_storage_init(
+            _release_compose_files(release)
+        ),
     )
     compose_files = _compose_with_override(release, override)
     health_inp = HealthInput(
@@ -284,9 +291,19 @@ def _execute_rollback(
         include_delivery=compose_files_include_delivery(
             _release_compose_files(prev_release)
         ),
+        include_storage_init=compose_files_include_storage_init(
+            _release_compose_files(prev_release)
+        ),
     )
     compose_files = _compose_with_override(prev_release, override)
     cwd = prev_release / SOURCE_DIRNAME
+    if compose_files_include_storage_init(_release_compose_files(prev_release)):
+        run_storage_init(
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=compose_files,
+            cwd=cwd,
+        )
     activate_app_tier(
         project_name=inp.project_name,
         env_file=inp.env_file,

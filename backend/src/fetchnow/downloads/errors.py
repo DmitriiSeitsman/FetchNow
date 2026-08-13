@@ -28,6 +28,10 @@ class DownloadErrorCode(StrEnum):
     DOWNLOAD_EXPIRED = "DOWNLOAD_EXPIRED"
     DELIVERY_DISABLED = "DELIVERY_DISABLED"
     DOWNLOAD_NOT_READY = "DOWNLOAD_NOT_READY"
+    MUXING_UNAVAILABLE = "MUXING_UNAVAILABLE"
+    MUXING_FAILED = "MUXING_FAILED"
+    MUXING_TIMEOUT = "MUXING_TIMEOUT"
+    MUXED_OUTPUT_INVALID = "MUXED_OUTPUT_INVALID"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -52,6 +56,14 @@ _PUBLIC_MESSAGES: dict[DownloadErrorCode, str] = {
     DownloadErrorCode.DOWNLOAD_NOT_READY: (
         "The download artifact is not ready for delivery."
     ),
+    DownloadErrorCode.MUXING_UNAVAILABLE: (
+        "This media is not available as a combined video and audio file."
+    ),
+    DownloadErrorCode.MUXING_FAILED: "Combining video and audio failed.",
+    DownloadErrorCode.MUXING_TIMEOUT: "Combining video and audio timed out.",
+    DownloadErrorCode.MUXED_OUTPUT_INVALID: (
+        "The combined file could not be validated."
+    ),
     DownloadErrorCode.INTERNAL_ERROR: "An unexpected error occurred.",
 }
 
@@ -70,6 +82,10 @@ _HTTP_STATUS: dict[DownloadErrorCode, int] = {
     DownloadErrorCode.DOWNLOAD_EXPIRED: 410,
     DownloadErrorCode.DELIVERY_DISABLED: 503,
     DownloadErrorCode.DOWNLOAD_NOT_READY: 409,
+    DownloadErrorCode.MUXING_UNAVAILABLE: 422,
+    DownloadErrorCode.MUXING_FAILED: 422,
+    DownloadErrorCode.MUXING_TIMEOUT: 504,
+    DownloadErrorCode.MUXED_OUTPUT_INVALID: 422,
     DownloadErrorCode.INTERNAL_ERROR: 500,
 }
 

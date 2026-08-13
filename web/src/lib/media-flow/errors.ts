@@ -110,6 +110,22 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "That quality is no longer available. Start over to refresh options.",
     retryable: false,
   },
+  MUXING_UNAVAILABLE: {
+    text: "This media is not available as a combined video and audio file.",
+    retryable: false,
+  },
+  MUXING_FAILED: {
+    text: "The file could not be prepared. Please try again later.",
+    retryable: true,
+  },
+  MUXING_TIMEOUT: {
+    text: "Preparing the file took too long. Please try again later.",
+    retryable: true,
+  },
+  MUXED_OUTPUT_INVALID: {
+    text: "The prepared file could not be used. Please start over.",
+    retryable: false,
+  },
   DOWNLOAD_TIMEOUT: {
     text: "Preparing the file took too long. Please try again later.",
     retryable: true,

@@ -8,6 +8,8 @@ from pathlib import Path
 from .c3_constants import APP_SERVICES_BEFORE_GATEWAY, RUNTIME_APPLICATION_SERVICES
 from .redact import redact
 
+STORAGE_INIT_SERVICE = "storage-init"
+
 
 class ActivateError(RuntimeError):
     """Compose activation failure."""
@@ -118,3 +120,85 @@ def activate_gateway(
         cwd=cwd,
         services=("gateway",),
     )
+
+
+def build_storage_init_argv(
+    *,
+    project_name: str,
+    env_file: Path,
+    compose_files: tuple[Path, ...],
+) -> list[str]:
+    """Build compose run argv for the oneshot initializer (waits for exit).
+
+    Rollout uses ``--no-deps`` for application ``up``; this run is explicit and
+    also ``--no-deps`` so depends_on is never the activation mechanism.
+
+    ``compose run`` does not accept ``--no-build`` (that flag is ``up``-only).
+    Not building is the default; ``--pull never`` plus the immutable image
+    override pin the already-prepared API image. ``-T`` disables a TTY so
+    captured rollout logs cannot fail with "input device is not a TTY".
+    """
+    argv = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_file),
+        "--project-name",
+        project_name,
+    ]
+    for path in compose_files:
+        argv.extend(["-f", str(path)])
+    argv.extend(
+        [
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "--pull",
+            "never",
+            STORAGE_INIT_SERVICE,
+        ]
+    )
+    return argv
+
+
+def run_storage_init(
+    *,
+    project_name: str,
+    env_file: Path,
+    compose_files: tuple[Path, ...],
+    cwd: Path,
+) -> None:
+    """Execute storage-init and require a zero exit code before app mutation."""
+    argv = build_storage_init_argv(
+        project_name=project_name,
+        env_file=env_file,
+        compose_files=compose_files,
+    )
+    joined = " ".join(argv)
+    if "--no-deps" not in argv or "--rm" not in argv:
+        raise ActivateError("storage-init argv missing --no-deps/--rm")
+    if "--no-build" in argv:
+        raise ActivateError(
+            "storage-init argv must not pass --no-build; compose run rejects it"
+        )
+    if "-T" not in argv and "--no-TTY" not in argv:
+        raise ActivateError("storage-init argv missing --no-TTY")
+    if "--pull" not in argv or "never" not in argv:
+        raise ActivateError("storage-init argv missing --pull never")
+    if "postgres" in argv:
+        raise ActivateError("storage-init argv must not include postgres")
+    if STORAGE_INIT_SERVICE not in argv:
+        raise ActivateError("storage-init argv missing service name")
+    proc = subprocess.run(
+        argv,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ActivateError(
+            "storage-init failed: "
+            + redact(proc.stderr.strip() or proc.stdout.strip() or joined)
+        )

@@ -10,7 +10,7 @@ Compose interpolation (файл `.env` рядом с Compose / `--env-file`) п�
 
 | Файл | Назначение |
 |---|---|
-| `compose.yaml` | нейтральная топология: gateway/api/worker/postgres/web, network, logical volumes `pgdata`/`tmp`, healthchecks; **без** host ports и **без** top-level `name:` |
+| `compose.yaml` | нейтральная топология: gateway/api/worker/postgres/web/delivery/`storage-init`, network, logical volumes `pgdata`/`tmp`, healthchecks; **без** host ports и **без** top-level `name:` |
 | `compose.override.yaml` | local-only: gateway `8080`, api debug `8000`, `APP_ENV=development` |
 | `compose.staging.yaml` | staging-only: loopback gateway, fail-closed Postgres secrets, без override |
 | `deploy/compose/compose.prod.yaml` | optional production-shaped fragment (host gateway port) |
@@ -105,7 +105,7 @@ docker compose \
   down   # без -v
 ```
 
-**CHECK** rendered staging: пять services; единственная host-публикация gateway `127.0.0.1:8091→8080`; нет host ports у postgres/api/worker/web; volume names `fetchnow-staging_*`; нет bind mounts и reload/watch.
+**CHECK** rendered staging: services include gateway/api/worker/postgres/web/delivery/`storage-init`; единственная host-публикация gateway `127.0.0.1:8091→8080`; нет host ports у postgres/api/worker/web/delivery/storage-init; volume names `fetchnow-staging_*`; нет bind mounts и reload/watch. `storage-init` — oneshot без `sleep`, `network_mode: none`, без `DATABASE_URL`; worker и delivery ждут `service_completed_successfully` для local Compose. Release rollout не полагается на `depends_on` (`--no-deps`) и выполняет initializer явно.
 
 ## Release identity (PRD1C1)
 

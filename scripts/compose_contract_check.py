@@ -134,7 +134,7 @@ def check_dev_config() -> None:
     _check_no_container_name(cfg, "dev")
     _check_volumes_project_scoped(cfg, "dev")
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web", "delivery"):
+    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
         _assert(required in services, f"dev: missing service {required}")
     # Local override publishes gateway 8080 and api 8000.
     _assert(_has_host_ports(services["gateway"]), "dev: gateway should publish a port")
@@ -143,6 +143,11 @@ def check_dev_config() -> None:
     _assert(not _has_host_ports(services["worker"]), "dev: worker must not publish")
     _assert(not _has_host_ports(services["delivery"]), "dev: delivery must not publish")
     _assert(not _has_host_ports(services["web"]), "dev: web must not publish")
+    _assert(
+        not _has_host_ports(services["storage-init"]),
+        "dev: storage-init must not publish",
+    )
+    _assert_storage_init_least_privilege(services["storage-init"], "dev")
     _assert(
         services["api"].get("image") == "fetchnow-api:local",
         "dev: api image must default to fetchnow-api:local",
@@ -179,6 +184,7 @@ def check_base_only_config() -> None:
             not _has_host_ports(svc),
             f"base: service {name} must not publish host ports",
         )
+    _assert_storage_init_least_privilege(_services(cfg)["storage-init"], "base")
     print("OK: base compose contract (no host ports)")
 
 
@@ -222,10 +228,10 @@ def check_staging_config() -> None:
     _check_no_reload_command(cfg, "staging")
 
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web", "delivery"):
+    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
         _assert(required in services, f"staging: missing service {required}")
 
-    for name in ("api", "worker", "web", "postgres", "delivery"):
+    for name in ("api", "worker", "web", "postgres", "delivery", "storage-init"):
         _assert(
             not _has_host_ports(services[name]),
             f"staging: {name} must not publish host ports",
@@ -262,6 +268,11 @@ def check_staging_config() -> None:
         services["delivery"].get("image") == f"fetchnow-api:{revision}",
         "staging: delivery must share api image tag",
     )
+    _assert(
+        services["storage-init"].get("image") == f"fetchnow-api:{revision}",
+        "staging: storage-init must share api image tag",
+    )
+    _assert_storage_init_least_privilege(services["storage-init"], "staging")
     _assert(
         services["web"].get("image") == f"fetchnow-web:{revision}",
         "staging: web image must use full SHA tag",
@@ -523,6 +534,171 @@ def check_media_jobs_env_split() -> None:
     )
 
 
+def _service_env(svc: dict[str, Any]) -> dict[str, str]:
+    raw = svc.get("environment") or {}
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        out: dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, str) and "=" in item:
+                key, value = item.split("=", 1)
+                out[key] = value
+        return out
+    return {}
+
+
+def _assert_storage_init_least_privilege(init: dict[str, Any], label: str) -> None:
+    env = _service_env(init)
+    forbidden = (
+        "DATABASE_URL",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_DB",
+        "MEDIA_INSPECTION_YTDLP_PATH",
+        "MEDIA_MUXING_FFMPEG_PATH",
+        "MEDIA_MUXING_FFPROBE_PATH",
+    )
+    leaked = [key for key in forbidden if key in env]
+    _assert(not leaked, f"{label}: storage-init must not receive {', '.join(leaked)}")
+    _assert(
+        str(init.get("network_mode") or "") == "none",
+        f"{label}: storage-init must use network_mode none",
+    )
+    networks = init.get("networks")
+    _assert(
+        not networks,
+        f"{label}: storage-init must not join compose networks",
+    )
+    user = str(init.get("user") or "")
+    _assert(
+        user not in {"", "0", "root", "0:0"} and "10001" in user,
+        f"{label}: storage-init must run as non-root UID 10001, got {user!r}",
+    )
+    _assert(
+        not _has_host_ports(init),
+        f"{label}: storage-init must not publish host ports",
+    )
+
+
+def _depends_on_condition(svc: dict[str, Any], dep: str) -> str | None:
+    raw = svc.get("depends_on") or {}
+    if isinstance(raw, dict):
+        spec = raw.get(dep)
+        if isinstance(spec, dict):
+            return str(spec.get("condition") or "")
+        if spec is not None:
+            return "service_started"
+    if isinstance(raw, list) and dep in raw:
+        return "service_started"
+    return None
+
+
+def check_muxing_and_storage_init() -> None:
+    """Muxing stays off; tool paths stay worker-only; empty-volume init has no sleep."""
+    disabled = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    enabled = _run_compose(
+        ["-f", "compose.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow",
+            "MEDIA_MUXING_ENABLED": "true",
+        },
+    )
+    for label, cfg in (("disabled", disabled), ("enabled", enabled)):
+        services = _services(cfg)
+        _assert("storage-init" in services, f"{label}: missing storage-init")
+        init = services["storage-init"]
+        worker = services["worker"]
+        api_env = _service_env(services["api"])
+        delivery_env = _service_env(services["delivery"])
+        worker_env = _service_env(worker)
+        init_env = _service_env(init)
+        web_args = _web_build_args(services["web"])
+        _assert_storage_init_least_privilege(init, label)
+        _assert(
+            "MEDIA_MUXING_FFMPEG_PATH" not in api_env,
+            f"{label}: api_receives_ffmpeg_path must be false",
+        )
+        _assert(
+            "MEDIA_MUXING_FFPROBE_PATH" not in api_env,
+            f"{label}: api must not receive MEDIA_MUXING_FFPROBE_PATH",
+        )
+        _assert(
+            "MEDIA_MUXING_FFMPEG_PATH" not in delivery_env,
+            f"{label}: delivery_receives_ffmpeg_path must be false",
+        )
+        _assert(
+            "MEDIA_MUXING_FFPROBE_PATH" not in delivery_env,
+            f"{label}: delivery must not receive MEDIA_MUXING_FFPROBE_PATH",
+        )
+        _assert(
+            "MEDIA_MUXING_FFMPEG_PATH" not in init_env,
+            f"{label}: storage-init must not receive ffmpeg path",
+        )
+        _assert(
+            "PUBLIC_MEDIA_MUXING" not in web_args
+            and "MEDIA_MUXING_FFMPEG_PATH" not in web_args,
+            f"{label}: web_receives_tool_paths must be false",
+        )
+        _assert(
+            not _has_host_ports(init),
+            f"{label}: storage-init must not publish host ports",
+        )
+        command = init.get("command")
+        text = " ".join(command) if isinstance(command, list) else str(command or "")
+        _assert("sleep" not in text.lower(), f"{label}: startup_order_uses_sleep")
+        _assert(
+            _depends_on_condition(worker, "storage-init")
+            == "service_completed_successfully",
+            f"{label}: worker must wait for storage-init success",
+        )
+        _assert(
+            _depends_on_condition(services["delivery"], "storage-init")
+            == "service_completed_successfully",
+            f"{label}: delivery must wait for storage-init success",
+        )
+        _assert(
+            _depends_on_condition(worker, "delivery") is None,
+            f"{label}: worker must not wait for delivery (either order after init)",
+        )
+        _assert(
+            _depends_on_condition(services["delivery"], "worker") is None,
+            f"{label}: delivery must not wait for worker (either order after init)",
+        )
+        _assert(
+            "MEDIA_MUXING_FFMPEG_PATH" in worker_env,
+            f"{label}: worker may declare MEDIA_MUXING_FFMPEG_PATH",
+        )
+        _assert(
+            "MEDIA_MUXING_FFPROBE_PATH" in worker_env,
+            f"{label}: worker may declare MEDIA_MUXING_FFPROBE_PATH",
+        )
+
+    disabled_worker = _service_env(_services(disabled)["worker"])
+    enabled_worker = _service_env(_services(enabled)["worker"])
+    _assert(
+        str(disabled_worker.get("MEDIA_MUXING_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "disabled: muxing_enabled_by_default must be false",
+    )
+    _assert(
+        str(enabled_worker.get("MEDIA_MUXING_ENABLED", "false")).lower()
+        in {"true", "1"},
+        "enabled: worker muxing flag must render true when env is set",
+    )
+    _assert(
+        str(
+            _service_env(_services(enabled)["api"]).get("MEDIA_MUXING_ENABLED", "")
+        ).lower()
+        not in {"true", "1"},
+        "enabled: api must not receive MEDIA_MUXING_ENABLED=true",
+    )
+    print("OK: muxing env split and storage-init (disabled and enabled renders)")
+
+
 def _nginx_config_test(
     image: str, conf: Path, hosts: tuple[str, ...]
 ) -> subprocess.CompletedProcess[str]:
@@ -659,6 +835,7 @@ def main() -> int:
     check_staging_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
+    check_muxing_and_storage_init()
     check_media_flow_flag()
     check_gateway_nginx_config()
     check_gateway_csp()

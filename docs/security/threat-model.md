@@ -193,9 +193,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Crafted media triggering parser bugs in ffmpeg/yt-dlp |
 | Impact | Crash, RCE, resource exhaustion |
-| Mitigation | Keep tools patched; run as non-root; cgroup/ulimit; quarantine failures |
-| Residual risk | Zero-days |
-| Planned PR | Media pipeline + ops hardening |
+| Mitigation | Keep tools patched; run as non-root; cgroup/ulimit; quarantine failures; ffmpeg argv is fixed stream-copy (`-c copy`) with file-only protocol whitelist |
+| Residual risk | Zero-days; validate/exec TOCTOU on ffmpeg/ffprobe |
+| Planned PR | **PR9** muxing boundary; further jail in later ops PRs |
 
 ### ffmpeg resource exhaustion
 
@@ -203,9 +203,9 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Pathological inputs causing extreme CPU/RAM |
 | Impact | Noisy neighbor / DoS |
-| Mitigation | Timeouts; concurrency caps; duration/byte limits; kill process on exceed |
-| Residual risk | Uneven cost per codec |
-| Planned PR | Media pipeline PR |
+| Mitigation | Hard timeouts; process-group kill on timeout, cancel, and lease loss during yt-dlp/ffmpeg/ffprobe; bounded stdout/stderr; `MEDIA_DOWNLOAD_CONCURRENCY=1`; duration/size probe after mux; feature default off |
+| Residual risk | Uneven demux cost; no transcoding (incompatible pairs fail closed) |
+| Planned PR | **PR9** |
 
 ### Disk exhaustion
 

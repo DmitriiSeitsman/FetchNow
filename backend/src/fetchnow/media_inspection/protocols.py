@@ -45,7 +45,7 @@ class MediaExtractor(Protocol):
         """Extract bounded metadata for a validated provider target."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ProcessResult:
     """Bounded subprocess outcome — stdout/stderr are raw bytes, never logged."""
 
@@ -55,6 +55,17 @@ class ProcessResult:
     timed_out: bool
     cancelled: bool
     signal: int | None = None
+
+    def __repr__(self) -> str:
+        return (
+            "ProcessResult("
+            f"exit_code={self.exit_code!r}, "
+            f"timed_out={self.timed_out!r}, "
+            f"cancelled={self.cancelled!r}, "
+            f"signal={self.signal!r}, "
+            f"stdout_bytes={len(self.stdout)}, "
+            f"stderr_bytes={len(self.stderr)})"
+        )
 
 
 class ProcessRunner(Protocol):

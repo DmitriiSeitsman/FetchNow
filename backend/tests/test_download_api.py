@@ -123,9 +123,7 @@ def _view(*, created: bool = True) -> DownloadJobView:
 async def test_uuid_alone_without_bearer_is_404(
     enabled_client: AsyncClient,
 ) -> None:
-    response = await enabled_client.get(
-        f"/api/v1/media/download-jobs/{uuid.uuid4()}"
-    )
+    response = await enabled_client.get(f"/api/v1/media/download-jobs/{uuid.uuid4()}")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "DOWNLOAD_JOB_NOT_FOUND"
     assert response.headers.get("cache-control") == "no-store"
@@ -207,6 +205,35 @@ async def test_format_ineligible_maps_422(
     assert response.json()["error"]["code"] == "FORMAT_NOT_ELIGIBLE"
     assert response.headers.get("cache-control") == "no-store"
     assert _SECRET not in response.text
+
+
+@pytest.mark.asyncio
+async def test_muxing_unavailable_maps_422(
+    enabled_client: AsyncClient,
+) -> None:
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    token = generate_access_token()
+
+    service = MagicMock()
+    service.create = AsyncMock(
+        side_effect=DownloadError(
+            DownloadErrorCode.MUXING_UNAVAILABLE,
+            internal_reason="MUXING_REQUIRED",
+        )
+    )
+    app.state.download_job_service = service
+
+    response = await enabled_client.post(
+        f"/api/v1/media/jobs/{uuid.uuid4()}/downloads",
+        json={"formatOptionId": "fmt_split"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "MUXING_UNAVAILABLE"
+    assert "ffmpeg" not in response.text.lower()
+    assert token not in response.text
 
 
 @pytest.mark.asyncio
@@ -376,9 +403,7 @@ async def test_forged_persisted_snapshot_never_reaches_client(
         "fetchnow.downloads.service.MediaJobRepository.get_by_id",
         AsyncMock(return_value=parent),
     )
-    monkeypatch.setattr(
-        "fetchnow.downloads.service.tokens_match", lambda *_args: True
-    )
+    monkeypatch.setattr("fetchnow.downloads.service.tokens_match", lambda *_args: True)
 
     response = await enabled_client.get(
         f"/api/v1/media/download-jobs/{row.id}",
@@ -425,9 +450,7 @@ async def test_valid_persisted_snapshot_is_re_encoded_not_echoed(
         "fetchnow.downloads.service.MediaJobRepository.get_by_id",
         AsyncMock(return_value=parent),
     )
-    monkeypatch.setattr(
-        "fetchnow.downloads.service.tokens_match", lambda *_args: True
-    )
+    monkeypatch.setattr("fetchnow.downloads.service.tokens_match", lambda *_args: True)
 
     response = await enabled_client.get(
         f"/api/v1/media/download-jobs/{row.id}",
@@ -467,9 +490,7 @@ async def test_snapshot_option_id_mismatch_fails_closed(
         "fetchnow.downloads.service.MediaJobRepository.get_by_id",
         AsyncMock(return_value=parent),
     )
-    monkeypatch.setattr(
-        "fetchnow.downloads.service.tokens_match", lambda *_args: True
-    )
+    monkeypatch.setattr("fetchnow.downloads.service.tokens_match", lambda *_args: True)
 
     response = await enabled_client.get(
         f"/api/v1/media/download-jobs/{row.id}",

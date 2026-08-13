@@ -9,11 +9,12 @@
 | `gateway` | `fetchnow-gateway:${FETCHNOW_RELEASE_REVISION}` (`local` or full SHA), `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет; OCI revision label |
 | `web` | `fetchnow-web:${FETCHNOW_RELEASE_REVISION}`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; build args `PUBLIC_SITE_URL`, `PUBLIC_MEDIA_FLOW_ENABLED` (default `false`); dependency/volume нет; OCI revision label |
 | `api` | `fetchnow-api:${FETCHNOW_RELEASE_REVISION}`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; **без** volume `tmp` (PR7); OCI revision label |
-| `delivery` | тот же `fetchnow-api` image, `fetchnow-delivery` | `8000` internal only; host port нет | UID 10001 | read-only `tmp`; `MEDIA_DELIVERY_*` only; код не вызывает yt-dlp и не получает configured path (binary в shared image остаётся; lean image — follow-up) |
-| `worker` | тот же `fetchnow-api` image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres`; volume `tmp`; inherits API image label |
+| `storage-init` | тот же `fetchnow-api` image, `fetchnow-storage-init` | HTTP-порта нет | UID 10001 | oneshot; `restart: no`; `network_mode: none`; rw `tmp` only; mkdir/validate download root; без DB/tool env; без sleep |
+| `delivery` | тот же `fetchnow-api` image, `fetchnow-delivery` | `8000` internal only; host port нет | UID 10001 | read-only `tmp`; ждёт `storage-init` completed; `MEDIA_DELIVERY_*` only; не вызывает yt-dlp/ffmpeg |
+| `worker` | тот же `fetchnow-api` image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres` и `storage-init`; volume `tmp`; ffmpeg/ffprobe только здесь |
 | `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
 
-Все services находятся в bridge network `fetchnow` (Docker name `{project}_fetchnow`). `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
+Все runtime services находятся в bridge network `fetchnow` (Docker name `{project}_fetchnow`). `storage-init` — исключение: `network_mode: none`, без Compose network и без `DATABASE_URL`. `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
 
 
 ## Компоненты и restart
@@ -28,7 +29,11 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 
 ### worker
 
-Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5) и download execution (PR6): reclaim/expire, `SKIP LOCKED` claim, lease/fencing. Inspection — когда `MEDIA_JOBS_ENABLED` и `MEDIA_INSPECTION_ENABLED` истинны; downloads — когда `MEDIA_DOWNLOADS_ENABLED` и `MEDIA_INSPECTION_ENABLED` (оба feature default false). Compose прокидывает `MEDIA_JOBS_*` и API-safe `MEDIA_DOWNLOAD_*` (TTL/max attempts) на api; worker получает полный `MEDIA_INSPECTION_*` / `MEDIA_DOWNLOAD_*` включая yt-dlp path и temp root. API create/status не запускает yt-dlp и не отдаёт файлы клиенту. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
+Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5), download execution (PR6) и bounded muxing (PR9, default off). Runtime image installs Debian bookworm `ffmpeg` (provides `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`). Paths are Compose-injected on worker only. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
+
+### storage-init
+
+One-shot `fetchnow-storage-init` on the same image, `network_mode: none`, non-root UID 10001. Creates `/var/lib/fetchnow/tmp/downloads` with `ArtifactStore.validate_root()` if missing so delivery (read-only mount, no mkdir) does not crash-loop on an empty named volume. Never chmod/chown an existing operator root. No sleep. No `DATABASE_URL`, Postgres credentials, or tool paths. It does not load application Settings. Worker and delivery `depends_on` `service_completed_successfully` for local Compose up; release rollout uses `--no-deps` and therefore runs the oneshot explicitly before activating api/worker/delivery/web. Health does not require the oneshot to remain running.
 
 ### postgres
 
@@ -37,7 +42,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 ## Volumes
 
 - `pgdata` → `{project}_pgdata` — persistent database state.
-- `tmp` → `{project}_tmp` — общий временный storage: `worker` монтирует read-write, `delivery` — read-only, `api` не монтирует вовсе (PR7). Worker download artifacts живут под `MEDIA_DOWNLOAD_TEMP_ROOT` внутри этого volume и отдаются наружу только через authenticated delivery route; публичного static-доступа нет.
+- `tmp` → `{project}_tmp` — общий временный storage: `storage-init` и `worker` монтируют read-write, `delivery` — read-only, `api` не монтирует вовсе (PR7). `storage-init` гарантирует `MEDIA_DOWNLOAD_TEMP_ROOT` до старта delivery.
 
 При `COMPOSE_PROJECT_NAME=fetchnow` имена совпадают с историческими `fetchnow_pgdata` / `fetchnow_tmp`. Staging (`fetchnow-staging`) получает отдельные volumes. Explicit global `name:` больше не используется (PRD1A).
 

@@ -11,6 +11,7 @@ from .activate import (
     ActivateError,
     activate_app_tier,
     activate_gateway,
+    run_storage_init,
 )
 from .bootstrap_cleanup import BootstrapCleanupError, remove_owned_bootstrap_containers
 from .c2_constants import SOURCE_DIRNAME
@@ -31,6 +32,7 @@ from .c3_constants import (
     STATUS_APP_HEALTHY,
     STATUS_COMMITTED,
     STATUS_FAILED,
+    STATUS_INITIALIZING_STORAGE,
     STATUS_PLANNED,
     STATUS_ROLLBACK_FAILED,
     STATUS_ROLLBACK_STARTED,
@@ -75,6 +77,7 @@ from .manifest import ManifestError, load_manifest, manifest_path
 from .override import (
     OverrideError,
     compose_files_include_delivery,
+    compose_files_include_storage_init,
     write_images_override,
 )
 from .redact import redact
@@ -243,9 +246,19 @@ def _perform_rollback(
             include_delivery=compose_files_include_delivery(
                 _release_compose_files(prev_release)
             ),
+            include_storage_init=compose_files_include_storage_init(
+                _release_compose_files(prev_release)
+            ),
         )
         compose_files = _compose_with_override(prev_release, override)
         cwd = prev_release / SOURCE_DIRNAME
+        if compose_files_include_storage_init(_release_compose_files(prev_release)):
+            run_storage_init(
+                project_name=inp.project_name,
+                env_file=inp.env_file,
+                compose_files=compose_files,
+                cwd=cwd,
+            )
         activate_app_tier(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -369,6 +382,9 @@ def _verify_already_active(
             health_dep / OVERRIDES_DIRNAME,
             override_ids,
             include_delivery=compose_files_include_delivery(
+                _release_compose_files(target_release)
+            ),
+            include_storage_init=compose_files_include_storage_init(
                 _release_compose_files(target_release)
             ),
         )
@@ -578,11 +594,29 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 include_delivery=compose_files_include_delivery(
                     _release_compose_files(target_release)
                 ),
+                include_storage_init=compose_files_include_storage_init(
+                    _release_compose_files(target_release)
+                ),
             )
             compose_files = _compose_with_override(target_release, override)
             messages.append(f"OK: plan published deployment_id={deployment_id}")
 
             try:
+                if compose_files_include_storage_init(
+                    _release_compose_files(target_release)
+                ):
+                    append_event(
+                        dep_dir,
+                        STATUS_INITIALIZING_STORAGE,
+                        "storage initializer",
+                    )
+                    run_storage_init(
+                        project_name=inp.project_name,
+                        env_file=inp.env_file,
+                        compose_files=compose_files,
+                        cwd=cwd,
+                    )
+                    messages.append("OK: storage-init completed")
                 append_event(
                     dep_dir,
                     STATUS_ACTIVATING_APP,

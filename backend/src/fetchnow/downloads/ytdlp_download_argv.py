@@ -69,6 +69,7 @@ def build_ytdlp_download_argv(
         "--no-write-playlist-metafiles",
         "--no-write-subs",
         "--no-write-auto-subs",
+        "--no-part",
         "--no-progress",
         "--quiet",
         "--no-warnings",

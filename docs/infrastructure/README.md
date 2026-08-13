@@ -30,11 +30,11 @@ Internet
 
 Это целевая/плановая staging-архитектура, а не утверждение о текущем состоянии сервера. Docker не должен занимать публичные `80/443` или соседние `8000/8080`. Для staging требуется project name `fetchnow-staging`, root `/srv/fetchnow-staging`, пользователь `cryptobot` и loopback-публикация `127.0.0.1:8091`.
 
-## Текущее состояние продукта после PR8
+## Текущее состояние продукта после PR9
 
-Реализованы URL validation, probe, resolve, inspection/jobs/downloads/delivery foundations, и **browser orchestration** (PR8) для authenticated streaming save. UI flag `PUBLIC_MEDIA_FLOW_ENABLED=false` по умолчанию; он **не** включает `MEDIA_JOBS_ENABLED` / `MEDIA_INSPECTION_ENABLED` / `MEDIA_DOWNLOADS_ENABLED` / `MEDIA_DELIVERY_ENABLED`. Staging enablement этих path не выполнен этим PR.
+Реализованы URL validation, probe, resolve, inspection/jobs/downloads/delivery foundations, browser orchestration (PR8), и **bounded stream-copy muxing** (PR9) для split video/audio. `MEDIA_MUXING_ENABLED=false` по умолчанию; ffmpeg/ffprobe paths только у worker. UI flag `PUBLIC_MEDIA_FLOW_ENABLED=false` по умолчанию; он **не** включает server flags. Staging enablement этих path не выполнен этим PR.
 
-Пока не реализованы ffmpeg mux, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, application-level rate limiting, host Nginx/TLS staging publish automation beyond existing operator tooling, отдельный StorageProvider или S3 implementation.
+Пока не реализованы transcoding, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, application-level rate limiting, host Nginx/TLS staging publish automation beyond existing operator tooling, отдельный StorageProvider или S3 implementation.
 
 **PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории.
 

@@ -399,6 +399,63 @@ class Settings(BaseSettings):
         alias="MEDIA_DELIVERY_RANGE_ENABLED",
     )
 
+    # Bounded stream-copy muxing (PR9) — fail closed / disabled by default.
+    # ffmpeg/ffprobe paths are worker-only; API and delivery must not receive them.
+    media_muxing_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_MUXING_ENABLED",
+    )
+    media_muxing_ffmpeg_path: str = Field(
+        default="",
+        alias="MEDIA_MUXING_FFMPEG_PATH",
+    )
+    media_muxing_ffprobe_path: str = Field(
+        default="",
+        alias="MEDIA_MUXING_FFPROBE_PATH",
+    )
+    media_muxing_timeout_seconds: float = Field(
+        default=30.0,
+        alias="MEDIA_MUXING_TIMEOUT_SECONDS",
+        gt=0,
+        le=120,
+    )
+    media_muxing_max_stdout_bytes: int = Field(
+        default=262_144,
+        alias="MEDIA_MUXING_MAX_STDOUT_BYTES",
+        gt=0,
+        le=1_048_576,
+    )
+    media_muxing_max_stderr_bytes: int = Field(
+        default=262_144,
+        alias="MEDIA_MUXING_MAX_STDERR_BYTES",
+        gt=0,
+        le=1_048_576,
+    )
+    media_muxing_duration_tolerance_seconds: float = Field(
+        default=2.0,
+        alias="MEDIA_MUXING_DURATION_TOLERANCE_SECONDS",
+        ge=0,
+        le=30,
+    )
+    media_muxing_max_video_candidates: int = Field(
+        default=8,
+        alias="MEDIA_MUXING_MAX_VIDEO_CANDIDATES",
+        ge=1,
+        le=32,
+    )
+    media_muxing_max_audio_candidates: int = Field(
+        default=8,
+        alias="MEDIA_MUXING_MAX_AUDIO_CANDIDATES",
+        ge=1,
+        le=32,
+    )
+    media_muxing_max_derived_options: int = Field(
+        default=8,
+        alias="MEDIA_MUXING_MAX_DERIVED_OPTIONS",
+        ge=1,
+        le=32,
+    )
+
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
     def _parse_schemes(cls, value: Any) -> list[str]:
@@ -500,6 +557,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MEDIA_DELIVERY_ROOT is required when MEDIA_DELIVERY_ENABLED is true"
             )
+        ffmpeg_path = self.media_muxing_ffmpeg_path.strip()
+        ffprobe_path = self.media_muxing_ffprobe_path.strip()
+        if ffmpeg_path and not os.path.isabs(ffmpeg_path):
+            raise ValueError("MEDIA_MUXING_FFMPEG_PATH must be absolute when set")
+        if ffprobe_path and not os.path.isabs(ffprobe_path):
+            raise ValueError("MEDIA_MUXING_FFPROBE_PATH must be absolute when set")
+        # MEDIA_MUXING_ENABLED must not require ffmpeg/ffprobe paths here: the
+        # API container never receives worker tool paths. Worker construction
+        # validates executables at runtime when muxing is on.
         return self
 
 
