@@ -68,6 +68,10 @@ Authenticated delivery (PR7) uses process-local
 `MEDIA_DELIVERY_CHUNK_BYTES`. This is **not** a cross-replica rate limit.
 `MEDIA_DELIVERY_ENABLED` defaults to false.
 
+PR8 does not add application-level rate limiting. The browser poller is
+client-bounded (backoff, hidden-tab slowdown, absolute deadline). Enabling
+`PUBLIC_MEDIA_FLOW_ENABLED` does not raise server concurrency.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.

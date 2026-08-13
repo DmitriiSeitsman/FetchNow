@@ -223,6 +223,7 @@ services:
       dockerfile: Dockerfile
       args:
         PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost}
+        PUBLIC_MEDIA_FLOW_ENABLED: ${PUBLIC_MEDIA_FLOW_ENABLED:-false}
         FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
     image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped

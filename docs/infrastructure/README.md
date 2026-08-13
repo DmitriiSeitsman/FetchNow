@@ -30,11 +30,11 @@ Internet
 
 Это целевая/плановая staging-архитектура, а не утверждение о текущем состоянии сервера. Docker не должен занимать публичные `80/443` или соседние `8000/8080`. Для staging требуется project name `fetchnow-staging`, root `/srv/fetchnow-staging`, пользователь `cryptobot` и loopback-публикация `127.0.0.1:8091`.
 
-## Текущее состояние продукта после PR7
+## Текущее состояние продукта после PR8
 
-Реализованы URL validation (`POST /api/v1/media/validate`), диагностический safe outbound probe (`POST /api/v1/media/probe`), wrapper resolve (`POST /api/v1/media/resolve`, включая Yandex Preview), **внутренний** media inspection foundation (metadata-only VK/Rutube через hardened yt-dlp adapter), durable media-inspection jobs (PR5), durable download execution foundation (PR6: create/status + private worker artifacts; `MEDIA_DOWNLOADS_ENABLED=false` по умолчанию), и authenticated private artifact delivery (PR7: dedicated `delivery` service; `MEDIA_DELIVERY_ENABLED=false` по умолчанию). API не монтирует artifact volume и не запускает yt-dlp. Delivery монтирует `tmp` read-only, не получает configured yt-dlp path и не вызывает tool (binary остаётся в shared image); shared `DATABASE_URL` не является enforced read-only DB role. Staging enablement inspection/jobs/downloads/delivery path не выполнен.
+Реализованы URL validation, probe, resolve, inspection/jobs/downloads/delivery foundations, и **browser orchestration** (PR8) для authenticated streaming save. UI flag `PUBLIC_MEDIA_FLOW_ENABLED=false` по умолчанию; он **не** включает `MEDIA_JOBS_ENABLED` / `MEDIA_INSPECTION_ENABLED` / `MEDIA_DOWNLOADS_ENABLED` / `MEDIA_DELIVERY_ENABLED`. Staging enablement этих path не выполнен этим PR.
 
-Пока не реализованы public file delivery, ffmpeg mux, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, rate limiting, host Nginx/TLS staging publish, automatic deploy/rollback, отдельный StorageProvider или S3 implementation.
+Пока не реализованы ffmpeg mux, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, application-level rate limiting, host Nginx/TLS staging publish automation beyond existing operator tooling, отдельный StorageProvider или S3 implementation.
 
 **PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории.
 

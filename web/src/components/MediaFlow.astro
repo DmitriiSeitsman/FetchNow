@@ -1,0 +1,79 @@
+---
+import { isMediaFlowEnabled } from "../lib/media-flow/flag";
+
+const enabled = isMediaFlowEnabled();
+---
+
+<section class="flow" data-media-flow>
+  <form class="flow-form" data-flow-form>
+    <label class="field">
+      <span class="field-label">Media link</span>
+      <input
+        class="field-input field-input-live"
+        data-flow-url
+        type="url"
+        name="url"
+        inputmode="url"
+        autocomplete="url"
+        placeholder="https://vk.com/video… or https://rutube.ru/video…"
+        required
+        disabled={!enabled}
+        aria-disabled={enabled ? "false" : "true"}
+        aria-describedby="flow-hint"
+      />
+    </label>
+    <div class="flow-actions">
+      <button
+        class="btn btn-primary"
+        type="submit"
+        data-flow-submit
+        disabled={!enabled}
+      >
+        Fetch
+      </button>
+      <button class="btn btn-ghost" type="button" data-flow-reset hidden>
+        Start over
+      </button>
+    </div>
+  </form>
+  <p class="hint" id="flow-hint">
+    Public VK, Rutube, and Yandex Preview links. No account required.
+  </p>
+  <p class="status" data-flow-status aria-live="polite"></p>
+  <article class="meta-card" data-flow-meta hidden>
+    <h2 class="meta-title" data-flow-title></h2>
+    <p class="meta-line">
+      <span data-flow-provider></span>
+      <span aria-hidden="true"> · </span>
+      <span data-flow-duration></span>
+    </p>
+  </article>
+  <fieldset class="formats" data-flow-formats hidden>
+    <legend class="field-label">Quality</legend>
+  </fieldset>
+  <p class="hint" data-flow-mux hidden>
+    This media is not available in the current free download mode. Combined video+audio
+    files are required; muxing is not offered yet.
+  </p>
+  <p class="hint" data-flow-browser hidden>
+    Saving requires a Chromium desktop browser with the File System Access API. The
+    prepared file stays available until it expires — open this page in a supported
+    browser to finish saving.
+  </p>
+  <div class="flow-actions">
+    <button class="btn btn-primary" type="button" data-flow-download hidden>
+      Prepare download
+    </button>
+    <button class="btn btn-primary" type="button" data-flow-save hidden>
+      Save file
+    </button>
+  </div>
+</section>
+
+<script>
+  import { mountMediaFlow } from "../lib/media-flow/bind";
+  const root = document.querySelector("[data-media-flow]");
+  if (root) {
+    mountMediaFlow(root);
+  }
+</script>

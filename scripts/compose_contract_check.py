@@ -580,6 +580,77 @@ def check_gateway_nginx_config() -> None:
     print("OK: gateway nginx config loads while delivery is unresolvable")
 
 
+def _web_build_args(service: dict[str, Any]) -> dict[str, str]:
+    build = service.get("build") or {}
+    raw = build.get("args") or {}
+    if isinstance(raw, list):
+        out: dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, str) and "=" in item:
+                key, value = item.split("=", 1)
+                out[key] = value
+        return out
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    return {}
+
+
+def check_media_flow_flag() -> None:
+    """UI flow stays off unless an operator sets a safe boolean build arg."""
+    cfg = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    args = _web_build_args(_services(cfg)["web"])
+    _assert(
+        str(args.get("PUBLIC_MEDIA_FLOW_ENABLED", "false")).lower() == "false",
+        "base: PUBLIC_MEDIA_FLOW_ENABLED must default false",
+    )
+    staging = _run_compose(
+        ["-f", "compose.yaml", "-f", "compose.staging.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow-staging",
+            "POSTGRES_PASSWORD": "staging-contract-check-password-xxxxxxxx",
+            "POSTGRES_USER": "fetchnow",
+            "POSTGRES_DB": "fetchnow",
+            "FETCHNOW_RELEASE_REVISION": "a" * 40,
+            "PUBLIC_SITE_URL": "https://staging.example.test",
+        },
+    )
+    staging_args = _web_build_args(_services(staging)["web"])
+    _assert(
+        str(staging_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "false")).lower()
+        == "false",
+        "staging: PUBLIC_MEDIA_FLOW_ENABLED must default false",
+    )
+    print("OK: media flow UI flag defaults false (web build arg)")
+
+
+def check_gateway_csp() -> None:
+    """Interactive HTML CSP is same-origin only and is not applied to delivery."""
+    text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    _assert(
+        "connect-src 'self'" in text,
+        "gateway: CSP must allow only same-origin connect-src",
+    )
+    _assert(
+        "connect-src *" not in text and "connect-src http:" not in text,
+        "gateway: CSP must not broaden connect-src to arbitrary origins",
+    )
+    _assert(
+        "unsafe-eval" not in text,
+        "gateway: CSP must not allow unsafe-eval",
+    )
+    delivery_block = text.split("location ~")[-1]
+    _assert(
+        "connect-src 'self'" not in delivery_block.split("location /api/")[0]
+        if "location /api/" in delivery_block
+        else "connect-src 'self'" not in delivery_block,
+        "gateway: delivery location must not inherit the interactive connect-src CSP",
+    )
+    print("OK: gateway CSP is same-origin and does not broaden delivery")
+
+
 def main() -> int:
     check_base_only_config()
     check_dev_config()
@@ -588,7 +659,9 @@ def main() -> int:
     check_staging_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
+    check_media_flow_flag()
     check_gateway_nginx_config()
+    check_gateway_csp()
     print("All Compose contract checks passed.")
     return 0
 
