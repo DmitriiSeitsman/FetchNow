@@ -38,6 +38,9 @@ closed.
    temp/cache, sanitized env, bounded stdout/stderr, structural JSON limits,
    hard timeout with process-group kill and explicit child reap). Prefer the CLI
    process boundary over importing yt-dlp library code into the API process.
+   Netrc loading is disabled by omitting the opt-in `--netrc` flag and by
+   pointing `NETRC` at an isolated nonexistent path; do not invent a
+   `--no-netrc` flag because pinned yt-dlp does not expose one.
 
 4. Keep the adapter **disabled by default** (`MEDIA_INSPECTION_ENABLED=false`).
    Production must set a trusted absolute executable path that is a regular,

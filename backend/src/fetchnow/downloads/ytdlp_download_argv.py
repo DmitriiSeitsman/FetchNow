@@ -20,9 +20,11 @@ def build_ytdlp_download_argv(
 
     The URL is always placed after ``--`` so a leading-dash URL cannot become
     an option. ``provider_format_token`` is an argv value only — callers must
-    never log it. Generic extractors are rejected. Cookies/netrc/config/plugins
-    are disabled. No subtitle/thumbnail/comment writes. No merge/ffmpeg flags —
-    progressive exact ``-f <token>`` only.
+    never log it. Generic extractors are rejected. Cookies/config/plugins are
+    disabled. Netrc loading remains disabled by omission (yt-dlp has
+    ``--netrc`` but no portable ``--no-netrc`` counterpart) and the subprocess
+    receives an isolated ``NETRC`` path. No subtitle/thumbnail/comment writes.
+    No merge/ffmpeg flags — progressive exact ``-f <token>`` only.
     """
     if not executable or executable.startswith("-"):
         raise ValueError("executable path invalid")
@@ -91,7 +93,6 @@ def build_ytdlp_download_argv(
         "--use-extractors",
         ies,
         "--no-cookies",
-        "--no-netrc",
         "-f",
         token,
         "-o",
