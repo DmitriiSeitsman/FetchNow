@@ -45,12 +45,82 @@ _DOWNLOAD_DIAGNOSTIC_FIELDS = (
     "stderr_byte_count",
     "diagnostic_fingerprint",
 )
-_SAFE_DIAGNOSTIC_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _SAFE_DIAGNOSTIC_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
 _SAFE_DIAGNOSTIC_FINGERPRINT = re.compile(r"^[0-9a-f]{8,32}$")
+_SAFE_DOWNLOAD_STAGES = frozenset(
+    {
+        "queued",
+        "inspecting",
+        "downloading_video",
+        "downloading_audio",
+        "muxing",
+        "verifying",
+        "publishing",
+        "retrying",
+        "ready",
+        "failed",
+        "cancelled",
+        "expired",
+        "video",
+        "audio",
+        "mux",
+        "verify",
+        "publish",
+        "attempt",
+    }
+)
+_SAFE_DOWNLOAD_ERROR_CODES = frozenset(
+    {
+        "DOWNLOADS_DISABLED",
+        "DOWNLOAD_JOB_NOT_FOUND",
+        "PARENT_JOB_NOT_READY",
+        "FORMAT_NOT_FOUND",
+        "FORMAT_NOT_ELIGIBLE",
+        "FORMAT_UNAVAILABLE",
+        "DOWNLOAD_TIMEOUT",
+        "DOWNLOAD_TOO_LARGE",
+        "DOWNLOAD_TOOL_FAILED",
+        "DOWNLOAD_INVALID_OUTPUT",
+        "DOWNLOAD_STORAGE_UNAVAILABLE",
+        "DOWNLOAD_EXPIRED",
+        "DELIVERY_DISABLED",
+        "DOWNLOAD_NOT_READY",
+        "MUXING_UNAVAILABLE",
+        "MUXING_FAILED",
+        "MUXING_TIMEOUT",
+        "MUXED_OUTPUT_INVALID",
+        "INTERNAL_ERROR",
+    }
+)
+_SAFE_DOWNLOAD_FAILURE_CLASSES = frozenset(
+    {
+        "TOOL_EXIT_NONZERO",
+        "TOOL_TIMEOUT",
+        "TOOL_SIGNALLED",
+        "OUTPUT_MISSING",
+        "FORMAT_UNAVAILABLE",
+        "HTTP_AUTH_REQUIRED",
+        "HTTP_FORBIDDEN",
+        "HTTP_NOT_FOUND",
+        "NETWORK_DNS_FAILED",
+        "NETWORK_CONNECT_FAILED",
+        "NETWORK_TIMEOUT",
+        "TLS_FAILED",
+        "GEO_RESTRICTED",
+        "MEDIA_TRANSFER_FAILED",
+        "PROVIDER_RESPONSE_CHANGED",
+        "MUX_FAILED",
+        "VERIFY_FAILED",
+        "LEASE_LOST",
+        "CANCELLED",
+    }
+)
+_SAFE_PROCESS_EXIT_CATEGORIES = frozenset(
+    {"ZERO", "NONZERO", "TIMEOUT", "SIGNALLED", "CANCELLED"}
+)
 
 
 def _safe_download_diagnostic_value(field: str, value: Any) -> Any | None:
@@ -70,15 +140,14 @@ def _safe_download_diagnostic_value(field: str, value: Any) -> Any | None:
         return value if type(value) is int and 0 <= value <= 86_400_000 else None
     if field == "retryable":
         return value if type(value) is bool else None
-    if field in {
-        "stage",
-        "error_code",
-        "failure_class",
-        "process_exit_category",
-    }:
-        if isinstance(value, str) and _SAFE_DIAGNOSTIC_TOKEN.fullmatch(value):
-            return value
-        return None
+    if field == "stage":
+        return value if value in _SAFE_DOWNLOAD_STAGES else None
+    if field == "error_code":
+        return value if value in _SAFE_DOWNLOAD_ERROR_CODES else None
+    if field == "failure_class":
+        return value if value in _SAFE_DOWNLOAD_FAILURE_CLASSES else None
+    if field == "process_exit_category":
+        return value if value in _SAFE_PROCESS_EXIT_CATEGORIES else None
     if field == "diagnostic_fingerprint":
         if (
             isinstance(value, str)

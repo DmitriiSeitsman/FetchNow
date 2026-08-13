@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
+from fetchnow.downloads.errors import DownloadErrorCode
+
 _SAFE_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _SAFE_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -81,6 +83,7 @@ class DownloadStageEvent(StrEnum):
 _EVENT_NAMES = frozenset(item.value for item in DownloadStageEvent)
 _FAILURE_CLASSES = frozenset(item.value for item in FailureClass)
 _EXIT_CATEGORIES = frozenset(item.value for item in ProcessExitCategory)
+_ERROR_CODES = frozenset(item.value for item in DownloadErrorCode)
 _STAGE_TOKENS = frozenset(
     {
         "queued",
@@ -304,7 +307,7 @@ def emit_stage_event(
         extra["attempt_count"] = max(0, min(attempt_count, 1_000_000))
     if isinstance(fence_token, int) and not isinstance(fence_token, bool):
         extra["fence_token"] = max(0, min(fence_token, 10**12))
-    if stage and (stage in _STAGE_TOKENS or _SAFE_TOKEN.fullmatch(stage)):
+    if stage in _STAGE_TOKENS:
         extra["stage"] = stage
     if (
         isinstance(duration_ms, int)
@@ -314,7 +317,7 @@ def emit_stage_event(
         extra["duration_ms"] = min(duration_ms, 86_400_000)
     if retryable is True or retryable is False:
         extra["retryable"] = retryable
-    if error_code and _SAFE_TOKEN.fullmatch(error_code):
+    if error_code in _ERROR_CODES:
         extra["error_code"] = error_code
     fc = (
         failure_class.value

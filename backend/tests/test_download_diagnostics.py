@@ -195,6 +195,22 @@ def test_json_formatter_drops_untrusted_diagnostic_extras() -> None:
     assert "cdn.example" not in json.dumps(payload)
 
 
+def test_token_shaped_secrets_are_not_valid_diagnostic_catalog_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="fetchnow.downloads.diagnostics")
+    emit_stage_event(
+        DownloadStageEvent.VIDEO_FAILED,
+        stage="BearerSecret123",
+        error_code="ApiSecret123",
+    )
+    payload = json.loads(JsonFormatter().format(caplog.records[-1]))
+    assert "stage" not in payload
+    assert "error_code" not in payload
+    assert "BearerSecret123" not in json.dumps(payload)
+    assert "ApiSecret123" not in json.dumps(payload)
+
+
 def test_unknown_event_name_is_fail_closed(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="fetchnow.downloads.diagnostics")
     emit_stage_event("not_an_allowlisted_event")  # type: ignore[arg-type]
