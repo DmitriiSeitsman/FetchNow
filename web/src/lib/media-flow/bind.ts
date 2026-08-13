@@ -37,6 +37,9 @@ export function mountMediaFlow(
   root.querySelector("[data-flow-reset]")?.addEventListener("click", () => {
     controller.startOver();
   });
+  root.querySelector("[data-flow-cancel]")?.addEventListener("click", () => {
+    void controller.cancelTask();
+  });
   window.addEventListener("pagehide", () => {
     controller.onPageHide();
   });

@@ -11,9 +11,13 @@ inspection, downloads, and delivery are also enabled by an operator.
 3. Poll `GET /api/v1/media/jobs/{id}` until `inspected` / `failed` / `expired`.
 4. User selects a `formatOptionId` that is progressive, has video+audio, and `freeTierEligible` (direct file **or** a server-derived muxed option when muxing is enabled).
 5. `POST /api/v1/media/jobs/{id}/downloads` with `{ "formatOptionId": "…" }`.
-6. Poll `GET /api/v1/media/download-jobs/{id}` until `ready`.
-7. User gesture opens `showSaveFilePicker`, then `GET …/content` with the same Bearer.
-8. `response.body` is streamed to disk. Credentials are cleared only after a clean close.
+6. Poll `GET /api/v1/media/download-jobs/{id}` until `ready` / `failed` /
+   `cancelled` / `expired`. The UI shows sanitized `progressStage` copy
+   (Checking the media… / Preparing video… / …) without percentages.
+7. `Cancel task` calls `POST …/download-jobs/{id}/cancel`. `Start over` is a
+   local reset and does **not** cancel the server job.
+8. User gesture opens `showSaveFilePicker`, then `GET …/content` with the same Bearer.
+9. `response.body` is streamed to disk. Credentials are cleared only after a clean close.
 
 The token is never placed in the URL, filename, DOM, or logs.
 
@@ -31,7 +35,7 @@ See [browser support](../product/browser-support.md).
 
 ## Out of scope (PR8)
 
-- No download progress percentage (backend exposes job state, not byte progress).
+- No download progress percentage (backend exposes stage, not byte progress).
 - No Range/resume UI (PR7 Range behavior is unchanged).
 - No cross-replica rate limiting.
 - Server flags `MEDIA_JOBS_ENABLED`, `MEDIA_INSPECTION_ENABLED`,
@@ -43,3 +47,6 @@ See [browser support](../product/browser-support.md).
   shown.
 
 See [ADR 0013](../adr/0013-bounded-media-muxing.md).
+
+Session recovery uses `fetchnow.media-flow.v2`. Incompatible v1 records are
+removed. A restored active task is labelled in the UI.

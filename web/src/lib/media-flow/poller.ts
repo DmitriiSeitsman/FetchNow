@@ -161,7 +161,11 @@ export async function pollUntilTerminal<T>(options: PollerOptions<T>): Promise<T
       if (options.signal.aborted) {
         throw err;
       }
-      if (err instanceof FlowError && err.retryable && transient < maxTransient) {
+      if (
+        err instanceof FlowError &&
+        (err.retryable || err.code === "CONTRACT") &&
+        transient < maxTransient
+      ) {
         transient += 1;
         const wait = err.retryAfterMs ?? backoffMs(attempt, min, max);
         await sleep(wait, options.signal);

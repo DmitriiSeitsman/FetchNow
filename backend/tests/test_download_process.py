@@ -274,3 +274,34 @@ async def test_exited_parent_descendant_killed_on_output_budget(
     assert not _pid_alive(descendant_pid)
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_nonzero_stderr_is_classified_then_dropped(tmp_path: Path) -> None:
+    script = tmp_path / "fail.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "ERROR: requested format is not available '
+        'https://vk.com/video-1_2?token=secret" >&2\n'
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    runner = DownloadProcessRunner()
+    result = await runner.run(
+        [str(script)],
+        env=build_sanitized_env(home_dir=str(tmp_path), tmp_dir=str(tmp_path)),
+        cwd=str(tmp_path),
+        timeout_seconds=5,
+        stdout_limit_bytes=1024,
+        stderr_limit_bytes=4096,
+    )
+    assert result.exit_code == 1
+    assert result.stderr == b""
+    assert result.stdout == b""
+    assert result.stderr_byte_count > 0
+    assert result.failure_class == "FORMAT_UNAVAILABLE"
+    blob = repr(result)
+    assert "vk.com" not in blob
+    assert "token=secret" not in blob
+    assert str(tmp_path) not in blob

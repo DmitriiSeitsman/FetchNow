@@ -1,11 +1,14 @@
 :root {
-  --ink: #10231c;
-  --ink-muted: #3d5a4e;
+  --ink: #0b1f3a;
+  --ink-muted: #304766;
+  --ink-subtle: #3d5a73;
   --paper: #f3f7f2;
   --leaf: #1f6b4a;
   --leaf-deep: #0f3d2c;
-  --mist: #c8ddd1;
+  --mist: #9db0c4;
   --glow: rgba(31, 107, 74, 0.18);
+  --danger: #8a2b2b;
+  --disabled-fill: #e4ebf2;
   --radius: 14px;
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -91,6 +94,12 @@ body {
   color: var(--ink-muted);
 }
 
+.hint {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
 .field {
   display: grid;
   gap: 0.45rem;
@@ -117,6 +126,10 @@ body {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   cursor: not-allowed;
   opacity: 0.85;
+}
+
+.field-input::placeholder {
+  color: var(--ink-subtle);
 }
 
 .field-input-live {
@@ -167,7 +180,11 @@ body {
 
 .btn:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 1;
+  background: var(--disabled-fill);
+  color: var(--ink-muted);
+  border-color: var(--mist);
+  box-shadow: none;
 }
 
 .btn-primary {
@@ -185,11 +202,11 @@ body {
   margin: 0;
   min-height: 1.4em;
   font-size: 0.95rem;
-  color: var(--leaf-deep);
+  color: var(--ink);
 }
 
 .status[data-tone="error"] {
-  color: #8a2b2b;
+  color: var(--danger);
 }
 
 .meta-card {
@@ -247,7 +264,40 @@ body {
 }
 
 .format-disabled {
-  opacity: 0.55;
+  background: var(--disabled-fill);
+  border-style: dashed;
+  color: var(--ink-muted);
+}
+
+.format-reason {
+  grid-column: 2;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+.format-selected {
+  border-color: var(--leaf);
+  box-shadow: 0 0 0 1px var(--leaf);
+}
+
+.loader {
+  display: flex;
+  justify-content: center;
+}
+
+.spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--mist);
+  border-top-color: var(--leaf);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 640px) {
@@ -296,7 +346,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .atmosphere,
   .hero,
-  .brand {
+  .brand,
+  .spinner {
     animation: none;
   }
 }

@@ -34,6 +34,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create the new media_download_jobs table and indexes only; existing media_jobs rows and schema are unchanged, so the previous application remains compatible during online expand and application rollback."
+    },
+    {
+      "from_heads": [
+        "0003_download_jobs"
+      ],
+      "to_heads": [
+        "0004_download_observability"
+      ],
+      "included_revisions": [
+        "0004_download_observability"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Add progress_stage (server default queued) and nullable cancel_requested_at. public_state stays on the PR9 allowlist; user cancellation is stored as expired + progress_stage=cancelled + cancel_requested_at so a rolled-back PR9 application can parse the row. A BEFORE INSERT/UPDATE trigger maps progress_stage from public_state only when a previous PR9 application omits the new column (INSERT default or UPDATE that does not change progress_stage) and does not rewrite a legal PR10 cancellation encoding. Explicit illegal pairs still fail the CHECK. Previous application claim/retry/ready/failed/expiry UPDATEs and reads of PR10-cancelled rows therefore remain valid during online expand and application rollback."
     }
   ]
 }

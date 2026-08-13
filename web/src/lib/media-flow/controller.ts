@@ -1,10 +1,12 @@
 import { MediaApi } from "./api";
 import {
   isDownloadEligible,
+  pickHighestEligibleFormat,
   type DownloadJob,
   type InspectionJob,
   type InspectionResult,
   type MediaFormat,
+  type ProgressStage,
 } from "./contracts";
 import { generateAccessToken } from "./credentials";
 import {
@@ -41,17 +43,36 @@ export type FlowSnapshot = {
   canSubmit: boolean;
   canSave: boolean;
   canStartOver: boolean;
+  canCancelTask: boolean;
+  restored: boolean;
+  progressStage: ProgressStage | null;
 };
 
 const STATUS: Partial<Record<FlowPhase, string>> = {
   submitting: "Checking the link…",
-  inspecting: "Reading media information…",
+  inspecting: "Checking the media…",
   inspected: "Choose a quality to download.",
-  enqueueing_download: "Preparing your download…",
+  enqueueing_download: "Checking the media…",
   downloading: "Preparing your download…",
   ready: "Ready to save",
   saving: "Saving…",
   completed: "Saved to your computer.",
+  cancelled: "Download cancelled",
+};
+
+const PROGRESS_STATUS: Record<ProgressStage, string> = {
+  queued: "Waiting to start…",
+  inspecting: "Checking the media…",
+  downloading_video: "Preparing video…",
+  downloading_audio: "Preparing audio…",
+  muxing: "Combining video and audio…",
+  verifying: "Verifying the file…",
+  publishing: "Finalizing your download…",
+  retrying: "Retrying preparation…",
+  ready: "Ready to save",
+  failed: "The file could not be prepared.",
+  cancelled: "Download cancelled",
+  expired: "This download expired.",
 };
 
 export type ControllerHooks = {
@@ -85,6 +106,7 @@ export class MediaFlowController {
   private errorText: string | null = null;
   private browserUnsupported = false;
   private resumeDownloadId: string | null = null;
+  private restored = false;
 
   constructor(hooks: ControllerHooks = {}) {
     this.api = hooks.api ?? new MediaApi();
@@ -129,6 +151,11 @@ export class MediaFlowController {
       canSubmit: phase === "idle",
       canSave: phase === "ready" && !this.browserUnsupported,
       canStartOver: phase !== "idle",
+      canCancelTask:
+        Boolean(this.downloadJob?.cancellable) &&
+        (phase === "downloading" || phase === "enqueueing_download"),
+      restored: this.restored,
+      progressStage: this.downloadJob?.progressStage ?? null,
     };
   }
 
@@ -136,7 +163,27 @@ export class MediaFlowController {
     if (this.errorText) {
       return this.errorText;
     }
+    if (this.restored && this.machine.current === "inspected") {
+      return "Restored an existing download task. Choose a quality or continue.";
+    }
+    if (this.restored && this.machine.current === "downloading") {
+      return this.progressStatus() || "Restored an existing download task.";
+    }
+    if (this.machine.current === "downloading" || this.machine.current === "enqueueing_download") {
+      return this.progressStatus() || STATUS[this.machine.current] || "";
+    }
+    if (this.machine.current === "cancelled") {
+      return PROGRESS_STATUS.cancelled;
+    }
     return STATUS[this.machine.current] ?? "";
+  }
+
+  private progressStatus(): string {
+    const stage = this.downloadJob?.progressStage;
+    if (!stage) {
+      return "";
+    }
+    return PROGRESS_STATUS[stage] ?? "";
   }
 
   private emit(): void {
@@ -153,7 +200,7 @@ export class MediaFlowController {
       return;
     }
     const record: RecoveryRecord = {
-      v: 1,
+      v: 2,
       token: this.token,
       mediaJobId: this.mediaJob?.id ?? null,
       downloadJobId: this.downloadJob?.id ?? null,
@@ -223,6 +270,7 @@ export class MediaFlowController {
     this.selectedFormatId = null;
     this.errorText = null;
     this.browserUnsupported = false;
+    this.restored = false;
     this.clearResumeDownloadId();
     this.machine.resetToIdle();
     return this.restore();
@@ -238,6 +286,7 @@ export class MediaFlowController {
     this.selectedFormatId = null;
     this.errorText = null;
     this.browserUnsupported = false;
+    this.restored = false;
     this.clearResumeDownloadId();
     this.session.clear();
     this.emit();
@@ -255,6 +304,7 @@ export class MediaFlowController {
     this.token = record.token;
     this.selectedFormatId = record.formatOptionId;
     this.resumeDownloadId = record.downloadJobId;
+    this.restored = true;
     return this.resume(record);
   }
 
@@ -371,6 +421,10 @@ export class MediaFlowController {
       return;
     }
     this.machine.transition("inspected", generation);
+    if (!this.selectedFormatId) {
+      const formats = job.result?.formats ?? [];
+      this.selectedFormatId = pickHighestEligibleFormat(formats);
+    }
     const resumeId = this.resumeDownloadId;
     this.clearResumeDownloadId();
     if (resumeId && this.token) {
@@ -434,7 +488,8 @@ export class MediaFlowController {
   }
 
   async enqueueDownload(): Promise<void> {
-    if (this.machine.current !== "inspected" || !this.machine.beginAction()) {
+    const snapshot: FlowPhase = this.machine.current;
+    if (snapshot !== "inspected" || !this.machine.beginAction()) {
       return;
     }
     const format = this.mediaJob?.result?.formats.find(
@@ -477,6 +532,15 @@ export class MediaFlowController {
       this.emit();
       await this.pollDownload(generation);
     } catch (err) {
+      if (!this.machine.isCurrentGeneration(generation)) {
+        return;
+      }
+      if (this.machine.current === "cancelled") {
+        return;
+      }
+      if (isAbortError(err) && this.abort?.signal.aborted === true) {
+        return;
+      }
       this.fail("download_failed", err, generation);
     }
   }
@@ -492,6 +556,7 @@ export class MediaFlowController {
       isTerminal: (value) =>
         value.state === "ready" ||
         value.state === "failed" ||
+        value.state === "cancelled" ||
         value.state === "expired",
       expiresAt: () => this.downloadJob?.expiresAt ?? valueExpires(),
       signal: this.abort!.signal,
@@ -512,6 +577,15 @@ export class MediaFlowController {
     this.downloadJob = job;
     if (job.state === "expired") {
       this.fail("expired", flowErrorFromCode("DOWNLOAD_EXPIRED"), generation);
+      return;
+    }
+    if (job.state === "cancelled") {
+      this.errorText = null;
+      this.machine.transition("cancelled", generation);
+      this.session.clear();
+      this.token = null;
+      this.machine.endAction();
+      this.emit();
       return;
     }
     if (job.state === "failed") {
@@ -583,6 +657,49 @@ export class MediaFlowController {
         return;
       }
       this.fail("download_failed", err, generation);
+    }
+  }
+
+  async cancelTask(): Promise<void> {
+    if (!this.token || !this.downloadJob?.cancellable) {
+      return;
+    }
+    if (this.machine.current !== "downloading" && this.machine.current !== "enqueueing_download") {
+      return;
+    }
+    const generation = this.machine.generationId;
+    try {
+      const job = await this.api.cancelDownloadJob(
+        this.downloadJob.id,
+        this.token,
+        this.abort?.signal,
+      );
+      if (!this.machine.isCurrentGeneration(generation)) {
+        return;
+      }
+      this.downloadJob = job;
+      this.emit();
+      if (job.state === "cancelled") {
+        this.errorText = null;
+        this.machine.transition("cancelled", generation);
+        this.session.clear();
+        this.token = null;
+        this.machine.endAction();
+        this.abort?.abort();
+        this.emit();
+      }
+    } catch (err) {
+      if (!this.machine.isCurrentGeneration(generation)) {
+        return;
+      }
+      if (isAbortError(err)) {
+        return;
+      }
+      this.errorText =
+        err instanceof FlowError
+          ? err.userMessage
+          : userMessageForCode("INTERNAL_ERROR").text;
+      this.emit();
     }
   }
 }

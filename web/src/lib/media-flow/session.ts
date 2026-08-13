@@ -2,9 +2,10 @@ import { isCanonicalAccessToken } from "./credentials";
 import { isFormatOptionId, isIsoTimestamp, isUuid } from "./contracts";
 import { FLOW_PHASES, isRestorablePhase, type FlowPhase } from "./state-machine";
 
-export const SESSION_KEY = "fetchnow.media-flow.v1";
+export const SESSION_KEY = "fetchnow.media-flow.v2";
+export const LEGACY_SESSION_KEY = "fetchnow.media-flow.v1";
 export const SESSION_MAX_BYTES = 2048;
-export const SESSION_VERSION = 1 as const;
+export const SESSION_VERSION = 2 as const;
 
 const SESSION_KEYS = new Set([
   "v",
@@ -147,6 +148,11 @@ export class FlowSession {
 
   read(now = Date.now()): RecoveryRecord | null {
     let raw: string | null;
+    try {
+      this.store.removeItem(LEGACY_SESSION_KEY);
+    } catch {
+      /* ignore */
+    }
     try {
       raw = this.store.getItem(SESSION_KEY);
     } catch {

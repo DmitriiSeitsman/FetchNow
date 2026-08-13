@@ -36,8 +36,7 @@ class MediaDownloadJob(Base):
             name="uq_media_download_jobs_parent_format",
         ),
         CheckConstraint(
-            "public_state IN ("
-            "'queued', 'downloading', 'ready', 'failed', 'expired')",
+            "public_state IN ('queued', 'downloading', 'ready', 'failed', 'expired')",
             name="ck_media_download_jobs_public_state",
         ),
         CheckConstraint(
@@ -97,6 +96,41 @@ class MediaDownloadJob(Base):
             "artifact_bytes IS NULL OR artifact_bytes > 0",
             name="ck_media_download_jobs_artifact_bytes_positive",
         ),
+        CheckConstraint(
+            "progress_stage IN ("
+            "'queued', 'inspecting', 'downloading_video', 'downloading_audio', "
+            "'muxing', 'verifying', 'publishing', 'retrying', "
+            "'ready', 'failed', 'cancelled', 'expired')",
+            name="ck_media_download_jobs_progress_stage",
+        ),
+        CheckConstraint(
+            "("
+            "public_state = 'queued' AND progress_stage IN ('queued', 'retrying')"
+            ") OR ("
+            "public_state = 'downloading' AND progress_stage IN ("
+            "'inspecting', 'downloading_video', 'downloading_audio', "
+            "'muxing', 'verifying', 'publishing')"
+            ") OR ("
+            "public_state = 'ready' AND progress_stage = 'ready'"
+            ") OR ("
+            "public_state = 'failed' AND progress_stage = 'failed'"
+            ") OR ("
+            "public_state = 'expired' AND progress_stage IN ('expired', 'cancelled')"
+            ")",
+            name="ck_media_download_jobs_progress_state",
+        ),
+        CheckConstraint(
+            "("
+            "cancel_requested_at IS NULL AND progress_stage <> 'cancelled'"
+            ") OR ("
+            "cancel_requested_at IS NOT NULL "
+            "AND ("
+            "public_state = 'downloading' "
+            "OR (public_state = 'expired' AND progress_stage = 'cancelled')"
+            ")"
+            ")",
+            name="ck_media_download_jobs_cancel_requested",
+        ),
         Index(
             "ix_media_download_jobs_claim",
             "available_at",
@@ -154,6 +188,12 @@ class MediaDownloadJob(Base):
     )
     artifact_container: Mapped[str | None] = mapped_column(String(16), nullable=True)
     public_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    progress_stage: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="queued"
+    )
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

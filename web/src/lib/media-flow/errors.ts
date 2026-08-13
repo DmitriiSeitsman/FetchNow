@@ -150,6 +150,10 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "The prepared file expired. Start over to prepare it again.",
     retryable: false,
   },
+  DOWNLOAD_CANCELLED: {
+    text: "Download cancelled",
+    retryable: false,
+  },
   DOWNLOAD_NOT_READY: {
     text: "The file is not ready yet. Please wait.",
     retryable: true,

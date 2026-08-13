@@ -126,7 +126,8 @@ status exposes `artifactReady` only.
 | Endpoint | Notes |
 |---|---|
 | `POST /api/v1/media/jobs/{mediaJobId}/downloads` | Body: `formatOptionId`; requires parent MediaJob `Authorization: Bearer <accessToken>`. UUID alone never authorizes. |
-| `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. |
+| `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. Public JSON may include `progressStage`, `attempt`, `maxAttempts`, `nextAttemptAt` (only while retrying), and `cancellable`. Internal failure class is never returned. |
+| `POST /api/v1/media/download-jobs/{id}/cancel` | Same Bearer. Idempotent. `Cache-Control: no-store`. UUID alone never authorizes. Unknown and unauthorized are indistinguishable (`DOWNLOAD_JOB_NOT_FOUND`). Queued → `cancelled` without running a tool. Downloading records a cancel request; the worker commits `cancelled`. Ready/failed/expired are unchanged (ready artifacts are not deleted). |
 
 See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
 
@@ -138,6 +139,16 @@ and muxing off or no compatible pair), download create returns
 `MUXING_UNAVAILABLE`. ffmpeg/ffprobe paths are worker-only.
 
 See [ADR 0013](../adr/0013-bounded-media-muxing.md).
+
+## Download observability and cancellation (PR10)
+
+Public download JSON may include `cancelled`. Durable `public_state` stays on
+the PR9 allowlist; PR10 projects cancellation from `expired` +
+`progress_stage=cancelled` + `cancel_requested_at`. Progress is stage-based
+(`progressStage`), not a percentage. Catalog errors stay catalog errors;
+internal `failure_class` values are logs-only.
+
+See [ADR 0014](../adr/0014-download-observability-cancellation-progress.md).
 
 ## Browser client (PR8)
 
@@ -156,4 +167,5 @@ generic fallback. See [browser download flow](browser-download-flow.md).
 - [ADR 0010 — durable download execution](../adr/0010-durable-download-execution-and-private-artifact-boundary.md)
 - [ADR 0012 — browser download flow](../adr/0012-browser-download-flow.md)
 - [ADR 0013 — bounded media muxing](../adr/0013-bounded-media-muxing.md)
+- [ADR 0014 — download observability, cancellation, and progress](../adr/0014-download-observability-cancellation-progress.md)
 - [Capacity policy](../operations/capacity-policy.md)

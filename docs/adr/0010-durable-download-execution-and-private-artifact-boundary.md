@@ -100,6 +100,7 @@ as ADR 0008). Application-level rate limits remain unimplemented.
 ## Consequences
 
 - Alembic head becomes `0003_download_jobs` (revises `0002_media_jobs`).
+  PR10 revises this to `0004_download_observability`.
 - Public codes for download create/status are registered in
   [error-codes.md](../api/error-codes.md).
 - Delivery (signed/direct download), ffmpeg mux, and Turbo entitlements remain

@@ -55,6 +55,10 @@ class ProcessResult:
     timed_out: bool
     cancelled: bool
     signal: int | None = None
+    stdout_byte_count: int = 0
+    stderr_byte_count: int = 0
+    failure_class: str | None = None
+    process_exit_category: str | None = None
 
     def __repr__(self) -> str:
         return (
@@ -63,8 +67,10 @@ class ProcessResult:
             f"timed_out={self.timed_out!r}, "
             f"cancelled={self.cancelled!r}, "
             f"signal={self.signal!r}, "
-            f"stdout_bytes={len(self.stdout)}, "
-            f"stderr_bytes={len(self.stderr)})"
+            f"stdout_bytes={self.stdout_byte_count or len(self.stdout)}, "
+            f"stderr_bytes={self.stderr_byte_count or len(self.stderr)}, "
+            f"failure_class={self.failure_class!r}, "
+            f"process_exit_category={self.process_exit_category!r})"
         )
 
 

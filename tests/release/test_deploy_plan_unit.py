@@ -70,7 +70,7 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
     contract = load_compatibility_contract(
         ROOT / "deploy" / "migrations" / "compatibility.json"
     )
-    assert graph.heads == ("0003_download_jobs",)
+    assert graph.heads == ("0004_download_observability",)
 
     steps = (
         (
@@ -83,12 +83,18 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
             frozenset({"0003_download_jobs"}),
             frozenset({"0003_download_jobs"}),
         ),
+        (
+            frozenset({"0003_download_jobs"}),
+            frozenset({"0004_download_observability"}),
+            frozenset({"0004_download_observability"}),
+        ),
     )
     for from_heads, to_heads, included in steps:
         # Sanity: included set matches Alembic forward delta for this step.
-        assert (
-            graph.included_revisions(from_heads, to_heads) == included
-        ), (from_heads, to_heads)
+        assert graph.included_revisions(from_heads, to_heads) == included, (
+            from_heads,
+            to_heads,
+        )
         transition = find_matching_transition(
             contract,
             from_heads=from_heads,
@@ -102,7 +108,9 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
     full_included = graph.included_revisions(
         frozenset({"0001_baseline"}), frozenset(graph.heads)
     )
-    assert full_included == frozenset({"0002_media_jobs", "0003_download_jobs"})
+    assert full_included == frozenset(
+        {"0002_media_jobs", "0003_download_jobs", "0004_download_observability"}
+    )
     with pytest.raises(CompatibilityError, match="no compatibility transition"):
         find_matching_transition(
             contract,
@@ -303,6 +311,7 @@ def test_deploy_plan_subprocess_allowlist(monkeypatch: pytest.MonkeyPatch) -> No
 
     def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
         recorded.append(list(argv))
+
         class Proc:
             returncode = 0
             stdout = "0001_baseline\n"

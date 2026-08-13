@@ -1,0 +1,159 @@
+"""Allowlisted download diagnostics: no secrets, deterministic classifier."""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+
+from fetchnow.downloads.diagnostics import (
+    DownloadStageEvent,
+    FailureClass,
+    classify_tool_failure,
+    diagnostic_fingerprint,
+    emit_stage_event,
+    process_exit_category,
+)
+
+
+def test_classifier_never_raises_on_malformed_stderr() -> None:
+    payloads = (
+        b"",
+        b"\xff\xfe\x00",
+        b"http error 403 https://vk.com/video-1_2?token=secret\n" * 4000,
+        "неклассифицируемый текст".encode(),
+    )
+    for blob in payloads:
+        try:
+            result = classify_tool_failure(stderr=blob)
+        except Exception as exc:  # pragma: no cover - fail the proof flag
+            raise AssertionError("classifier raised") from exc
+        assert result in FailureClass
+    assert classify_tool_failure(stderr=None) is FailureClass.TOOL_EXIT_NONZERO  # type: ignore[arg-type]
+
+
+def test_classifier_is_deterministic_and_fail_closed() -> None:
+    stderr = b"ERROR: requested format is not available\nhttps://cdn.example/file?sig=1"
+    first = classify_tool_failure(stderr=stderr)
+    second = classify_tool_failure(stderr=stderr)
+    assert first is second is FailureClass.FORMAT_UNAVAILABLE
+    unknown = classify_tool_failure(stderr=b"completely novel provider gibberish")
+    assert unknown is FailureClass.TOOL_EXIT_NONZERO
+    assert (
+        classify_tool_failure(timed_out=True, stderr=b"http error 404")
+        is FailureClass.TOOL_TIMEOUT
+    )
+    assert (
+        classify_tool_failure(signal=9, stderr=b"http error 401")
+        is FailureClass.TOOL_SIGNALLED
+    )
+    assert (
+        classify_tool_failure(cancelled=True, stderr=b"http error 403")
+        is FailureClass.CANCELLED
+    )
+    assert (
+        classify_tool_failure(stderr=b"HTTP Error 401 Unauthorized")
+        is FailureClass.HTTP_AUTH_REQUIRED
+    )
+    assert (
+        classify_tool_failure(stderr=b"HTTP Error 403 Forbidden")
+        is FailureClass.HTTP_FORBIDDEN
+    )
+    assert (
+        classify_tool_failure(stderr=b"HTTP Error 404 Not Found")
+        is FailureClass.HTTP_NOT_FOUND
+    )
+    assert classify_tool_failure(stderr=b"Unable to extract video data") is (
+        FailureClass.PROVIDER_RESPONSE_CHANGED
+    )
+
+
+def test_failure_class_never_copies_secrets_or_urls() -> None:
+    result = classify_tool_failure(
+        stderr=b"token=abc Bearer xyz https://vk.com/video-1_2?query=1 /tmp/secret"
+    )
+    assert "http" not in result.value.lower()
+    assert "token" not in result.value.lower()
+    assert "tmp" not in result.value.lower()
+    fp = diagnostic_fingerprint(
+        stage="video",
+        failure_class=result.value,
+        exit_category="NONZERO",
+        retryable=True,
+        error_code="DOWNLOAD_TOOL_FAILED",
+    )
+    assert "vk.com" not in fp
+    assert "token" not in fp
+
+
+def test_stage_events_omit_forbidden_fields(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="fetchnow.downloads.diagnostics")
+    emit_stage_event(
+        DownloadStageEvent.VIDEO_FAILED,
+        download_job_id="11111111-2222-3333-4444-555555555555",
+        media_job_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        attempt_count=2,
+        fence_token=7,
+        stage="video",
+        duration_ms=12,
+        retryable=True,
+        error_code="DOWNLOAD_TOOL_FAILED",
+        failure_class=FailureClass.FORMAT_UNAVAILABLE,
+        process_exit_category="NONZERO",
+        stdout_byte_count=0,
+        stderr_byte_count=128,
+    )
+    assert caplog.records
+    blob = " ".join(record.getMessage() for record in caplog.records).lower()
+    extras = [getattr(record, "download_job_id", None) for record in caplog.records]
+    assert any(extras)
+    assert "https://" not in blob
+    assert "bearer" not in blob
+    assert "/tmp/" not in blob
+    assert "url720" not in blob
+    for record in caplog.records:
+        payload = str(getattr(record, "__dict__", {}))
+        assert "stderr" not in payload or "stderr_byte_count" in payload
+        assert "canonical" not in payload.lower()
+        assert "provider_format" not in payload.lower()
+
+
+def test_unknown_event_name_is_fail_closed(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="fetchnow.downloads.diagnostics")
+    emit_stage_event("not_an_allowlisted_event")  # type: ignore[arg-type]
+    assert any(
+        record.getMessage() == "download_job_failed" for record in caplog.records
+    )
+
+
+def test_process_exit_category_is_coarse() -> None:
+    assert (
+        process_exit_category(
+            exit_code=0, timed_out=False, signal=None, cancelled=False
+        ).value
+        == "ZERO"
+    )
+    assert (
+        process_exit_category(
+            exit_code=1, timed_out=False, signal=None, cancelled=False
+        ).value
+        == "NONZERO"
+    )
+    assert (
+        process_exit_category(
+            exit_code=None, timed_out=True, signal=None, cancelled=False
+        ).value
+        == "TIMEOUT"
+    )
+    assert (
+        process_exit_category(
+            exit_code=-9, timed_out=False, signal=9, cancelled=False
+        ).value
+        == "SIGNALLED"
+    )
+    assert (
+        process_exit_category(
+            exit_code=1, timed_out=False, signal=None, cancelled=True
+        ).value
+        == "CANCELLED"
+    )

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MediaFlowController } from "./controller";
 import { MediaApi } from "./api";
-import { FlowSession } from "./session";
+import { FlowSession, SESSION_KEY } from "./session";
 import { generateAccessToken } from "./credentials";
 import { PickerCancelledError, saveArtifactStream } from "./download";
 import {
@@ -12,6 +12,7 @@ import {
   OPTION_ID,
 } from "./fixtures";
 import { parseDownloadJob, parseInspectionJob } from "./contracts";
+import { flowErrorFromCode } from "./errors";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -44,15 +45,17 @@ function mockApi() {
     createDownloadJob: vi.fn(async () =>
       parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
     ),
-    getDownloadJob: vi.fn(async () =>
-      parseDownloadJob(
+    getDownloadJob: vi.fn(async (...args: [string, string, AbortSignal?]) => {
+      void args;
+      return parseDownloadJob(
         downloadPayload({
           state: "ready",
           artifactReady: true,
           completedAt: "2026-08-13T04:22:27Z",
         }),
-      ),
-    ),
+      );
+    }),
+    cancelDownloadJob: vi.fn(),
   };
 }
 
@@ -238,9 +241,9 @@ describe("controller cancellation and lifecycle", () => {
     const store = memoryStore();
     const token = generateAccessToken();
     store.setItem(
-      "fetchnow.media-flow.v1",
+      SESSION_KEY,
       JSON.stringify({
-        v: 1,
+        v: 2,
         token,
         mediaJobId: parseInspectionJob(inspectionPayload()).id,
         downloadJobId: DOWNLOAD_ID,
@@ -303,5 +306,73 @@ describe("controller cancellation and lifecycle", () => {
     await restored;
     expect(controller.snapshot().phase).toBe("ready");
     expect(controller.snapshot().busy).toBe(false);
+  });
+
+  it("ignores incoherent poll payloads and keeps the current generation", async () => {
+    const api = mockApi();
+    let reads = 0;
+    api.getDownloadJob.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 1) {
+        throw flowErrorFromCode("CONTRACT");
+      }
+      return parseDownloadJob(
+        downloadPayload({
+          state: "ready",
+          artifactReady: true,
+          completedAt: "2026-08-13T04:22:27Z",
+        }),
+      );
+    });
+    const save = vi.fn();
+    const { controller } = makeController(api, save);
+    await controller.submit("https://vk.com/video-1_2");
+    controller.selectFormat(OPTION_ID);
+    await controller.enqueueDownload();
+    expect(controller.snapshot().phase).toBe("ready");
+    expect(controller.snapshot().errorText).toBeNull();
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("Cancel task calls the server API while Start over does not", async () => {
+    const api = mockApi();
+    api.getDownloadJob.mockImplementation(async (...args: [string, string, AbortSignal?]) => {
+      const signal = args[2];
+      await new Promise<void>((_resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+      throw new DOMException("Aborted", "AbortError");
+    });
+    api.cancelDownloadJob.mockImplementation(async () =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "cancelled",
+          completedAt: "2026-08-13T04:22:27Z",
+        }),
+      ),
+    );
+    const { controller } = makeController(api, vi.fn(async () => undefined));
+    await controller.submit("https://vk.com/video-1_2");
+    const pending = controller.enqueueDownload();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.snapshot().canCancelTask).toBe(true);
+    await controller.cancelTask();
+    await pending;
+    expect(api.cancelDownloadJob).toHaveBeenCalledOnce();
+    expect(controller.snapshot().phase).toBe("cancelled");
+
+    const again = mockApi();
+    const { controller: local } = makeController(again, vi.fn(async () => undefined));
+    await local.submit("https://vk.com/video-1_2");
+    local.startOver();
+    expect(again.cancelDownloadJob).not.toHaveBeenCalled();
+    expect(local.snapshot().phase).toBe("idle");
   });
 });

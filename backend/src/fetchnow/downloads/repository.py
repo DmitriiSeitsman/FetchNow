@@ -6,13 +6,21 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
 from fetchnow.downloads.models import MediaDownloadJob
-from fetchnow.downloads.states import MediaDownloadJobState, assert_transition
+from fetchnow.downloads.progress import (
+    DownloadProgressStage,
+    assert_progress_transition,
+)
+from fetchnow.downloads.states import (
+    MediaDownloadJobState,
+    assert_transition,
+    is_stored_cancelled,
+)
 
 
 class MediaDownloadJobRepository:
@@ -96,6 +104,8 @@ class MediaDownloadJobRepository:
             artifact_content_type=None,
             artifact_container=None,
             public_error_code=None,
+            progress_stage=DownloadProgressStage.QUEUED.value,
+            cancel_requested_at=None,
             created_at=now,
             updated_at=now,
             started_at=None,
@@ -191,6 +201,7 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.available_at <= func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
                 MediaDownloadJob.attempt_count < MediaDownloadJob.max_attempts,
+                MediaDownloadJob.cancel_requested_at.is_(None),
             )
             .order_by(MediaDownloadJob.created_at.asc(), MediaDownloadJob.id.asc())
             .limit(limit)
@@ -220,6 +231,7 @@ class MediaDownloadJobRepository:
         for job in rows:
             assert_transition(job.public_state, MediaDownloadJobState.DOWNLOADING)
             job.public_state = MediaDownloadJobState.DOWNLOADING.value
+            job.progress_stage = DownloadProgressStage.INSPECTING.value
             job.lease_owner = worker_id
             job.lease_expires_at = lease_expires
             job.fence_token = int(job.fence_token) + 1
@@ -294,9 +306,11 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.fence_token == fence,
                 MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
+                MediaDownloadJob.cancel_requested_at.is_(None),
             )
             .values(
                 public_state=MediaDownloadJobState.READY.value,
+                progress_stage=DownloadProgressStage.READY.value,
                 artifact_id=artifact_id,
                 artifact_bytes=artifact_bytes,
                 artifact_content_type=artifact_content_type,
@@ -334,9 +348,11 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.fence_token == fence,
                 MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
+                MediaDownloadJob.cancel_requested_at.is_(None),
             )
             .values(
                 public_state=MediaDownloadJobState.FAILED.value,
+                progress_stage=DownloadProgressStage.FAILED.value,
                 public_error_code=public_error_code,
                 artifact_id=None,
                 artifact_bytes=None,
@@ -371,6 +387,14 @@ class MediaDownloadJobRepository:
         ):
             return False
 
+        if job.cancel_requested_at is not None:
+            return await self.complete_cancelled(
+                job_id=job_id,
+                owner=owner,
+                fence=fence,
+                now=now,
+            )
+
         if int(job.attempt_count) >= int(job.max_attempts):
             return await self.fail_permanent(
                 job_id=job_id,
@@ -394,9 +418,11 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.fence_token == fence,
                 MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
+                MediaDownloadJob.cancel_requested_at.is_(None),
             )
             .values(
                 public_state=MediaDownloadJobState.QUEUED.value,
+                progress_stage=DownloadProgressStage.RETRYING.value,
                 public_error_code=None,
                 available_at=available_at,
                 lease_owner=None,
@@ -428,9 +454,11 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.fence_token == fence,
                 MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
+                MediaDownloadJob.cancel_requested_at.is_(None),
             )
             .values(
                 public_state=MediaDownloadJobState.QUEUED.value,
+                progress_stage=DownloadProgressStage.QUEUED.value,
                 attempt_count=func.greatest(MediaDownloadJob.attempt_count - 1, 0),
                 available_at=now,
                 lease_owner=None,
@@ -482,6 +510,14 @@ class MediaDownloadJobRepository:
         )
         jobs = list((await self._session.scalars(stmt)).all())
         for job in jobs:
+            if job.cancel_requested_at is not None:
+                assert_transition(
+                    MediaDownloadJobState.DOWNLOADING,
+                    MediaDownloadJobState.EXPIRED,
+                )
+                self._apply_stored_cancel(job, now)
+                job.fence_token = int(job.fence_token) + 1
+                continue
             exhausted = int(job.attempt_count) >= int(job.max_attempts)
             target = (
                 MediaDownloadJobState.FAILED
@@ -490,6 +526,11 @@ class MediaDownloadJobRepository:
             )
             assert_transition(MediaDownloadJobState.DOWNLOADING, target)
             job.public_state = target.value
+            job.progress_stage = (
+                DownloadProgressStage.FAILED.value
+                if exhausted
+                else DownloadProgressStage.RETRYING.value
+            )
             job.lease_owner = None
             job.lease_expires_at = None
             job.fence_token = int(job.fence_token) + 1
@@ -515,13 +556,22 @@ class MediaDownloadJobRepository:
             select(MediaDownloadJob)
             .where(
                 MediaDownloadJob.expires_at <= func.clock_timestamp(),
-                MediaDownloadJob.public_state.in_(
-                    (
-                        MediaDownloadJobState.QUEUED.value,
-                        MediaDownloadJobState.DOWNLOADING.value,
-                        MediaDownloadJobState.READY.value,
-                        MediaDownloadJobState.FAILED.value,
-                    )
+                or_(
+                    MediaDownloadJob.public_state.in_(
+                        (
+                            MediaDownloadJobState.QUEUED.value,
+                            MediaDownloadJobState.DOWNLOADING.value,
+                            MediaDownloadJobState.READY.value,
+                            MediaDownloadJobState.FAILED.value,
+                        )
+                    ),
+                    and_(
+                        MediaDownloadJob.public_state
+                        == MediaDownloadJobState.EXPIRED.value,
+                        MediaDownloadJob.progress_stage
+                        == DownloadProgressStage.CANCELLED.value,
+                        MediaDownloadJob.cancel_requested_at.is_not(None),
+                    ),
                 ),
             )
             .with_for_update(skip_locked=True)
@@ -529,12 +579,21 @@ class MediaDownloadJobRepository:
         jobs = list((await self._session.scalars(stmt)).all())
         artifact_ids: list[uuid.UUID] = []
         for job in jobs:
-            assert_transition(job.public_state, MediaDownloadJobState.EXPIRED)
+            if is_stored_cancelled(
+                job.public_state, job.progress_stage, job.cancel_requested_at
+            ):
+                assert_transition(
+                    MediaDownloadJobState.CANCELLED, MediaDownloadJobState.EXPIRED
+                )
+            else:
+                assert_transition(job.public_state, MediaDownloadJobState.EXPIRED)
             if job.artifact_id is not None:
                 artifact_ids.append(job.artifact_id)
             job.public_state = MediaDownloadJobState.EXPIRED.value
+            job.progress_stage = DownloadProgressStage.EXPIRED.value
             job.lease_owner = None
             job.lease_expires_at = None
+            job.cancel_requested_at = None
             job.artifact_id = None
             job.artifact_bytes = None
             job.artifact_content_type = None
@@ -547,3 +606,181 @@ class MediaDownloadJobRepository:
         if jobs:
             await self._session.flush()
         return artifact_ids
+
+    async def request_cancel(
+        self, *, job_id: uuid.UUID, now: datetime
+    ) -> MediaDownloadJob | None:
+        """Idempotent user cancel. Ready/failed/expired are left unchanged."""
+        stmt = (
+            select(MediaDownloadJob)
+            .where(MediaDownloadJob.id == job_id)
+            .with_for_update()
+        )
+        job = await self._session.scalar(stmt)
+        if job is None:
+            return None
+        if is_stored_cancelled(
+            job.public_state, job.progress_stage, job.cancel_requested_at
+        ):
+            return job
+        state = job.public_state
+        if state in {
+            MediaDownloadJobState.READY.value,
+            MediaDownloadJobState.FAILED.value,
+            MediaDownloadJobState.EXPIRED.value,
+        }:
+            return job
+        if state == MediaDownloadJobState.QUEUED.value:
+            assert_transition(
+                MediaDownloadJobState.QUEUED, MediaDownloadJobState.EXPIRED
+            )
+            job.cancel_requested_at = now
+            self._apply_stored_cancel(job, now)
+            await self._session.flush()
+            return job
+        if state == MediaDownloadJobState.DOWNLOADING.value:
+            if job.cancel_requested_at is None:
+                job.cancel_requested_at = now
+                job.updated_at = now
+                await self._session.flush()
+            return job
+        raise_download_error(
+            DownloadErrorCode.INTERNAL_ERROR,
+            internal_reason="UNKNOWN_DOWNLOAD_STATE",
+        )
+
+    async def complete_cancelled(
+        self,
+        *,
+        job_id: uuid.UUID,
+        owner: str,
+        fence: int,
+        now: datetime,
+    ) -> bool:
+        """Terminal-cancel only a fenced downloading job with a user request."""
+        del now
+        assert_transition(
+            MediaDownloadJobState.DOWNLOADING, MediaDownloadJobState.EXPIRED
+        )
+        result = await self._session.execute(
+            update(MediaDownloadJob)
+            .where(
+                MediaDownloadJob.id == job_id,
+                MediaDownloadJob.public_state
+                == MediaDownloadJobState.DOWNLOADING.value,
+                MediaDownloadJob.lease_owner == owner,
+                MediaDownloadJob.fence_token == fence,
+                MediaDownloadJob.cancel_requested_at.is_not(None),
+            )
+            .values(
+                public_state=MediaDownloadJobState.EXPIRED.value,
+                progress_stage=DownloadProgressStage.CANCELLED.value,
+                public_error_code=None,
+                artifact_id=None,
+                artifact_bytes=None,
+                artifact_content_type=None,
+                artifact_container=None,
+                lease_owner=None,
+                lease_expires_at=None,
+                completed_at=func.clock_timestamp(),
+                updated_at=func.clock_timestamp(),
+            )
+        )
+        return bool(result.rowcount)
+
+    async def set_progress_stage(
+        self,
+        *,
+        job_id: uuid.UUID,
+        owner: str,
+        fence: int,
+        stage: DownloadProgressStage | str,
+        now: datetime,
+    ) -> bool:
+        """Fenced active-stage update. Terminal stages use complete/fail/cancel."""
+        target = (
+            stage
+            if isinstance(stage, DownloadProgressStage)
+            else DownloadProgressStage(str(stage))
+        )
+        if target in {
+            DownloadProgressStage.READY,
+            DownloadProgressStage.FAILED,
+            DownloadProgressStage.CANCELLED,
+            DownloadProgressStage.EXPIRED,
+        }:
+            return False
+        stmt = (
+            select(MediaDownloadJob)
+            .where(
+                MediaDownloadJob.id == job_id,
+                MediaDownloadJob.public_state
+                == MediaDownloadJobState.DOWNLOADING.value,
+                MediaDownloadJob.lease_owner == owner,
+                MediaDownloadJob.fence_token == fence,
+                MediaDownloadJob.cancel_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
+        job = await self._session.scalar(stmt)
+        if job is None:
+            return False
+        assert_progress_transition(job.progress_stage, target)
+        job.progress_stage = target.value
+        job.updated_at = now
+        await self._session.flush()
+        return True
+
+    async def lease_status(
+        self,
+        *,
+        job_id: uuid.UUID,
+        owner: str,
+        fence: int,
+        lease_seconds: float,
+        now: datetime,
+    ) -> str:
+        """Return ``owned``, ``lost``, or ``cancelled`` for the current fence."""
+        del now
+        stmt = (
+            select(MediaDownloadJob)
+            .where(
+                MediaDownloadJob.id == job_id,
+                MediaDownloadJob.public_state
+                == MediaDownloadJobState.DOWNLOADING.value,
+                MediaDownloadJob.lease_owner == owner,
+                MediaDownloadJob.fence_token == fence,
+                MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
+                MediaDownloadJob.expires_at > func.clock_timestamp(),
+            )
+            .with_for_update()
+        )
+        job = await self._session.scalar(stmt)
+        if job is None:
+            return "lost"
+        if job.cancel_requested_at is not None:
+            return "cancelled"
+        renewed = await self.renew_lease(
+            job_id=job_id,
+            owner=owner,
+            fence=fence,
+            lease_seconds=lease_seconds,
+            now=datetime.now(),
+        )
+        return "owned" if renewed else "lost"
+
+    @staticmethod
+    def _apply_stored_cancel(job: MediaDownloadJob, now: datetime) -> None:
+        """Encode user cancel as PR9-readable expired + PR10 cancel markers."""
+        job.public_state = MediaDownloadJobState.EXPIRED.value
+        job.progress_stage = DownloadProgressStage.CANCELLED.value
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.updated_at = now
+        if job.completed_at is None:
+            job.completed_at = now
+        job.public_error_code = None
+        job.artifact_id = None
+        job.artifact_bytes = None
+        job.artifact_content_type = None
+        job.artifact_container = None

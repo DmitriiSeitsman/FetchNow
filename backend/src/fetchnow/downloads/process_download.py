@@ -8,6 +8,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fetchnow.downloads.artifacts import ArtifactStore
+from fetchnow.downloads.diagnostics import (
+    FailureClass,
+    classify_tool_failure,
+    process_exit_category,
+)
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
 from fetchnow.media_inspection.errors import InspectionError
 from fetchnow.media_inspection.process import (
@@ -127,6 +132,9 @@ class DownloadProcessRunner:
         failure_path = False
         limit_code: DownloadErrorCode | None = None
         captured_stdout = b""
+        stdout_count = 0
+        stderr_count = 0
+        classified_failure = None
         watching = (
             (output_dir is not None or extra_size_dirs)
             and max_output_bytes is not None
@@ -143,6 +151,7 @@ class DownloadProcessRunner:
 
         async def _communicate() -> None:
             nonlocal stdout_task, stderr_task, captured_stdout
+            nonlocal stdout_count, stderr_count, classified_failure
             assert proc.stdout is not None
             assert proc.stderr is not None
             stdout_task = asyncio.create_task(
@@ -162,11 +171,20 @@ class DownloadProcessRunner:
                 )
             )
             try:
-                stdout_bytes, _stderr_bytes = await asyncio.gather(
+                stdout_bytes, stderr_bytes = await asyncio.gather(
                     stdout_task, stderr_task
+                )
+                stdout_count = len(stdout_bytes)
+                stderr_count = len(stderr_bytes)
+                classified_failure = classify_tool_failure(
+                    timed_out=False,
+                    signal=None,
+                    cancelled=False,
+                    stderr=stderr_bytes,
                 )
                 if capture_stdout:
                     captured_stdout = stdout_bytes
+                del stderr_bytes
             except Exception:
                 stdout_task.cancel()
                 stderr_task.cancel()
@@ -277,26 +295,35 @@ class DownloadProcessRunner:
             )
 
         stdout_out = captured_stdout if capture_stdout else b""
-        if timed_out:
-            return ProcessResult(
-                exit_code=proc.returncode,
-                stdout=stdout_out if capture_stdout else b"",
-                stderr=b"",
-                timed_out=True,
-                cancelled=False,
-            )
-
         signal_number: int | None = None
         code = proc.returncode
         if code is not None and code < 0:
             signal_number = -code
+        category = process_exit_category(
+            exit_code=code,
+            timed_out=timed_out,
+            signal=signal_number,
+            cancelled=False,
+        )
+        failure = classified_failure
+        if timed_out:
+            failure = classify_tool_failure(timed_out=True, stderr=b"")
+        elif signal_number is not None:
+            failure = classify_tool_failure(signal=signal_number, stderr=b"")
+        failure_token: str | None = None
+        if category.value != "ZERO":
+            failure_token = (failure or FailureClass.TOOL_EXIT_NONZERO).value
         return ProcessResult(
             exit_code=code,
             stdout=stdout_out,
             stderr=b"",
-            timed_out=False,
+            timed_out=timed_out,
             cancelled=False,
             signal=signal_number,
+            stdout_byte_count=stdout_count,
+            stderr_byte_count=stderr_count,
+            failure_class=failure_token,
+            process_exit_category=category.value,
         )
 
 

@@ -162,9 +162,7 @@ async def test_executor_success_publishes_ready_and_removes_workspace(
     selection = _selection()
 
     _patch_download_tooling(executor, monkeypatch)
-    monkeypatch.setattr(
-        executor, "lease_still_owned", AsyncMock(return_value=True)
-    )
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
     monkeypatch.setattr(
         executor, "_resolve_selection", AsyncMock(return_value=selection)
     )
@@ -203,9 +201,7 @@ async def test_executor_cleanup_failure_does_not_commit_ready(
     selection = _selection()
 
     _patch_download_tooling(executor, monkeypatch)
-    monkeypatch.setattr(
-        executor, "lease_still_owned", AsyncMock(return_value=True)
-    )
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
     monkeypatch.setattr(
         executor, "_resolve_selection", AsyncMock(return_value=selection)
     )
@@ -257,9 +253,7 @@ async def test_executor_stale_complete_ready_leaves_orphan(
     selection = _selection()
 
     _patch_download_tooling(executor, monkeypatch)
-    monkeypatch.setattr(
-        executor, "lease_still_owned", AsyncMock(return_value=True)
-    )
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
     monkeypatch.setattr(
         executor, "_resolve_selection", AsyncMock(return_value=selection)
     )
@@ -271,12 +265,17 @@ async def test_executor_stale_complete_ready_leaves_orphan(
     monkeypatch.setattr(
         MediaDownloadJobRepository, "complete_ready", AsyncMock(return_value=False)
     )
+    complete_cancelled = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        MediaDownloadJobRepository, "complete_cancelled", complete_cancelled
+    )
     fail = AsyncMock()
     monkeypatch.setattr(executor, "_fail", fail)
 
     await executor.execute(snap)
 
     fail.assert_not_awaited()
+    complete_cancelled.assert_awaited()
     published_dirs = [p for p in (store.root / "published").iterdir() if p.is_dir()]
     assert len(published_dirs) == 1
 
@@ -294,9 +293,7 @@ async def test_executor_complete_ready_raise_leaves_orphan(
     selection = _selection()
 
     _patch_download_tooling(executor, monkeypatch)
-    monkeypatch.setattr(
-        executor, "lease_still_owned", AsyncMock(return_value=True)
-    )
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
     monkeypatch.setattr(
         executor, "_resolve_selection", AsyncMock(return_value=selection)
     )

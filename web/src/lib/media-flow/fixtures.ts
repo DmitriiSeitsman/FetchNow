@@ -69,7 +69,7 @@ export function inspectedPayload(
 export function downloadPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return {
+  const merged: Record<string, unknown> = {
     id: DOWNLOAD_ID,
     mediaJobId: JOB_ID,
     state: "queued",
@@ -81,8 +81,33 @@ export function downloadPayload(
     completedAt: null,
     artifactReady: false,
     errorCode: null,
+    progressStage: "queued",
+    attempt: 0,
+    maxAttempts: 3,
+    nextAttemptAt: null,
+    cancellable: true,
     ...overrides,
   };
+  const state = merged.state;
+  if (state !== "queued" && state !== "downloading") {
+    merged.cancellable = false;
+  }
+  if (state === "ready" && merged.progressStage === "queued") {
+    merged.progressStage = "ready";
+  }
+  if (state === "failed" && merged.progressStage === "queued") {
+    merged.progressStage = "failed";
+  }
+  if (state === "cancelled" && merged.progressStage === "queued") {
+    merged.progressStage = "cancelled";
+  }
+  if (state === "expired" && merged.progressStage === "queued") {
+    merged.progressStage = "expired";
+  }
+  if (state === "downloading" && merged.progressStage === "queued") {
+    merged.progressStage = "inspecting";
+  }
+  return merged;
 }
 
 export function asInspection(payload: Record<string, unknown>): InspectionJob {

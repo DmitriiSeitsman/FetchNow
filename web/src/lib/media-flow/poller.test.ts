@@ -132,4 +132,29 @@ describe("poller", () => {
     ).rejects.toBeTruthy();
     expect(reads).toBeLessThanOrEqual(3);
   });
+
+  it("retries CONTRACT parse failures without treating them as terminal", async () => {
+    const ac = new AbortController();
+    let reads = 0;
+    const ticks: number[] = [];
+    const value = await pollUntilTerminal({
+      read: async () => {
+        reads += 1;
+        if (reads === 1) {
+          throw new FlowError("CONTRACT", "x", false);
+        }
+        return reads;
+      },
+      isTerminal: (v) => v >= 2,
+      expiresAt: () => new Date(Date.now() + 60_000).toISOString(),
+      signal: ac.signal,
+      sleep: async () => undefined,
+      maxTransientFailures: 2,
+      onTick: (v) => {
+        ticks.push(v);
+      },
+    });
+    expect(value).toBe(2);
+    expect(ticks).toEqual([2]);
+  });
 });

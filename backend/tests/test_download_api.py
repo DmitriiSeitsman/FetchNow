@@ -115,6 +115,11 @@ def _view(*, created: bool = True) -> DownloadJobView:
         completed_at=None,
         artifact_ready=False,
         error_code=None,
+        progress_stage="queued",
+        attempt_count=0,
+        max_attempts=3,
+        next_attempt_at=None,
+        cancellable=True,
         created=created,
     )
 
@@ -176,6 +181,12 @@ async def test_create_response_has_no_path_token_url(
     assert token not in response.text
     assert body["formatOptionId"] == "fmt_abc123"
     assert body["artifactReady"] is False
+    assert body["progressStage"] == "queued"
+    assert body["cancellable"] is True
+    assert body["attempt"] == 0
+    assert body["maxAttempts"] == 3
+    assert "failureClass" not in body
+    assert "failure_class" not in body
 
 
 @pytest.mark.asyncio
@@ -307,6 +318,11 @@ async def test_get_expired_job_returns_expired_state(
         completed_at=None,
         artifact_ready=False,
         error_code="DOWNLOAD_EXPIRED",
+        progress_stage="expired",
+        attempt_count=0,
+        max_attempts=3,
+        next_attempt_at=None,
+        cancellable=False,
         created=False,
     )
     token = generate_access_token()
@@ -368,7 +384,46 @@ def _row(snapshot: dict[str, object]) -> MediaDownloadJob:
         created_at=now,
         updated_at=now,
         expires_at=now + timedelta(hours=1),
+        progress_stage="queued",
+        cancel_requested_at=None,
     )
+
+
+def test_service_projects_stored_cancelled_encoding() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_DOWNLOADS_ENABLED=True,
+        PROVIDER_VK_ENABLED=True,
+        PROVIDER_RUTUBE_ENABLED=True,
+    )
+    now = datetime.now(tz=UTC)
+    row = _row(dict(_VALID_SNAPSHOT))
+    row.public_state = "expired"
+    row.progress_stage = "cancelled"
+    row.cancel_requested_at = now
+    row.completed_at = now
+    view = DownloadJobService(settings)._to_view(row, created=False)
+    assert view.public_state == "cancelled"
+    assert view.progress_stage == "cancelled"
+    assert view.cancellable is False
+    assert view.artifact_ready is False
+    assert view.error_code is None
+    public = DownloadJobService(settings).to_public_dict(view)
+    assert public["state"] == "cancelled"
+    assert public["progressStage"] == "cancelled"
+    assert public["cancellable"] is False
+    assert public["artifactReady"] is False
+    assert public["errorCode"] is None
+
+    ordinary = _row(dict(_VALID_SNAPSHOT))
+    ordinary.public_state = "expired"
+    ordinary.progress_stage = "expired"
+    ordinary.cancel_requested_at = None
+    expired = DownloadJobService(settings)._to_view(ordinary, created=False)
+    assert expired.public_state == "expired"
+    assert expired.error_code == "DOWNLOAD_EXPIRED"
 
 
 @pytest.mark.asyncio
@@ -499,3 +554,117 @@ async def test_snapshot_option_id_mismatch_fails_closed(
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "INTERNAL_ERROR"
     assert response.headers.get("cache-control") == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_uuid_alone_cannot_cancel(enabled_client: AsyncClient) -> None:
+    response = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{uuid.uuid4()}/cancel"
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "DOWNLOAD_JOB_NOT_FOUND"
+    assert response.headers.get("cache-control") == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_malformed_bearer_cancel_is_not_found(
+    enabled_client: AsyncClient,
+) -> None:
+    response = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{uuid.uuid4()}/cancel",
+        headers={"Authorization": "Bearer"},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "DOWNLOAD_JOB_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_unknown_and_unauthorized_cancel_are_indistinguishable(
+    enabled_client: AsyncClient,
+) -> None:
+    token = generate_access_token()
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    service = MagicMock()
+    service.cancel = AsyncMock(
+        side_effect=[
+            DownloadError(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="MISSING",
+            ),
+            DownloadError(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="UNAUTHORIZED",
+            ),
+        ]
+    )
+    app.state.download_job_service = service
+    unknown = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{uuid.uuid4()}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    unauthorized = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{uuid.uuid4()}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert unknown.status_code == unauthorized.status_code == 404
+    assert unknown.json()["error"]["code"] == unauthorized.json()["error"]["code"]
+    assert unknown.json()["error"]["code"] == "DOWNLOAD_JOB_NOT_FOUND"
+    assert unknown.json()["error"]["message"] == unauthorized.json()["error"]["message"]
+    assert "MISSING" not in unknown.text
+    assert "UNAUTHORIZED" not in unauthorized.text
+    assert token not in unknown.text
+    assert token not in unauthorized.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_is_idempotent_and_does_not_run_tools(
+    enabled_client: AsyncClient,
+) -> None:
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    queued = _view(created=False)
+    view = DownloadJobView(
+        id=queued.id,
+        media_job_id=queued.media_job_id,
+        public_state="cancelled",
+        format_option_id=queued.format_option_id,
+        selected_format=queued.selected_format,
+        created_at=queued.created_at,
+        updated_at=queued.updated_at,
+        expires_at=queued.expires_at,
+        completed_at=queued.created_at,
+        artifact_ready=False,
+        error_code=None,
+        progress_stage="cancelled",
+        attempt_count=0,
+        max_attempts=3,
+        next_attempt_at=None,
+        cancellable=False,
+        created=False,
+    )
+    token = generate_access_token()
+    service = MagicMock()
+    service.cancel = AsyncMock(return_value=view)
+    service.to_public_dict = DownloadJobService(app.state.settings).to_public_dict
+    app.state.download_job_service = service
+    first = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{view.id}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    second = await enabled_client.post(
+        f"/api/v1/media/download-jobs/{view.id}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["state"] == "cancelled"
+    assert second.json()["state"] == "cancelled"
+    assert first.json()["cancellable"] is False
+    assert "failureClass" not in first.json()
+    assert service.cancel.await_count == 2
+    blob = first.text.lower()
+    assert "yt-dlp" not in blob
+    assert "ffmpeg" not in blob
+    assert token not in first.text

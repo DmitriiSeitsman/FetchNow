@@ -34,12 +34,21 @@ const enabled = isMediaFlowEnabled();
       <button class="btn btn-ghost" type="button" data-flow-reset hidden>
         Start over
       </button>
+      <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
+        Cancel task
+      </button>
     </div>
   </form>
   <p class="hint" id="flow-hint">
     Public VK, Rutube, and Yandex Preview links. No account required.
   </p>
   <p class="status" data-flow-status aria-live="polite"></p>
+  <p class="hint" data-flow-restored hidden>
+    Restored an existing download task.
+  </p>
+  <div class="loader" data-flow-loader hidden>
+    <span class="spinner" data-flow-spinner aria-hidden="true"></span>
+  </div>
   <article class="meta-card" data-flow-meta hidden>
     <h2 class="meta-title" data-flow-title></h2>
     <p class="meta-line">

@@ -7,9 +7,11 @@ import {
   parseDownloadJob,
   parseInspectionJob,
   parseMediaFormat,
+  pickHighestEligibleFormat,
 } from "./contracts";
 import {
   DOWNLOAD_ID,
+  EXPIRES,
   OPTION_ID,
   STAMP,
   downloadPayload,
@@ -301,6 +303,14 @@ describe("contracts", () => {
         ok: true,
       },
       {
+        name: "cancelled",
+        payload: downloadPayload({
+          state: "cancelled",
+          completedAt: STAMP,
+        }),
+        ok: true,
+      },
+      {
         name: "expired from queued",
         payload: downloadPayload({
           state: "expired",
@@ -346,6 +356,15 @@ describe("contracts", () => {
         }),
         ok: false,
       },
+      {
+        name: "queued retrying with nextAttemptAt",
+        payload: downloadPayload({
+          state: "queued",
+          progressStage: "retrying",
+          nextAttemptAt: EXPIRES,
+        }),
+        ok: true,
+      },
     ];
     for (const row of cases) {
       if (row.ok) {
@@ -371,6 +390,72 @@ describe("contracts", () => {
     );
   });
 
+  it("rejects incoherent public state and progressStage pairs", () => {
+    const mismatches: Array<Record<string, unknown>> = [
+      { state: "ready", progressStage: "downloading_video", artifactReady: true, completedAt: STAMP },
+      { state: "cancelled", progressStage: "publishing", completedAt: STAMP },
+      { state: "queued", progressStage: "failed" },
+      { state: "downloading", progressStage: "ready" },
+      { state: "failed", progressStage: "inspecting", errorCode: "DOWNLOAD_TOOL_FAILED", completedAt: STAMP },
+      { state: "expired", progressStage: "inspecting", completedAt: STAMP, updatedAt: STAMP },
+      { state: "ready", progressStage: "retrying", artifactReady: true, completedAt: STAMP },
+    ];
+    for (const extra of mismatches) {
+      expect(() => parseDownloadJob(downloadPayload(extra)), JSON.stringify(extra)).toThrow(
+        FlowError,
+      );
+    }
+  });
+
+  it("rejects illegal nextAttemptAt, attempt, and terminal cancellable flags", () => {
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "queued",
+          progressStage: "retrying",
+          nextAttemptAt: null,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "downloading",
+          progressStage: "inspecting",
+          nextAttemptAt: EXPIRES,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "queued",
+          progressStage: "queued",
+          nextAttemptAt: EXPIRES,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(downloadPayload({ attempt: 4, maxAttempts: 3 })),
+    ).toThrow(FlowError);
+    const readyCancellable = downloadPayload({
+      state: "ready",
+      artifactReady: true,
+      completedAt: STAMP,
+    });
+    readyCancellable.cancellable = true;
+    expect(() => parseDownloadJob(readyCancellable)).toThrow(FlowError);
+    expect(
+      parseDownloadJob(
+        downloadPayload({
+          state: "queued",
+          progressStage: "retrying",
+          nextAttemptAt: EXPIRES,
+        }),
+      ).nextAttemptAt,
+    ).toBe(EXPIRES);
+  });
+
   it("marks only progressive free-tier A/V as downloadable", () => {
     expect(isDownloadEligible(progressiveFormat)).toBe(true);
     expect(
@@ -381,5 +466,31 @@ describe("contracts", () => {
         freeTierEligible: true,
       }),
     ).toBe(false);
+  });
+
+  it("defaults to the highest eligible quality at or below 720p", () => {
+    const fmt = (height: number, eligible: boolean, id: string) => ({
+      ...progressiveFormat,
+      formatOptionId: id,
+      height,
+      qualityLabel: `p${height}`,
+      freeTierEligible: eligible,
+    });
+    const id144 = "fmt_1111111111111111111111111111";
+    const id240 = "fmt_2222222222222222222222222222";
+    const id360 = "fmt_3333333333333333333333333333";
+    const id480 = "fmt_4444444444444444444444444444";
+    const id720 = "fmt_5555555555555555555555555555";
+    const id1080 = "fmt_6666666666666666666666666666";
+    expect(
+      pickHighestEligibleFormat([
+        fmt(144, true, id144),
+        fmt(1080, false, id1080),
+        fmt(240, true, id240),
+        fmt(720, true, id720),
+        fmt(360, true, id360),
+        fmt(480, true, id480),
+      ]),
+    ).toBe(id720);
   });
 });

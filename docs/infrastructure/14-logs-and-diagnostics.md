@@ -40,6 +40,27 @@ sudo ss -lntup
 | Permission denied | `id`, `namei -l`, `stat` | mount/UID 10001 | exact owner/mode fix |
 | DNS mismatch | authoritative and recursive `dig` | TTL/delegation | correct A record |
 
+## Диагностика download job (PR10)
+
+Искать structured events worker-а: `download_job_attempt_started`,
+`download_video_*`, `download_audio_*`, `media_mux_*`, `media_verify_*`,
+`artifact_publish_*`, `download_retry_scheduled`, `download_job_cancelled`,
+`download_job_failed`, `download_job_ready`.
+
+Оператор должен ответить без URL / token / provider format token / raw stderr:
+
+| Вопрос | Где смотреть |
+|---|---|
+| На какой стадии упала задача? | последнее `*_failed` event + `stage` / public `progress_stage` |
+| Ошибка retryable? | поле `retryable` на stage event |
+| Сколько попыток? | `attempt_count` / public `attempt` vs `maxAttempts` |
+| Задача отменена? | event `download_job_cancelled` или public API `state=cancelled` / `progress_stage=cancelled` + `cancel_requested_at` (stored `public_state` remains `expired`) |
+| Потерян ли lease? | `failure_class=LEASE_LOST` или fence mismatch; не `DOWNLOAD_TOOL_FAILED` из-за cancel |
+
+Запрещено печатать submitted/canonical URL, query, Bearer, format token, argv,
+пути и исходный stderr. Fingerprint строится только из sanitized categorical
+полей.
+
 ## Диагностика validate/probe
 
 ### `UNSUPPORTED_PROVIDER` от validate

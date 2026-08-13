@@ -29,6 +29,9 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     canSubmit: false,
     canSave: false,
     canStartOver: true,
+    canCancelTask: false,
+    restored: false,
+    progressStage: null,
     ...partial,
   };
 }

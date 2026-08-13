@@ -276,6 +276,25 @@ export class MediaApi {
     return parseDownloadJob(body);
   }
 
+  async cancelDownloadJob(
+    downloadJobId: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<DownloadJob> {
+    const { status, body, headers } = await this.requestJson(
+      `/api/v1/media/download-jobs/${downloadJobId}/cancel`,
+      {
+        method: "POST",
+        headers: bearerHeaders(token, { Accept: "application/json" }),
+        signal,
+      },
+    );
+    if (status !== 200) {
+      throwHttpError(status, body, headers);
+    }
+    return parseDownloadJob(body);
+  }
+
   contentUrl(downloadJobId: string): string {
     return sameOriginApiUrl(
       `/api/v1/media/download-jobs/${downloadJobId}/content`,
