@@ -54,6 +54,7 @@ services:
     build:
       args:
         PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:?PUBLIC_SITE_URL must be set in .env.staging}
+        PUBLIC_MEDIA_FLOW_ENABLED: ${PUBLIC_MEDIA_FLOW_ENABLED:-false}
         FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
 
   gateway:

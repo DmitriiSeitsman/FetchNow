@@ -4,7 +4,7 @@ Paste. Fetch. Done.
 
 FetchNow is a portable media-fetch product: a FastAPI API + worker, an Astro static web client, PostgreSQL, and an Nginx gateway — all wired through Docker Compose so the same container shape runs locally and on a small server, then moves to a larger host without rewriting the application.
 
-> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5) + **durable download execution foundation** (PR6: private artifacts, create/status only; **disabled by default**) + **authenticated private artifact delivery** (PR7: dedicated `delivery` service; **disabled by default**). There is no ffmpeg pipeline and no permanent storage.
+> **Current status:** foundation stack + URL validation (`POST /api/v1/media/validate`) + **safe outbound probe** (`POST /api/v1/media/probe`) + **wrapper resolve** (`POST /api/v1/media/resolve`) including the Yandex Video Preview → VK/Rutube resolver + **internal media inspection** (PR4) + **durable media-inspection jobs** (PR5) + **durable download execution foundation** (PR6: private artifacts, create/status only; **disabled by default**) + **authenticated private artifact delivery** (PR7: dedicated `delivery` service; **disabled by default**) + **browser download flow** (PR8: static UI orchestration; **`PUBLIC_MEDIA_FLOW_ENABLED=false`**). There is no ffmpeg pipeline and no permanent storage.
 
 ## Architecture
 
@@ -30,6 +30,7 @@ Security and product boundaries are documented **before** media processing ships
 - Durable media-inspection jobs: PostgreSQL queue with client-generated access tokens, `SKIP LOCKED` claims, and lease fencing ([ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md)). Defaults off; API does not run yt-dlp.
 - Durable download execution foundation: progressive download jobs, exact option rebinding, private artifact store ([ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md)). Defaults off; no client file delivery in PR6.
 - Authenticated private artifact delivery: dedicated `delivery` process, parent Bearer auth, FD-based streaming ([ADR 0011](docs/adr/0011-authenticated-private-artifact-delivery.md)). Defaults off; API does not mount artifact storage; delivery never invokes yt-dlp and receives no tool path (shared image still contains the binary; DB role is not read-only).
+- Browser download flow: static Astro orchestration of inspection → download → File System Access streaming save ([ADR 0012](docs/adr/0012-browser-download-flow.md), [browser flow](docs/api/browser-download-flow.md)). UI flag `PUBLIC_MEDIA_FLOW_ENABLED` defaults false and does not enable server flags.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
 - Capacity limits are environment-driven and fail closed: [Capacity policy](docs/operations/capacity-policy.md).
@@ -56,6 +57,10 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0008](docs/adr/0008-media-inspection-and-tool-boundary.md) | Media inspection + yt-dlp tool boundary |
 | [ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md) | PostgreSQL media-job orchestration |
 | [ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md) | Durable download execution + private artifacts |
+| [ADR 0011](docs/adr/0011-authenticated-private-artifact-delivery.md) | Authenticated private artifact delivery |
+| [ADR 0012](docs/adr/0012-browser-download-flow.md) | Browser orchestration + streaming save |
+| [Browser download flow](docs/api/browser-download-flow.md) | Client sequence and constraints |
+| [Browser support](docs/product/browser-support.md) | File System Access API boundary |
 
 ## Validate API (PR1)
 

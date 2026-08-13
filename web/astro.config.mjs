@@ -5,6 +5,12 @@ export default defineConfig({
   compressHTML: true,
   build: {
     format: "directory",
+    inlineStylesheets: "never",
+  },
+  vite: {
+    build: {
+      assetsInlineLimit: 0,
+    },
   },
   server: {
     port: 4321,

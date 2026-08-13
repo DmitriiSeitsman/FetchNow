@@ -303,9 +303,19 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Guessable URLs or web-root exposure |
 | Impact | Unintended redistribution; copyright exposure |
-| Mitigation | Non-guessable keys; not in public root; short TTL; no indexing |
+| Mitigation | Non-guessable keys; not in public root; short TTL; no indexing; PR7 Bearer on content; no query-token URLs (PR8) |
 | Residual risk | User redistributes after download (out of server control) |
-| Planned PR | Storage/delivery PR |
+| Planned PR | Storage/delivery: **PR7**; browser save: **PR8** |
+
+### Browser credential leakage (PR8)
+
+| Field | Detail |
+|---|---|
+| Attack | XSS or referrer/history capture of the client access token |
+| Impact | Read/create jobs and download artifacts until TTL |
+| Mitigation | Token only in `Authorization`; never in URL/DOM/filename; tab-scoped bounded `sessionStorage`; gateway HTML CSP `script-src 'self'; connect-src 'self'` without `unsafe-eval`; same-origin fetch only |
+| Residual risk | Same-origin XSS can still read `sessionStorage`; no cross-replica rate limit |
+| Planned PR | **PR8** |
 
 ### Abuse through unsupported providers
 

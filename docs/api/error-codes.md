@@ -126,6 +126,12 @@ status exposes `artifactReady` only.
 
 See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
 
+## Browser client (PR8)
+
+The static web UI maps the codes above to short user-safe copy and never
+displays `internal_reason`, tokens, URLs, or raw bodies. Unknown codes use a
+generic fallback. See [browser download flow](browser-download-flow.md).
+
 ## Related documents
 
 - [URL validation policy](../security/url-validation-policy.md)
@@ -135,4 +141,5 @@ See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-bound
 - [ADR 0008 — media inspection tool boundary](../adr/0008-media-inspection-and-tool-boundary.md)
 - [ADR 0009 — PostgreSQL media-job orchestration](../adr/0009-postgresql-media-job-orchestration.md)
 - [ADR 0010 — durable download execution](../adr/0010-durable-download-execution-and-private-artifact-boundary.md)
+- [ADR 0012 — browser download flow](../adr/0012-browser-download-flow.md)
 - [Capacity policy](../operations/capacity-policy.md)

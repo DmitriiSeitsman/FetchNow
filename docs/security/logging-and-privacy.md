@@ -19,6 +19,7 @@ Do not write:
 - direct CDN / prepared-file URLs that grant download access;
 - `Authorization` and similar auth headers;
 - session tokens;
+- browser access tokens (PR8) and `Authorization` headers;
 - resolved IP addresses;
 - TLS internals;
 - response bodies;
@@ -69,6 +70,12 @@ Download jobs (PR6) additionally forbid logging or publicizing:
 `DownloadError` str/repr omit `internal_reason` and never include tokens or paths.
 Download create/status reuse the parent MediaJob Bearer and return
 `Cache-Control: no-store`.
+
+The browser download flow (PR8) never writes the access token, submitted URL,
+canonical provider URL, or `Authorization` header to `console`, DOM attributes,
+error text, or analytics. Thrown UI errors use catalog copy only. A tab-scoped
+`sessionStorage` recovery record may hold the token and job ids; it is not a log
+and is cleared after a clean save or an unrecoverable terminal state.
 
 Third-party loggers that embed request URLs (notably httpx/httpcore at INFO) must stay at WARNING or above in FetchNow processes.
 

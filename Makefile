@@ -53,6 +53,7 @@ typecheck:
 test:
 	cd $(BACKEND) && .venv/bin/pytest -q
 	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup tests/release
+	cd $(WEB) && npm test
 
 build:
 	cd $(WEB) && npm run build

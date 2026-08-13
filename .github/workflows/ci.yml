@@ -350,10 +350,18 @@ jobs:
         run: npm run lint
       - name: Typecheck
         run: npm run typecheck
+      - name: Test
+        run: npm test
       - name: Build
         run: npm run build
         env:
           PUBLIC_SITE_URL: http://localhost
+          PUBLIC_MEDIA_FLOW_ENABLED: "false"
+      - name: Build with media flow enabled
+        run: npm run build
+        env:
+          PUBLIC_SITE_URL: http://localhost
+          PUBLIC_MEDIA_FLOW_ENABLED: "true"
 
   docker:
     name: Docker images

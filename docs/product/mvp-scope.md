@@ -31,4 +31,5 @@
 - **PR5:** durable PostgreSQL media-inspection jobs (`POST/GET /api/v1/media/jobs`), client-generated access tokens, worker leases/`SKIP LOCKED`. Feature default off; still no media download/delivery.
 - **PR6:** durable download execution foundation (`POST …/downloads`, `GET /download-jobs/{id}`), private worker artifacts, exact format rebinding. Feature default off; **no client file delivery** in PR6.
 - **PR7:** authenticated private artifact delivery (`GET|HEAD …/download-jobs/{id}/content`) via dedicated `delivery` service with read-only artifact mount. Feature default off (`MEDIA_DELIVERY_ENABLED=false`). Shared backend image still contains yt-dlp; delivery never invokes it and has no configured path. DB credential is not an enforced read-only role.
+- **PR8:** browser orchestration of the existing APIs into a streaming save. UI flag `PUBLIC_MEDIA_FLOW_ENABLED` defaults false and does not enable server-side jobs/inspection/downloads/delivery. Save requires the File System Access API; no Blob fallback; no progress percentage; no resume UI.
 - ffmpeg mux, payments, and Turbo entitlements arrive in subsequent PRs.

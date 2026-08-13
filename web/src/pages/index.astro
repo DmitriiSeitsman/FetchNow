@@ -1,5 +1,9 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
+import MediaFlow from "../components/MediaFlow.astro";
+import { isMediaFlowEnabled } from "../lib/media-flow/flag";
+
+const enabled = isMediaFlowEnabled();
 ---
 
 <BaseLayout>
@@ -11,18 +15,28 @@ import BaseLayout from "../layouts/BaseLayout.astro";
       <p class="lede">
         Drop a public media link and get a clean download path — no account, no clutter.
       </p>
-      <label class="field">
-        <span class="field-label">Media link</span>
-        <input
-          class="field-input"
-          type="url"
-          placeholder="https://…"
-          disabled
-          aria-disabled="true"
-          value=""
-        />
-      </label>
-      <p class="hint">Fetching arrives in a later release. This is the foundation.</p>
+      {
+        enabled ? (
+          <MediaFlow />
+        ) : (
+          <>
+            <label class="field">
+              <span class="field-label">Media link</span>
+              <input
+                class="field-input"
+                type="url"
+                placeholder="https://…"
+                disabled
+                aria-disabled="true"
+                value=""
+              />
+            </label>
+            <p class="hint">
+              Fetching arrives in a later release. This is the foundation.
+            </p>
+          </>
+        )
+      }
     </section>
   </main>
 </BaseLayout>
