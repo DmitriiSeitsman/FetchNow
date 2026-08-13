@@ -22,7 +22,12 @@ def test_argv_shape_url_after_separator_shell_false() -> None:
     assert "--" in argv
     assert argv[argv.index("--") + 1] == "-evil.com/video"
     assert argv[argv.index("-f") + 1] == "url720"
-    assert argv[argv.index("--max-filesize") + 1] == "1024B"
+    assert argv[argv.index("--max-filesize") + 1] == "1024"
+    from yt_dlp.utils import parse_bytes
+
+    raw = argv[argv.index("--max-filesize") + 1]
+    assert parse_bytes(raw) == 1024
+    assert parse_bytes("1024B") is None
     assert "--no-cookies" in argv
     assert "--no-netrc" in argv
     assert "--ignore-config" in argv

@@ -61,8 +61,8 @@ FIXTURE_POLICY_PATH = ROOT / COMPATIBILITY_REL_PATH
 
 MIGRATION_FILE = """\"\"\"Online expand migration for migration integration.\"\"\"
 
-revision = "0004_expand"
-down_revision = "0003_download_jobs"
+revision = "0005_expand"
+down_revision = "0004_download_observability"
 
 
 def upgrade() -> None:
@@ -77,9 +77,9 @@ CONTRACT_WITH_MIGRATION = """{
   "schema_version": 1,
   "transitions": [
     {
-      "from_heads": ["0003_download_jobs"],
-      "to_heads": ["0004_expand"],
-      "included_revisions": ["0004_expand"],
+      "from_heads": ["0004_download_observability"],
+      "to_heads": ["0005_expand"],
+      "included_revisions": ["0005_expand"],
       "execution_mode": "online_expand",
       "online_with_previous_application": true,
       "previous_application_rollback_compatible": true,
@@ -421,11 +421,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         mig_versions = clone / "backend" / "migrations" / "versions"
-        (mig_versions / "0004_expand.py").write_text(MIGRATION_FILE, encoding="utf-8")
+        (mig_versions / "0005_expand.py").write_text(MIGRATION_FILE, encoding="utf-8")
         contract_path = clone / COMPATIBILITY_REL_PATH
         contract_path.write_text(CONTRACT_WITH_MIGRATION, encoding="utf-8")
         run(
-            ["git", "add", "backend/migrations/versions/0004_expand.py", str(contract_path)],
+            ["git", "add", "backend/migrations/versions/0005_expand.py", str(contract_path)],
             cwd=clone,
         )
         target_rev = commit(clone, "test: forward migration target release")
@@ -447,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
         target_release = release_dir(deploy_root, target_rev)
         target_heads = target_heads_from_release_source(target_release)
         assert_passed(
-            "0004_expand" in target_heads,
+            "0005_expand" in target_heads,
             "target release exposes forward migration head",
         )
 
@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             after_state["application"]["revision"] == baseline_rev
             and after_state["database"]["schema_release_revision"] == target_rev
             and after_state["database"]["last_migration_id"] == migration_id
-            and "0004_expand" in after_state["database"]["heads"],
+            and "0005_expand" in after_state["database"]["heads"],
             "current.json database state committed after migration",
         )
         assert_passed(
@@ -597,8 +597,8 @@ def main(argv: list[str] | None = None) -> int:
 
         BROKEN_MIGRATION = """\"\"\"Intentional failing migration for recovery integration.\"\"\"
 
-revision = "0005_broken"
-down_revision = "0004_expand"
+revision = "0006_broken"
+down_revision = "0005_expand"
 
 
 def upgrade() -> None:
@@ -612,9 +612,9 @@ def downgrade() -> None:
   "schema_version": 1,
   "transitions": [
     {
-      "from_heads": ["0003_download_jobs"],
-      "to_heads": ["0004_expand"],
-      "included_revisions": ["0004_expand"],
+      "from_heads": ["0004_download_observability"],
+      "to_heads": ["0005_expand"],
+      "included_revisions": ["0005_expand"],
       "execution_mode": "online_expand",
       "online_with_previous_application": true,
       "previous_application_rollback_compatible": true,
@@ -623,9 +623,9 @@ def downgrade() -> None:
       "rationale": "Expand the PR6 database head to the synthetic test head."
     },
     {
-      "from_heads": ["0004_expand"],
-      "to_heads": ["0005_broken"],
-      "included_revisions": ["0005_broken"],
+      "from_heads": ["0005_expand"],
+      "to_heads": ["0006_broken"],
+      "included_revisions": ["0006_broken"],
       "execution_mode": "online_expand",
       "online_with_previous_application": true,
       "previous_application_rollback_compatible": true,
@@ -636,13 +636,13 @@ def downgrade() -> None:
   ]
 }
 """
-        (mig_versions / "0005_broken.py").write_text(BROKEN_MIGRATION, encoding="utf-8")
+        (mig_versions / "0006_broken.py").write_text(BROKEN_MIGRATION, encoding="utf-8")
         contract_path.write_text(CONTRACT_WITH_BROKEN, encoding="utf-8")
         run(
             [
                 "git",
                 "add",
-                "backend/migrations/versions/0005_broken.py",
+                "backend/migrations/versions/0006_broken.py",
                 str(contract_path),
             ],
             cwd=clone,

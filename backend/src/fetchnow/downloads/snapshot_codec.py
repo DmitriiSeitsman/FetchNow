@@ -250,9 +250,7 @@ def decode_selected_format_snapshot(
             height=_require_optional_int(
                 payload["height"], field="height", maximum=_MAX_DIMENSION
             ),
-            fps=_require_optional_float(
-                payload["fps"], field="fps", maximum=_MAX_FPS
-            ),
+            fps=_require_optional_float(payload["fps"], field="fps", maximum=_MAX_FPS),
             has_video=_require_bool(payload["hasVideo"], field="hasVideo"),
             has_audio=_require_bool(payload["hasAudio"], field="hasAudio"),
             category=FormatCategory(

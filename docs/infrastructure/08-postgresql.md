@@ -20,7 +20,7 @@ docker compose --env-file .env.staging --project-name fetchnow-staging \
   -f compose.yaml -f compose.staging.yaml run --rm api alembic upgrade head
 ```
 
-Первая команда проверяет readiness; переменные должны быть загружены в операторскую shell без печати. `alembic current` — **CHECK**, показывает текущую revision. `upgrade head` — **WARNING modifying**, применяет migrations до последней revision. В репозитории head — `0003_download_jobs` (после `0002_media_jobs` / `0001_baseline`); PR6 добавляет таблицу `media_download_jobs`.
+Первая команда проверяет readiness; переменные должны быть загружены в операторскую shell без печати. `alembic current` — **CHECK**, показывает текущую revision. `upgrade head` — **WARNING modifying**, применяет migrations до последней revision. В репозитории head — `0004_download_observability` (после `0003_download_jobs` / `0002_media_jobs` / `0001_baseline`). PR6 добавляет таблицу `media_download_jobs`. PR10 добавляет `progress_stage` и `cancel_requested_at`. Public API `cancelled` кодируется как PR9 `public_state=expired` плюс `progress_stage=cancelled` и `cancel_requested_at`. Online expand сохраняет `progress_stage` server default **и** BEFORE trigger, который выставляет coherent `progress_stage` для PR9 UPDATE, не пишущих новую колонку, и не переписывает PR10 cancellation encoding. CHECK по-прежнему отклоняет explicit illegal pairs. Downgrade drops the new columns; a new `public_state` enum is not required.
 
 ## Проверка и ошибки
 

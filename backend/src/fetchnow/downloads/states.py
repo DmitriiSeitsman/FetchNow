@@ -8,13 +8,57 @@ from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
 
 
 class MediaDownloadJobState(StrEnum):
-    """Download-oriented public job states (PR6)."""
+    """Download-oriented public job states (PR6) plus public-only ``cancelled``.
+
+    ``cancelled`` is an API projection. Durable rows keep a PR9-known
+    ``public_state`` (``expired``) plus PR10 ``progress_stage`` /
+    ``cancel_requested_at`` markers so a rolled-back PR9 application can
+    still parse the row.
+    """
 
     QUEUED = "queued"
     DOWNLOADING = "downloading"
     READY = "ready"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     EXPIRED = "expired"
+
+
+# Raw ``media_download_jobs.public_state`` values the PR9 application enum
+# can construct. ``cancelled`` is never stored in that column.
+PR9_STORED_PUBLIC_STATES = frozenset(
+    {
+        MediaDownloadJobState.QUEUED.value,
+        MediaDownloadJobState.DOWNLOADING.value,
+        MediaDownloadJobState.READY.value,
+        MediaDownloadJobState.FAILED.value,
+        MediaDownloadJobState.EXPIRED.value,
+    }
+)
+
+
+def is_stored_cancelled(
+    public_state: str,
+    progress_stage: str | None,
+    cancel_requested_at: object | None,
+) -> bool:
+    """True when durable columns encode a user cancellation."""
+    return (
+        public_state == MediaDownloadJobState.EXPIRED.value
+        and str(progress_stage or "") == "cancelled"
+        and cancel_requested_at is not None
+    )
+
+
+def project_public_state(
+    public_state: str,
+    progress_stage: str | None = None,
+    cancel_requested_at: object | None = None,
+) -> MediaDownloadJobState:
+    """Map stored columns to the public API state (may raise ``ValueError``)."""
+    if is_stored_cancelled(public_state, progress_stage, cancel_requested_at):
+        return MediaDownloadJobState.CANCELLED
+    return MediaDownloadJobState(public_state)
 
 
 # Fail-closed allowlist: only listed edges are legal.
@@ -22,19 +66,22 @@ _ALLOWED_TRANSITIONS: dict[MediaDownloadJobState, frozenset[MediaDownloadJobStat
     MediaDownloadJobState.QUEUED: frozenset(
         {
             MediaDownloadJobState.DOWNLOADING,
+            MediaDownloadJobState.CANCELLED,
             MediaDownloadJobState.EXPIRED,
         }
     ),
     MediaDownloadJobState.DOWNLOADING: frozenset(
         {
-            MediaDownloadJobState.QUEUED,  # retry / reclaim / cancel release
+            MediaDownloadJobState.QUEUED,  # retry / reclaim / worker shutdown
             MediaDownloadJobState.READY,
             MediaDownloadJobState.FAILED,
+            MediaDownloadJobState.CANCELLED,
             MediaDownloadJobState.EXPIRED,
         }
     ),
     MediaDownloadJobState.READY: frozenset({MediaDownloadJobState.EXPIRED}),
     MediaDownloadJobState.FAILED: frozenset({MediaDownloadJobState.EXPIRED}),
+    MediaDownloadJobState.CANCELLED: frozenset({MediaDownloadJobState.EXPIRED}),
     MediaDownloadJobState.EXPIRED: frozenset(),
 }
 
@@ -81,5 +128,6 @@ def is_terminal(state: MediaDownloadJobState | str) -> bool:
     return value in {
         MediaDownloadJobState.READY,
         MediaDownloadJobState.FAILED,
+        MediaDownloadJobState.CANCELLED,
         MediaDownloadJobState.EXPIRED,
     }

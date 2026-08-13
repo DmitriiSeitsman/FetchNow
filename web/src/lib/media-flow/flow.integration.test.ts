@@ -32,6 +32,7 @@ describe("browser flow integration", () => {
           }),
         ),
       ),
+      cancelDownloadJob: vi.fn(),
     };
     const save = vi.fn(async () => undefined);
     const store = new Map<string, string>();
@@ -74,6 +75,7 @@ describe("browser flow integration", () => {
       ),
       createDownloadJob: vi.fn(),
       getDownloadJob: vi.fn(),
+      cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
     const controller = new MediaFlowController({
@@ -109,6 +111,7 @@ describe("browser flow integration", () => {
         parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
       ),
       getDownloadJob: vi.fn(),
+      cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
     const controller = new MediaFlowController({
@@ -143,6 +146,7 @@ describe("browser flow integration", () => {
       ),
       createDownloadJob: vi.fn(),
       getDownloadJob: vi.fn(),
+      cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
     const controller = new MediaFlowController({

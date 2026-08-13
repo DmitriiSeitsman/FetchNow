@@ -31,7 +31,8 @@ buffer the whole file in JavaScript memory.
    The prepared artifact is left to expire; the client does **not** fetch it
    and does **not** fall back to Blob.
 5. A tab-scoped `sessionStorage` recovery record may hold only bounded fields
-   (token, job ids, selected option, phase, `expiresAt`). Submitted URLs,
+   (token, job ids, selected option, phase, `expiresAt`) under
+   `fetchnow.media-flow.v2`. Schema v1 keys are discarded. Submitted URLs,
    titles, and canonical provider URLs are never persisted. `localStorage` is
    forbidden.
 

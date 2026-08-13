@@ -167,6 +167,16 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Residual risk | yt-dlp own HTTP outside SafeHTTPClient |
 | Planned PR | Stronger isolation / rate limits in later PRs |
 
+### Download cancel / progress oracle (PR10)
+
+| Field | Detail |
+|---|---|
+| Attack | Guess UUID to cancel someone else's job; distinguish unknown vs unauthorized; leak stage internals or stderr via progress JSON |
+| Impact | Denial of another user's download; account oracle; tool/URL leakage |
+| Mitigation | Same parent Bearer as GET; UUID alone and wrong credential → identical `DOWNLOAD_JOB_NOT_FOUND`; public progress is an allowlisted stage enum with no percentages or failure class; cancel is fenced; stale fence cannot complete a cancelled job |
+| Residual risk | Stolen Bearer until TTL |
+| Planned PR | **PR10** |
+
 ### Artifact delivery abuse (PR7)
 
 | Field | Detail |

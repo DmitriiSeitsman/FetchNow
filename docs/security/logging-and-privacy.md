@@ -79,6 +79,24 @@ Bounded muxing (PR9) additionally forbids logging or publicizing:
 - local workspace paths;
 - submitted/canonical query.
 
+Download observability (PR10) additionally forbids logging or publicizing:
+
+- raw stdout/stderr (only bounded in-memory classification, then drop);
+- provider format tokens and raw argv;
+- submitted/wrapper/canonical/direct URLs including query/fragment;
+- Bearer / access tokens and their hashes;
+- temporary or artifact absolute paths;
+- internal failure class on the public API (logs may carry the allowlisted class token only).
+
+Allowed stage-event extras: `download_job_id`, `media_job_id`, `attempt_count`,
+`fence_token`, `stage`, `duration_ms`, `retryable`, sanitized catalog
+`error_code`, allowlisted `failure_class`, `process_exit_category`,
+stdout/stderr **byte counts**, and a fingerprint over those categorical fields.
+
+The browser session key is `fetchnow.media-flow.v2`. Schema v1 records are
+deleted on read. The token may live in tab-scoped `sessionStorage` only; it is
+never logged.
+
 Tool executable paths are never returned in API responses or web build args.
 
 The browser download flow (PR8) never writes the access token, submitted URL,
@@ -104,6 +122,12 @@ Safe examples:
 - body bytes read (count only);
 - duration;
 - job ID;
+- fence token (integer);
+- attempt count;
+- allowlisted download stage name;
+- allowlisted internal failure class (logs only);
+- process exit category;
+- stdout/stderr byte counts (not contents);
 - stable public error code;
 - output byte size;
 - container/format;
@@ -134,5 +158,5 @@ Abuse intake may store normalized hostname and opaque report IDs — not full to
 ## Related documents
 
 - [Threat model](threat-model.md)
-- [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md)
+- [ADR 0014](../adr/0014-download-observability-cancellation-progress.md)
 - [Product policy](../product/product-policy.md)

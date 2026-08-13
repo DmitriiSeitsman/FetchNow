@@ -83,7 +83,9 @@ def build_ytdlp_download_argv(
         "--socket-timeout",
         str(timeout),
         "--max-filesize",
-        f"{max_filesize_bytes}B",
+        # Bare integer bytes. yt-dlp parse_bytes rejects a "B" suffix
+        # ("1024B" → invalid max filesize → immediate non-zero exit).
+        str(max_filesize_bytes),
         "--default-search",
         "error",
         "--use-extractors",

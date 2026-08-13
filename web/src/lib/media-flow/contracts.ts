@@ -19,9 +19,41 @@ export const DOWNLOAD_STATES = [
   "downloading",
   "ready",
   "failed",
+  "cancelled",
   "expired",
 ] as const;
 export type DownloadState = (typeof DOWNLOAD_STATES)[number];
+export const PROGRESS_STAGES = [
+  "queued",
+  "inspecting",
+  "downloading_video",
+  "downloading_audio",
+  "muxing",
+  "verifying",
+  "publishing",
+  "retrying",
+  "ready",
+  "failed",
+  "cancelled",
+  "expired",
+] as const;
+export type ProgressStage = (typeof PROGRESS_STAGES)[number];
+
+const PROGRESS_FOR_STATE: Record<DownloadState, readonly ProgressStage[]> = {
+  queued: ["queued", "retrying"],
+  downloading: [
+    "inspecting",
+    "downloading_video",
+    "downloading_audio",
+    "muxing",
+    "verifying",
+    "publishing",
+  ],
+  ready: ["ready"],
+  failed: ["failed"],
+  cancelled: ["cancelled"],
+  expired: ["expired"],
+};
 
 export const FORMAT_CATEGORIES = ["progressive", "video_only", "audio_only"] as const;
 export type FormatCategory = (typeof FORMAT_CATEGORIES)[number];
@@ -98,6 +130,11 @@ const DOWNLOAD_KEYS = new Set([
   "completedAt",
   "artifactReady",
   "errorCode",
+  "progressStage",
+  "attempt",
+  "maxAttempts",
+  "nextAttemptAt",
+  "cancellable",
 ]);
 
 export type MediaFormat = {
@@ -150,6 +187,11 @@ export type DownloadJob = {
   completedAt: string | null;
   artifactReady: boolean;
   errorCode: string | null;
+  progressStage: ProgressStage;
+  attempt: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  cancellable: boolean;
 };
 
 export type ApiErrorBody = {
@@ -420,6 +462,23 @@ export function isDownloadEligible(format: MediaFormat): boolean {
   );
 }
 
+export function pickHighestEligibleFormat(formats: readonly MediaFormat[]): string | null {
+  const eligible = formats.filter(
+    (format) => isDownloadEligible(format) && (format.height ?? 0) <= 720,
+  );
+  if (eligible.length === 0) {
+    return null;
+  }
+  const ranked = [...eligible].sort((left, right) => {
+    const height = (right.height ?? 0) - (left.height ?? 0);
+    if (height !== 0) {
+      return height;
+    }
+    return left.formatOptionId.localeCompare(right.formatOptionId);
+  });
+  return ranked[0].formatOptionId;
+}
+
 function parseInspectionResult(value: unknown): InspectionResult {
   if (!isRecord(value)) {
     fail();
@@ -632,7 +691,7 @@ function assertDownloadTimestamps(
     expiresAt,
     true,
   );
-  if (state === "ready" || state === "failed") {
+  if (state === "ready" || state === "failed" || state === "cancelled") {
     if (completedAt === null) {
       fail();
     }
@@ -686,6 +745,61 @@ export function parseDownloadJob(value: unknown): DownloadJob {
   if (state !== "failed" && errorCode !== null) {
     fail();
   }
+  const progressStage = value.progressStage;
+  if (
+    typeof progressStage !== "string" ||
+    !(PROGRESS_STAGES as readonly string[]).includes(progressStage)
+  ) {
+    fail();
+  }
+  const typedProgress = progressStage as ProgressStage;
+  if (
+    !(PROGRESS_FOR_STATE[typedDownloadState] as readonly string[]).includes(
+      typedProgress,
+    )
+  ) {
+    fail();
+  }
+  const attempt = value.attempt;
+  const maxAttempts = value.maxAttempts;
+  if (
+    typeof attempt !== "number" ||
+    !Number.isInteger(attempt) ||
+    attempt < 0 ||
+    attempt > 1_000_000
+  ) {
+    fail();
+  }
+  if (
+    typeof maxAttempts !== "number" ||
+    !Number.isInteger(maxAttempts) ||
+    maxAttempts < 1 ||
+    maxAttempts > 1_000_000
+  ) {
+    fail();
+  }
+  if (attempt > maxAttempts) {
+    fail();
+  }
+  const nextAttemptAt =
+    value.nextAttemptAt === null ? null : requireIso(value.nextAttemptAt);
+  const retrying =
+    typedDownloadState === "queued" && typedProgress === "retrying";
+  if (retrying) {
+    if (nextAttemptAt === null) {
+      fail();
+    }
+  } else if (nextAttemptAt !== null) {
+    fail();
+  }
+  const cancellable = requireBoolean(value.cancellable);
+  if (
+    typedDownloadState !== "queued" &&
+    typedDownloadState !== "downloading" &&
+    cancellable
+  ) {
+    fail();
+  }
   const createdAt = requireIso(value.createdAt);
   const updatedAt = requireIso(value.updatedAt);
   const expiresAt = requireIso(value.expiresAt);
@@ -710,6 +824,11 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     completedAt,
     artifactReady,
     errorCode,
+    progressStage: progressStage as ProgressStage,
+    attempt,
+    maxAttempts,
+    nextAttemptAt,
+    cancellable,
   };
 }
 

@@ -21,9 +21,7 @@ _NO_STORE = {"Cache-Control": "no-store"}
 
 
 class DownloadCreateRequest(BaseModel):
-    format_option_id: str = Field(
-        min_length=1, max_length=64, alias="formatOptionId"
-    )
+    format_option_id: str = Field(min_length=1, max_length=64, alias="formatOptionId")
 
     model_config = {"populate_by_name": True}
 
@@ -145,6 +143,49 @@ async def get_download_job(
         return _download_error_response(exc, request_id)
     except Exception:
         logger.exception("media_download_get_failed")
+        return JSONResponse(
+            status_code=500,
+            headers=_NO_STORE,
+            content=error_envelope(
+                code="INTERNAL_ERROR",
+                message="An unexpected error occurred.",
+                request_id=request_id,
+            ),
+        )
+
+    body = service.to_public_dict(view)
+    return JSONResponse(status_code=200, content=body, headers=_NO_STORE)
+
+
+@router.post("/download-jobs/{download_job_id}/cancel", response_model=None)
+async def cancel_download_job(
+    download_job_id: uuid.UUID,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Idempotent user cancel. UUID alone never authorizes."""
+    request_id = _request_id(request)
+    token = _bearer_token(authorization)
+    if token is None:
+        return _download_error_response(
+            DownloadError(DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND),
+            request_id,
+        )
+
+    service = _get_download_service(request)
+    session_factory = _get_session_factory(request)
+    try:
+        async with session_factory() as session:
+            view = await service.cancel(
+                download_job_id=download_job_id,
+                access_token=token,
+                session=session,
+            )
+            await session.commit()
+    except DownloadError as exc:
+        return _download_error_response(exc, request_id)
+    except Exception:
+        logger.exception("media_download_cancel_failed")
         return JSONResponse(
             status_code=500,
             headers=_NO_STORE,

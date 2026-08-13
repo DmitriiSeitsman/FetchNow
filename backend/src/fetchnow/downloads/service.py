@@ -16,13 +16,17 @@ from fetchnow.downloads.errors import (
     raise_download_error,
 )
 from fetchnow.downloads.models import MediaDownloadJob
+from fetchnow.downloads.progress import (
+    DownloadProgressStage,
+    progress_for_public_state,
+)
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import format_snapshot_from_media_format
 from fetchnow.downloads.snapshot_codec import (
     decode_selected_format_snapshot,
     encode_selected_format_snapshot,
 )
-from fetchnow.downloads.states import MediaDownloadJobState
+from fetchnow.downloads.states import MediaDownloadJobState, project_public_state
 from fetchnow.jobs.credentials import hash_access_token, tokens_match
 from fetchnow.jobs.metadata_codec import media_metadata_from_jsonable
 from fetchnow.jobs.repository import MediaJobRepository
@@ -45,6 +49,11 @@ class DownloadJobView:
     completed_at: datetime | None
     artifact_ready: bool
     error_code: str | None
+    progress_stage: str
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: datetime | None
+    cancellable: bool
     created: bool = False
 
     def __repr__(self) -> str:
@@ -213,6 +222,44 @@ class DownloadJobService:
             )
         return self._to_view(job, created=False)
 
+    async def cancel(
+        self,
+        *,
+        download_job_id: uuid.UUID,
+        access_token: str,
+        session: AsyncSession,
+    ) -> DownloadJobView:
+        """Idempotent cancel authorized via the parent MediaJob Bearer token."""
+        if not self._settings.media_downloads_enabled:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOADS_DISABLED,
+                internal_reason="DOWNLOADS_DISABLED",
+            )
+        credential_hash = hash_access_token(access_token)
+        repo = MediaDownloadJobRepository(session)
+        job = await repo.get_by_id(download_job_id)
+        if job is None:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="MISSING",
+            )
+        parent_repo = MediaJobRepository(session)
+        parent = await parent_repo.get_by_id(job.media_job_id)
+        if parent is None or not tokens_match(parent.credential_hash, credential_hash):
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="UNAUTHORIZED",
+            )
+        now = await repo.database_now()
+        updated = await repo.request_cancel(job_id=job.id, now=now)
+        if updated is None:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="MISSING",
+            )
+        await session.flush()
+        return self._to_view(updated, created=False)
+
     @staticmethod
     def _public_snapshot(job: MediaDownloadJob) -> dict[str, Any]:
         """Re-encode the approved public schema; never echo stored JSONB.
@@ -242,7 +289,11 @@ class DownloadJobService:
         force_error_code: str | None = None,
     ) -> DownloadJobView:
         try:
-            state = force_state or MediaDownloadJobState(job.public_state)
+            state = force_state or project_public_state(
+                job.public_state,
+                job.progress_stage,
+                job.cancel_requested_at,
+            )
         except ValueError:
             raise_download_error(
                 DownloadErrorCode.INTERNAL_ERROR,
@@ -259,6 +310,29 @@ class DownloadJobService:
         elif state is MediaDownloadJobState.EXPIRED:
             error_code = DownloadErrorCode.DOWNLOAD_EXPIRED.value
         selected = self._public_snapshot(job)
+        progress = str(job.progress_stage or "")
+        try:
+            stage = DownloadProgressStage(progress)
+        except ValueError:
+            stage = progress_for_public_state(state)
+        if force_state is not None:
+            stage = progress_for_public_state(force_state)
+        cancellable = (
+            state
+            in {
+                MediaDownloadJobState.QUEUED,
+                MediaDownloadJobState.DOWNLOADING,
+            }
+            and force_state is None
+        )
+        next_attempt: datetime | None = None
+        if (
+            state is MediaDownloadJobState.QUEUED
+            and stage is DownloadProgressStage.RETRYING
+            and job.available_at is not None
+            and force_state is None
+        ):
+            next_attempt = job.available_at
         # Never leak internal artifact locator — only a boolean readiness flag.
         return DownloadJobView(
             id=job.id,
@@ -272,6 +346,11 @@ class DownloadJobService:
             completed_at=job.completed_at,
             artifact_ready=state is MediaDownloadJobState.READY,
             error_code=error_code,
+            progress_stage=stage.value,
+            attempt_count=int(job.attempt_count),
+            max_attempts=int(job.max_attempts),
+            next_attempt_at=next_attempt,
+            cancellable=cancellable,
             created=created,
         )
 
@@ -294,4 +373,11 @@ class DownloadJobService:
             ),
             "artifactReady": view.artifact_ready,
             "errorCode": view.error_code,
+            "progressStage": view.progress_stage,
+            "attempt": view.attempt_count,
+            "maxAttempts": view.max_attempts,
+            "nextAttemptAt": (
+                view.next_attempt_at.isoformat() if view.next_attempt_at else None
+            ),
+            "cancellable": view.cancellable,
         }

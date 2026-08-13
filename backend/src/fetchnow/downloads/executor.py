@@ -15,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fetchnow.core.config import Settings
 from fetchnow.downloads.artifacts import ArtifactStore, AttemptWorkspace
+from fetchnow.downloads.diagnostics import (
+    DownloadStageEvent,
+    FailureClass,
+    emit_stage_event,
+    process_exit_category,
+)
 from fetchnow.downloads.errors import (
     DownloadError,
     DownloadErrorCode,
@@ -29,6 +35,7 @@ from fetchnow.downloads.process_download import (
     assert_env_has_no_secrets,
     build_sanitized_env,
 )
+from fetchnow.downloads.progress import DownloadProgressStage
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import (
     DownloadSelection,
@@ -66,6 +73,10 @@ def lease_watch_interval_seconds(lease_seconds: float) -> float:
 
 class _LeaseLostError(Exception):
     """Internal: lease/fence no longer owned. Never published as a tool error."""
+
+
+class _JobCancelledError(Exception):
+    """Internal: user cancel observed. Never published as DOWNLOAD_TOOL_FAILED."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +145,7 @@ class DownloadExecutor:
         self._worker_id = worker_id
         self._closed = False
         self._lease_lost = False
+        self._user_cancel = False
         self._watchdog_tasks: set[asyncio.Task[None]] = set()
         self._watchdog_started = 0
         self._watchdog_finished = 0
@@ -192,7 +204,7 @@ class DownloadExecutor:
         async with self._session_factory() as session:
             repo = MediaDownloadJobRepository(session)
             now = await repo.database_now()
-            renewed = await repo.renew_lease(
+            status = await repo.lease_status(
                 job_id=job_id,
                 owner=self._worker_id,
                 fence=fence,
@@ -200,7 +212,10 @@ class DownloadExecutor:
                 now=now,
             )
             await session.commit()
-            return renewed
+        if status == "cancelled":
+            self._user_cancel = True
+            return False
+        return status == "owned"
 
     async def execute(self, snap: DownloadClaimSnapshot) -> None:
         """Run inspect→select→download→publish→cleanup→ready under the claim fence."""
@@ -208,10 +223,21 @@ class DownloadExecutor:
         primary_error: BaseException | None = None
         published_orphan = False
         self._lease_lost = False
+        self._user_cancel = False
         try:
             self._store.ensure_min_free(self._settings.media_download_min_free_bytes)
-            if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if await self._abort_if_unowned(snap):
                 return
+
+            emit_stage_event(
+                DownloadStageEvent.ATTEMPT_STARTED,
+                download_job_id=str(snap.job_id),
+                media_job_id=str(snap.media_job_id),
+                attempt_count=snap.attempt_count,
+                fence_token=snap.fence,
+                stage="inspecting",
+            )
+            await self._advance_progress(snap, DownloadProgressStage.INSPECTING)
 
             selection = await self._resolve_selection(snap)
             peak = _peak_reservation_bytes(
@@ -220,7 +246,7 @@ class DownloadExecutor:
             self._store.ensure_min_free(
                 self._settings.media_download_min_free_bytes + peak
             )
-            if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if await self._abort_if_unowned(snap):
                 return
 
             workspace = self._store.create_attempt_workspace(
@@ -229,9 +255,17 @@ class DownloadExecutor:
                 fence=snap.fence,
             )
             await self._run_download(snap, selection, workspace, peak_bytes=peak)
-            if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if await self._abort_if_unowned(snap):
                 return
 
+            emit_stage_event(
+                DownloadStageEvent.PUBLISH_STARTED,
+                download_job_id=str(snap.job_id),
+                attempt_count=snap.attempt_count,
+                fence_token=snap.fence,
+                stage="publishing",
+            )
+            await self._advance_progress(snap, DownloadProgressStage.PUBLISHING)
             published = self._store.publish(
                 workspace=workspace,
                 expected_container=selection.container,
@@ -246,11 +280,17 @@ class DownloadExecutor:
             self._store.cleanup_attempt_workspace(workspace, require_gone=True)
             workspace = None
 
-            if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
-                # Stale fence after publish: leave orphan, do not ready.
-                logger.warning(
-                    "Stale lease prevented ready commit job_id=%s",
-                    snap.job_id,
+            if await self._abort_if_unowned(snap):
+                emit_stage_event(
+                    DownloadStageEvent.PUBLISH_FAILED,
+                    download_job_id=str(snap.job_id),
+                    attempt_count=snap.attempt_count,
+                    fence_token=snap.fence,
+                    stage="publishing",
+                    failure_class=FailureClass.CANCELLED
+                    if self._user_cancel
+                    else FailureClass.LEASE_LOST,
+                    retryable=False,
                 )
                 return
 
@@ -270,15 +310,51 @@ class DownloadExecutor:
                 await session.commit()
             if applied:
                 published_orphan = False
+                emit_stage_event(
+                    DownloadStageEvent.PUBLISH_COMPLETED,
+                    download_job_id=str(snap.job_id),
+                    attempt_count=snap.attempt_count,
+                    fence_token=snap.fence,
+                    stage="ready",
+                )
+                emit_stage_event(
+                    DownloadStageEvent.JOB_READY,
+                    download_job_id=str(snap.job_id),
+                    media_job_id=str(snap.media_job_id),
+                    attempt_count=snap.attempt_count,
+                    fence_token=snap.fence,
+                    stage="ready",
+                    retryable=False,
+                )
             else:
+                # complete_ready False is not itself a user cancel. Probe the
+                # fenced cancel path (requires cancel_requested_at). Lease
+                # loss leaves the published artifact as an orphan.
+                cancelled = await self._complete_user_cancel(snap)
+                if not cancelled:
+                    emit_stage_event(
+                        DownloadStageEvent.PUBLISH_FAILED,
+                        download_job_id=str(snap.job_id),
+                        attempt_count=snap.attempt_count,
+                        fence_token=snap.fence,
+                        stage="publishing",
+                        failure_class=FailureClass.LEASE_LOST,
+                        retryable=False,
+                    )
                 logger.warning(
-                    "Stale lease prevented ready commit job_id=%s",
+                    "Stale lease or cancel prevented ready commit job_id=%s",
                     snap.job_id,
                 )
         except asyncio.CancelledError as exc:
             primary_error = exc
-            await self._release_cancel(snap.job_id, snap.fence)
+            if self._user_cancel:
+                await self._complete_user_cancel(snap)
+                return
+            await self._release_to_queued(snap.job_id, snap.fence)
             raise
+        except _JobCancelledError:
+            await self._complete_user_cancel(snap)
+            return
         except _LeaseLostError:
             return
         except DownloadError as exc:
@@ -378,71 +454,13 @@ class DownloadExecutor:
         selection: ResolvedDownloadSelection,
         workspace: AttemptWorkspace,
     ) -> None:
-        settings = self._settings
-        try:
-            executable = validate_ytdlp_executable(settings.media_inspection_ytdlp_path)
-        except InspectionError:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
-                internal_reason="EXECUTABLE_INVALID",
-            )
-        binding = self._inspection_registry.resolve(
-            provider_id=snap.provider_id, hostname=snap.hostname
-        )
-
-        # Token is an argv value only — never logged.
-        argv = build_ytdlp_download_argv(
-            executable=executable,
-            url=snap.canonical_provider_url,
-            provider_format_token=selection.provider_format_token,
-            allowed_extractors=binding.allowed_extractor_keys,
-            socket_timeout=int(settings.media_download_socket_timeout_seconds),
-            cache_dir=str(workspace.cache),
-            output_template=_OUTPUT_TEMPLATE,
-            max_filesize_bytes=int(settings.media_download_max_bytes),
-        )
-        env = build_sanitized_env(
-            home_dir=str(workspace.home), tmp_dir=str(workspace.path)
-        )
-        assert_env_has_no_secrets(env)
-
-        logger.info(
-            "media_download_start",
-            extra={
-                "download_job_id": str(snap.job_id),
-                "provider_id": snap.provider_id,
-                "format_option_id": snap.format_option_id,
-            },
-        )
-
-        result = await self._run_supervised(
+        await self._run_exact_ytdlp(
             snap,
-            argv,
-            env=env,
-            cwd=str(workspace.path),
-            timeout_seconds=settings.media_download_timeout_seconds,
-            stdout_limit_bytes=settings.media_download_stdout_max_bytes,
-            stderr_limit_bytes=settings.media_download_stderr_max_bytes,
+            token=selection.provider_format_token,
+            workspace=workspace,
+            output_template=_OUTPUT_TEMPLATE,
             output_dir=str(workspace.output),
-            max_output_bytes=settings.media_download_max_bytes,
-            min_free_bytes=settings.media_download_min_free_bytes,
-            root_for_disk=str(self._store.root),
         )
-        if result.timed_out:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TIMEOUT,
-                internal_reason="PROCESS_TIMEOUT",
-            )
-        if result.signal is not None:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
-                internal_reason="PROCESS_SIGNAL",
-            )
-        if result.exit_code != 0:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
-                internal_reason="PROCESS_NONZERO",
-            )
 
     async def _run_muxed_download(
         self,
@@ -464,18 +482,12 @@ class DownloadExecutor:
         ffprobe = validate_trusted_executable(
             settings.media_muxing_ffprobe_path, kind="ffprobe"
         )
-        logger.info(
-            "media_mux_start",
-            extra={
-                "download_job_id": str(snap.job_id),
-                "provider_id": snap.provider_id,
-                "format_option_id": snap.format_option_id,
-            },
-        )
         video_cap, audio_cap, output_cap = _mux_stage_byte_caps(
             selection, settings.media_download_max_bytes
         )
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
             raise _LeaseLostError()
         await self._run_exact_ytdlp(
             snap,
@@ -493,6 +505,8 @@ class DownloadExecutor:
         consumed = video_path.stat().st_size
         self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
             raise _LeaseLostError()
         await self._run_exact_ytdlp(
             snap,
@@ -510,6 +524,8 @@ class DownloadExecutor:
         consumed += audio_path.stat().st_size
         self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
             raise _LeaseLostError()
         mux_path = workspace.mux / f"artifact.{selection.container}"
         try:
@@ -530,6 +546,14 @@ class DownloadExecutor:
             home_dir=str(workspace.home), tmp_dir=str(workspace.path)
         )
         assert_env_has_no_secrets(env)
+        emit_stage_event(
+            DownloadStageEvent.MUX_STARTED,
+            download_job_id=str(snap.job_id),
+            attempt_count=snap.attempt_count,
+            fence_token=snap.fence,
+            stage="muxing",
+        )
+        await self._advance_progress(snap, DownloadProgressStage.MUXING)
         mux_result = await self._run_supervised(
             snap,
             argv,
@@ -542,8 +566,7 @@ class DownloadExecutor:
             extra_size_dirs=(str(workspace.video), str(workspace.audio)),
             max_output_bytes=peak_bytes,
             min_free_bytes=(
-                settings.media_download_min_free_bytes
-                + max(0, peak_bytes - consumed)
+                settings.media_download_min_free_bytes + max(0, peak_bytes - consumed)
             ),
             root_for_disk=str(self._store.root),
             overflow_code=DownloadErrorCode.MUXING_FAILED,
@@ -551,22 +574,24 @@ class DownloadExecutor:
             storage_code=DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
             spawn_code=DownloadErrorCode.MUXING_FAILED,
         )
-        if mux_result.timed_out:
-            raise_download_error(
-                DownloadErrorCode.MUXING_TIMEOUT,
-                internal_reason="PROCESS_TIMEOUT",
-            )
-        if mux_result.signal is not None or mux_result.exit_code != 0:
-            raise_download_error(
-                DownloadErrorCode.MUXING_FAILED,
-                internal_reason="PROCESS_NONZERO",
-            )
+        self._finish_tool_stage(
+            snap,
+            mux_result,
+            completed=DownloadStageEvent.MUX_COMPLETED,
+            failed=DownloadStageEvent.MUX_FAILED,
+            stage="muxing",
+            timeout_code=DownloadErrorCode.MUXING_TIMEOUT,
+            nonzero_code=DownloadErrorCode.MUXING_FAILED,
+            failure_class_override=FailureClass.MUX_FAILED,
+        )
         mux_file = self._store.find_single_regular_file_in(
             workspace.mux,
             allowed_suffixes=frozenset({selection.container}),
             error_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
         )
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
             raise _LeaseLostError()
         try:
             probe_argv = build_ffprobe_argv(
@@ -578,6 +603,14 @@ class DownloadExecutor:
                 internal_reason="PROBE_ARGV_INVALID",
             )
             raise error from None
+        emit_stage_event(
+            DownloadStageEvent.VERIFY_STARTED,
+            download_job_id=str(snap.job_id),
+            attempt_count=snap.attempt_count,
+            fence_token=snap.fence,
+            stage="verifying",
+        )
+        await self._advance_progress(snap, DownloadProgressStage.VERIFYING)
         probe = await self._run_supervised(
             snap,
             probe_argv,
@@ -590,16 +623,16 @@ class DownloadExecutor:
             overflow_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
             spawn_code=DownloadErrorCode.MUXING_FAILED,
         )
-        if probe.timed_out:
-            raise_download_error(
-                DownloadErrorCode.MUXING_TIMEOUT,
-                internal_reason="PROBE_TIMEOUT",
-            )
-        if probe.signal is not None or probe.exit_code != 0:
-            raise_download_error(
-                DownloadErrorCode.MUXED_OUTPUT_INVALID,
-                internal_reason="PROBE_NONZERO",
-            )
+        self._finish_tool_stage(
+            snap,
+            probe,
+            completed=DownloadStageEvent.VERIFY_COMPLETED,
+            failed=DownloadStageEvent.VERIFY_FAILED,
+            stage="verifying",
+            timeout_code=DownloadErrorCode.MUXING_TIMEOUT,
+            nonzero_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
+            failure_class_override=FailureClass.VERIFY_FAILED,
+        )
         raw = probe.stdout
         try:
             parse_ffprobe_json(
@@ -614,6 +647,8 @@ class DownloadExecutor:
         finally:
             del raw
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
             raise _LeaseLostError()
         self._store.stage_muxed_output(
             workspace, mux_file, container=selection.container
@@ -667,6 +702,15 @@ class DownloadExecutor:
             home_dir=str(workspace.home), tmp_dir=str(workspace.path)
         )
         assert_env_has_no_secrets(env)
+        started, completed, failed, progress = _ytdlp_stage(output_template)
+        emit_stage_event(
+            started,
+            download_job_id=str(snap.job_id),
+            attempt_count=snap.attempt_count,
+            fence_token=snap.fence,
+            stage=progress.value,
+        )
+        await self._advance_progress(snap, progress)
         result = await self._run_supervised(
             snap,
             argv,
@@ -682,16 +726,15 @@ class DownloadExecutor:
             ),
             root_for_disk=str(self._store.root),
         )
-        if result.timed_out:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TIMEOUT,
-                internal_reason="PROCESS_TIMEOUT",
-            )
-        if result.signal is not None or result.exit_code != 0:
-            raise_download_error(
-                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
-                internal_reason="PROCESS_NONZERO",
-            )
+        self._finish_tool_stage(
+            snap,
+            result,
+            completed=completed,
+            failed=failed,
+            stage=progress.value,
+            timeout_code=DownloadErrorCode.DOWNLOAD_TIMEOUT,
+            nonzero_code=DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+        )
 
     async def _lease_watch_wait(self) -> None:
         await asyncio.sleep(
@@ -734,6 +777,9 @@ class DownloadExecutor:
                     run_task.cancel()
                     return
                 if not owned:
+                    if self._user_cancel:
+                        run_task.cancel()
+                        return
                     self._lease_lost = True
                     run_task.cancel()
                     return
@@ -763,9 +809,9 @@ class DownloadExecutor:
                     run_task.cancel()
                     await asyncio.gather(run_task, return_exceptions=True)
                 current = asyncio.current_task()
-                outer_cancelling = (
-                    current is not None and current.cancelling() > 0
-                )
+                outer_cancelling = current is not None and current.cancelling() > 0
+                if self._user_cancel and not outer_cancelling:
+                    raise _JobCancelledError() from None
                 if self._lease_lost and not outer_cancelling:
                     raise _LeaseLostError() from None
                 raise
@@ -776,6 +822,9 @@ class DownloadExecutor:
             self._watchdog_tasks.discard(watchdog)
 
     async def _fail(self, snap: DownloadClaimSnapshot, code: DownloadErrorCode) -> None:
+        if self._user_cancel:
+            await self._complete_user_cancel(snap)
+            return
         retryable = code in {
             DownloadErrorCode.DOWNLOAD_TIMEOUT,
             DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
@@ -797,6 +846,15 @@ class DownloadExecutor:
                     backoff_seconds=backoff,
                     public_error_code=code.value,
                 )
+                emit_stage_event(
+                    DownloadStageEvent.RETRY_SCHEDULED,
+                    download_job_id=str(snap.job_id),
+                    attempt_count=snap.attempt_count,
+                    fence_token=snap.fence,
+                    stage="retrying",
+                    retryable=True,
+                    error_code=code.value,
+                )
             else:
                 await repo.fail_permanent(
                     job_id=snap.job_id,
@@ -805,9 +863,23 @@ class DownloadExecutor:
                     public_error_code=code.value,
                     now=now,
                 )
+                emit_stage_event(
+                    DownloadStageEvent.JOB_FAILED,
+                    download_job_id=str(snap.job_id),
+                    attempt_count=snap.attempt_count,
+                    fence_token=snap.fence,
+                    stage="failed",
+                    retryable=False,
+                    error_code=code.value,
+                )
             await session.commit()
 
-    async def _release_cancel(self, job_id: uuid.UUID, fence: int) -> None:
+    async def _release_to_queued(self, job_id: uuid.UUID, fence: int) -> None:
+        """Worker shutdown / task cancel: requeue if the lease is still owned.
+
+        Never synthesizes a user cancel. An expired or lost lease is left for
+        reclaim; a published artifact stays an orphan for reconciliation.
+        """
         try:
             async with self._session_factory() as session:
                 repo = MediaDownloadJobRepository(session)
@@ -821,9 +893,164 @@ class DownloadExecutor:
                 await session.commit()
         except Exception:
             logger.exception(
-                "Failed to release cancelled download job_id=%s",
+                "Failed to release download job_id=%s",
                 job_id,
             )
+
+    async def _abort_if_unowned(self, snap: DownloadClaimSnapshot) -> bool:
+        if await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            return False
+        if self._user_cancel:
+            await self._complete_user_cancel(snap)
+        return True
+
+    async def _complete_user_cancel(self, snap: DownloadClaimSnapshot) -> bool:
+        applied = False
+        try:
+            async with self._session_factory() as session:
+                repo = MediaDownloadJobRepository(session)
+                now = await repo.database_now()
+                applied = await repo.complete_cancelled(
+                    job_id=snap.job_id,
+                    owner=self._worker_id,
+                    fence=snap.fence,
+                    now=now,
+                )
+                await session.commit()
+        except Exception:
+            logger.exception("download_cancel_complete_failed")
+        if not applied:
+            return False
+        emit_stage_event(
+            DownloadStageEvent.JOB_CANCELLED,
+            download_job_id=str(snap.job_id),
+            media_job_id=str(snap.media_job_id),
+            attempt_count=snap.attempt_count,
+            fence_token=snap.fence,
+            stage="cancelled",
+            retryable=False,
+            failure_class=FailureClass.CANCELLED,
+        )
+        return True
+
+    async def _advance_progress(
+        self, snap: DownloadClaimSnapshot, stage: DownloadProgressStage
+    ) -> None:
+        try:
+            async with self._session_factory() as session:
+                repo = MediaDownloadJobRepository(session)
+                now = await repo.database_now()
+                await repo.set_progress_stage(
+                    job_id=snap.job_id,
+                    owner=self._worker_id,
+                    fence=snap.fence,
+                    stage=stage,
+                    now=now,
+                )
+                await session.commit()
+        except DownloadError:
+            raise
+        except Exception:
+            logger.exception("download_progress_update_failed")
+
+    def _finish_tool_stage(
+        self,
+        snap: DownloadClaimSnapshot,
+        result: ProcessResult,
+        *,
+        completed: DownloadStageEvent,
+        failed: DownloadStageEvent,
+        stage: str,
+        timeout_code: DownloadErrorCode,
+        nonzero_code: DownloadErrorCode,
+        failure_class_override: FailureClass | None = None,
+    ) -> None:
+        exit_category = (
+            result.process_exit_category
+            or process_exit_category(
+                exit_code=result.exit_code,
+                timed_out=result.timed_out,
+                signal=result.signal,
+                cancelled=result.cancelled,
+            ).value
+        )
+
+        def _emit(
+            event: DownloadStageEvent,
+            *,
+            failure_class: FailureClass | None = None,
+            retryable: bool | None = None,
+            error_code: str | None = None,
+        ) -> None:
+            emit_stage_event(
+                event,
+                download_job_id=str(snap.job_id),
+                attempt_count=snap.attempt_count,
+                fence_token=snap.fence,
+                stage=stage,
+                stdout_byte_count=int(result.stdout_byte_count or 0),
+                stderr_byte_count=int(result.stderr_byte_count or 0),
+                process_exit_category=exit_category,
+                failure_class=failure_class,
+                retryable=retryable,
+                error_code=error_code,
+            )
+
+        if result.timed_out:
+            _emit(
+                failed,
+                failure_class=FailureClass.TOOL_TIMEOUT,
+                retryable=True,
+                error_code=timeout_code.value,
+            )
+            raise_download_error(timeout_code, internal_reason="PROCESS_TIMEOUT")
+        if result.signal is not None:
+            _emit(
+                failed,
+                failure_class=FailureClass.TOOL_SIGNALLED,
+                retryable=True,
+                error_code=nonzero_code.value,
+            )
+            raise_download_error(nonzero_code, internal_reason="PROCESS_SIGNAL")
+        if result.exit_code != 0:
+            classified = result.failure_class
+            failure = (
+                failure_class_override
+                if failure_class_override is not None
+                else (
+                    FailureClass(classified)
+                    if classified in {item.value for item in FailureClass}
+                    else FailureClass.TOOL_EXIT_NONZERO
+                )
+            )
+            _emit(
+                failed,
+                failure_class=failure,
+                retryable=True,
+                error_code=nonzero_code.value,
+            )
+            raise_download_error(nonzero_code, internal_reason="PROCESS_NONZERO")
+        _emit(completed, retryable=False)
+
+
+def _ytdlp_stage(
+    output_template: str,
+) -> tuple[
+    DownloadStageEvent, DownloadStageEvent, DownloadStageEvent, DownloadProgressStage
+]:
+    if output_template.startswith("audio/"):
+        return (
+            DownloadStageEvent.AUDIO_STARTED,
+            DownloadStageEvent.AUDIO_COMPLETED,
+            DownloadStageEvent.AUDIO_FAILED,
+            DownloadProgressStage.DOWNLOADING_AUDIO,
+        )
+    return (
+        DownloadStageEvent.VIDEO_STARTED,
+        DownloadStageEvent.VIDEO_COMPLETED,
+        DownloadStageEvent.VIDEO_FAILED,
+        DownloadProgressStage.DOWNLOADING_VIDEO,
+    )
 
 
 def _stage_cap(approx: int | None, max_bytes: int) -> int:

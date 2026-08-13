@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -308,3 +309,179 @@ def test_peak_disk_includes_inputs_and_output() -> None:
     max_bytes = 1_000
     peak_unknown = _peak_reservation_bytes(unknown, max_bytes)
     assert peak_unknown == max_bytes + max_bytes + max_bytes
+
+
+class _StageFailRunner(_MuxRunner):
+    def __init__(self, fail_at: int) -> None:
+        super().__init__()
+        self.fail_at = fail_at
+
+    async def run(self, argv: list[str], **kwargs: object) -> ProcessResult:
+        if len(self.calls) + 1 == self.fail_at:
+            self.calls.append(list(argv))
+            started = kwargs.get("started")
+            setter = getattr(started, "set", None)
+            if callable(setter):
+                setter()
+            return ProcessResult(
+                exit_code=1,
+                stdout=b"",
+                stderr=b"",
+                timed_out=False,
+                cancelled=False,
+                failure_class="TOOL_EXIT_NONZERO",
+                process_exit_category="NONZERO",
+            )
+        return await super().run(argv, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_video_stage_nonzero_is_identifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _StageFailRunner(1)
+    executor = _executor(settings, store, runner)
+    snap = _snap()
+    _patch(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        executor, "_resolve_selection", AsyncMock(return_value=_selection())
+    )
+    fail = AsyncMock()
+    monkeypatch.setattr(executor, "_fail", fail)
+    await executor.execute(snap)
+    fail.assert_awaited()
+    messages = [record.getMessage() for record in caplog.records]
+    assert "download_video_failed" in messages
+    assert "download_audio_started" not in messages
+    assert "media_mux_started" not in messages
+    blob = " ".join(messages).lower()
+    assert _VIDEO_TOKEN.lower() not in blob
+    assert "https://" not in blob
+    published = store.root / "published"
+    assert not published.exists() or not any(published.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_audio_stage_nonzero_is_identifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _StageFailRunner(2)
+    executor = _executor(settings, store, runner)
+    snap = _snap()
+    _patch(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        executor, "_resolve_selection", AsyncMock(return_value=_selection())
+    )
+    fail = AsyncMock()
+    monkeypatch.setattr(executor, "_fail", fail)
+    await executor.execute(snap)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "download_video_completed" in messages
+    assert "download_audio_failed" in messages
+    assert "media_mux_started" not in messages
+    fail.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_stage_nonzero_is_identifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _StageFailRunner(3)
+    executor = _executor(settings, store, runner)
+    snap = _snap()
+    _patch(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        executor, "_resolve_selection", AsyncMock(return_value=_selection())
+    )
+    fail = AsyncMock()
+    monkeypatch.setattr(executor, "_fail", fail)
+    await executor.execute(snap)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "media_mux_failed" in messages
+    assert "media_verify_started" not in messages
+    fail.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ffprobe_stage_nonzero_is_identifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _StageFailRunner(4)
+    executor = _executor(settings, store, runner)
+    snap = _snap()
+    _patch(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        executor, "_resolve_selection", AsyncMock(return_value=_selection())
+    )
+    fail = AsyncMock()
+    monkeypatch.setattr(executor, "_fail", fail)
+    await executor.execute(snap)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "media_mux_completed" in messages
+    assert "media_verify_failed" in messages
+    fail.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_mux_emits_safe_stage_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _MuxRunner()
+    executor = _executor(settings, store, runner)
+    snap = _snap()
+    _patch(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        executor, "_resolve_selection", AsyncMock(return_value=_selection())
+    )
+    monkeypatch.setattr(
+        MediaDownloadJobRepository,
+        "database_now",
+        AsyncMock(return_value=datetime.now(tz=UTC)),
+    )
+    complete = AsyncMock(return_value=True)
+    monkeypatch.setattr(MediaDownloadJobRepository, "complete_ready", complete)
+    await executor.execute(snap)
+    messages = [record.getMessage() for record in caplog.records]
+    for name in (
+        "download_job_attempt_started",
+        "download_video_started",
+        "download_video_completed",
+        "download_audio_started",
+        "download_audio_completed",
+        "media_mux_started",
+        "media_mux_completed",
+        "media_verify_started",
+        "media_verify_completed",
+        "artifact_publish_started",
+        "artifact_publish_completed",
+        "download_job_ready",
+    ):
+        assert name in messages, name
+    blob = " ".join(
+        f"{record.getMessage()} {record.__dict__}" for record in caplog.records
+    )
+    assert _VIDEO_TOKEN not in blob
+    assert _AUDIO_TOKEN not in blob
+    assert "https://" not in blob.lower()
+    assert "/tmp/" not in blob
+    complete.assert_awaited()

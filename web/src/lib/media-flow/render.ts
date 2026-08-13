@@ -7,6 +7,24 @@ function setText(el: Element | null, text: string): void {
   }
 }
 
+function displayQuality(label: string): string {
+  const match = /^p(\d+)$/.exec(label);
+  return match ? `${match[1]}p` : label;
+}
+
+function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: boolean): string {
+  if (muxingBlocked) {
+    return "This media is not available as a combined video and audio file.";
+  }
+  if (!format.freeTierEligible) {
+    return "Above the free 720p limit.";
+  }
+  if (!format.hasVideo || !format.hasAudio || format.category !== "progressive") {
+    return "Needs a combined video and audio file.";
+  }
+  return "Not available in the current free download mode.";
+}
+
 function formatBytes(value: number | null): string {
   if (value === null) {
     return "";
@@ -73,6 +91,30 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     startOver.hidden = !snapshot.canStartOver;
     startOver.disabled = snapshot.phase === "saving";
   }
+  const cancel = root.querySelector<HTMLButtonElement>("[data-flow-cancel]");
+  if (cancel) {
+    cancel.hidden = !snapshot.canCancelTask;
+    cancel.disabled = !snapshot.canCancelTask;
+  }
+
+  const restored = root.querySelector("[data-flow-restored]");
+  if (restored instanceof HTMLElement) {
+    restored.hidden = !snapshot.restored;
+  }
+
+  const loader = root.querySelector("[data-flow-loader]");
+  if (loader instanceof HTMLElement) {
+    const loading =
+      snapshot.phase === "inspecting" ||
+      snapshot.phase === "enqueueing_download" ||
+      snapshot.phase === "downloading" ||
+      snapshot.phase === "submitting";
+    loader.hidden = !loading;
+  }
+  const spinner = root.querySelector("[data-flow-spinner]");
+  if (spinner instanceof HTMLElement) {
+    spinner.setAttribute("aria-hidden", "true");
+  }
 
   const meta = root.querySelector("[data-flow-meta]");
   if (meta instanceof HTMLElement) {
@@ -120,11 +162,21 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
         radio.checked = snapshot.selectedFormatId === format.formatOptionId;
         const title = document.createElement("span");
         title.className = "format-label";
-        title.textContent = format.qualityLabel;
+        title.textContent = displayQuality(format.qualityLabel);
         const detail = document.createElement("span");
         detail.className = "format-detail";
         detail.textContent = formatDims(format);
-        item.append(radio, title, detail);
+        if (!eligible) {
+          const reason = document.createElement("span");
+          reason.className = "format-reason";
+          reason.textContent = disabledReason(format, snapshot.muxingBlocked);
+          item.append(radio, title, detail, reason);
+        } else {
+          item.append(radio, title, detail);
+        }
+        if (snapshot.selectedFormatId === format.formatOptionId && eligible) {
+          item.classList.add("format-selected");
+        }
         list.append(item);
       }
     }

@@ -137,9 +137,7 @@ def _snap() -> DownloadClaimSnapshot:
     )
 
 
-def _executor(
-    settings: Settings, store: ArtifactStore
-) -> DownloadExecutor:
+def _executor(settings: Settings, store: ArtifactStore) -> DownloadExecutor:
     return DownloadExecutor(
         settings,
         session_factory=MagicMock(return_value=_FakeSession()),
@@ -301,6 +299,7 @@ async def _run_hang_case(
     hang: str,
     mux: bool,
     cancel: bool = False,
+    user_cancel: bool = False,
 ) -> DownloadExecutor:
     pid_file = tmp_path / "child.pid"
     fifo = tmp_path / "ready.fifo"
@@ -318,6 +317,9 @@ async def _run_hang_case(
 
     async def owned(*, job_id: uuid.UUID, fence: int) -> bool:
         del job_id, fence
+        if lose and user_cancel:
+            executor._user_cancel = True
+            return False
         return not lose
 
     async def watch_wait() -> None:
@@ -338,7 +340,11 @@ async def _run_hang_case(
         AsyncMock(return_value=datetime.now(tz=UTC)),
     )
     monkeypatch.setattr(
-        MediaDownloadJobRepository, "release_to_queued", AsyncMock()
+        MediaDownloadJobRepository, "release_to_queued", AsyncMock(return_value=True)
+    )
+    complete_cancelled = AsyncMock(return_value=bool(user_cancel))
+    monkeypatch.setattr(
+        MediaDownloadJobRepository, "complete_cancelled", complete_cancelled
     )
 
     task = asyncio.create_task(executor.execute(snap))
@@ -349,10 +355,15 @@ async def _run_hang_case(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        complete_cancelled.assert_not_awaited()
     else:
         lose = True
         tick.set()
         await task
+        if user_cancel:
+            complete_cancelled.assert_awaited()
+        else:
+            complete_cancelled.assert_not_awaited()
     assert not _pid_alive(child)
     assert executor._watchdog_started == executor._watchdog_finished
     assert not executor._watchdog_tasks
@@ -367,9 +378,7 @@ async def _run_hang_case(
 async def test_watchdog_tasks_never_survive_after_lease_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executor = await _run_hang_case(
-        tmp_path, monkeypatch, hang="video", mux=True
-    )
+    executor = await _run_hang_case(tmp_path, monkeypatch, hang="video", mux=True)
     assert executor._watchdog_finished >= 1
     assert all(task.done() for task in tuple(executor._watchdog_tasks))
 
@@ -443,8 +452,15 @@ async def test_stale_worker_cannot_stage_publish_or_commit(
 async def test_cancellation_remains_cancellation_not_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    await _run_hang_case(tmp_path, monkeypatch, hang="direct", mux=False, cancel=True)
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_kills_process_and_completes_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await _run_hang_case(
-        tmp_path, monkeypatch, hang="direct", mux=False, cancel=True
+        tmp_path, monkeypatch, hang="direct", mux=False, user_cancel=True
     )
 
 
