@@ -302,14 +302,18 @@ function optionalFiniteNumber(value: unknown): number | null {
 const SAFE_TOKEN_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const SAFE_MEDIA_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const TOOL_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/;
+/** Backend always emits /video…; /clip… is an input alias only (PR13). */
 const VK_PATH_RE = /^\/video(-?\d+)_(\d+)\/?$/;
 const RUTUBE_PATH_RE = /^\/video\/([A-Za-z0-9_-]{1,64})\/?$/;
 
-/** Exact public hosts from the backend provider registry (PR8 snapshot). */
+/** Exact public hosts from the backend provider registry (PR13 snapshot). */
 export const VK_CANONICAL_HOSTS = Object.freeze([
   "vk.com",
   "www.vk.com",
   "m.vk.com",
+  "vk.ru",
+  "www.vk.ru",
+  "m.vk.ru",
   "vkvideo.ru",
   "www.vkvideo.ru",
   "m.vkvideo.ru",

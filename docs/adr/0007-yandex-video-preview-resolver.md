@@ -141,8 +141,10 @@ signed query player URLs, thumbnails, analytics, related URLs, arbitrary
 
 ### Stable provider identity
 
-- VK: `/video<owner>_<clip>` or `/video-<owner>_<clip>` (+ optional slash);
-  `/video--…` rejected.
+- VK: `/video<owner>_<id>` or `/video-<owner>_<id>` and the `/clip…` alias with
+  the same owner/id shape (+ optional slash). Trusted emission always rewrites
+  `/clip…` → `/video{owner}_{id}`. `/video--…`, `/clip--…`, and `/clips…` are
+  rejected. Canonicalization does not trust yt-dlp output.
 - Rutube: `/video/<id>/` (dups-tier / registry only; no speculative Rutube
   iframe path in this correction).
 

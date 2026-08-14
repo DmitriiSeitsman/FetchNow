@@ -31,6 +31,11 @@ from fetchnow.resolution.errors import (
 )
 from fetchnow.resolution.models import WrapperResolveOutcome
 from fetchnow.resolution.protocols import DocumentFetchPort
+from fetchnow.url.models import ProviderID
+from fetchnow.url.provider_identity import (
+    ProviderIdentityError,
+    parse_stable_provider_identity,
+)
 
 RESOLVER_ID = "yandex_video_preview"
 WRAPPER_TYPE = "yandex_video_preview"
@@ -40,10 +45,6 @@ STRATEGY_VIEWER_IFRAME_VIDEO_URL = "yandex_viewer_iframe_video_url"
 
 _PREVIEW_PATH = re.compile(r"^/video/preview/([0-9]{1,32})$")
 _PREVIEW_LOCATION = re.compile(r"^/video/preview/([0-9]{1,32})$")
-
-# Stable VK identity: positive /video<owner>_<id>; negative /video-<owner>_<id>.
-_VK_STABLE_PATH = re.compile(r"^/video-?\d+_\d+/?$")
-_RUTUBE_STABLE_PATH = re.compile(r"^/video/[A-Za-z0-9_-]+/?$")
 
 # Trusted Yandex static VK player (live evidence 2026-08-11).
 _YASTATIC_HOST = "yastatic.net"
@@ -93,6 +94,9 @@ _VK_HOSTS = frozenset(
         "vk.com",
         "www.vk.com",
         "m.vk.com",
+        "vk.ru",
+        "www.vk.ru",
+        "m.vk.ru",
         "vkvideo.ru",
         "www.vkvideo.ru",
         "m.vkvideo.ru",
@@ -1133,18 +1137,43 @@ def _normalize_stable_provider_url(
     path_lower = path.lower()
     if any(marker in path_lower for marker in _FORBIDDEN_PATH_MARKERS):
         return None, False
-    if not _is_stable_provider_path(host, path):
+    canonical_path = _canonical_stable_provider_path(host, path)
+    if canonical_path is None:
         return None, False
 
-    return f"https://{host}{path}", upgraded
+    return f"https://{host}{canonical_path}", upgraded
+
+
+def _canonical_stable_provider_path(host: str, path: str) -> str | None:
+    """Return trusted path form, or None when the path is not stable.
+
+    VK aliases rewrite to ``/video…``. Rutube keeps the accepted submitted path
+    form (with or without trailing slash) after shared-grammar validation.
+    """
+    if host in _VK_HOSTS:
+        provider_id = ProviderID.VK.value
+        allowed = _VK_HOSTS
+    elif host in _RUTUBE_HOSTS:
+        provider_id = ProviderID.RUTUBE.value
+        allowed = _RUTUBE_HOSTS
+    else:
+        return None
+    try:
+        identity = parse_stable_provider_identity(
+            provider_id=provider_id,
+            hostname=host,
+            path=path,
+            allowed_hostnames=allowed,
+        )
+    except ProviderIdentityError:
+        return None
+    if provider_id == ProviderID.RUTUBE.value:
+        return path
+    return identity.canonical_path
 
 
 def _is_stable_provider_path(host: str, path: str) -> bool:
-    if host in _VK_HOSTS:
-        return _VK_STABLE_PATH.fullmatch(path) is not None
-    if host in _RUTUBE_HOSTS:
-        return _RUTUBE_STABLE_PATH.fullmatch(path) is not None
-    return False
+    return _canonical_stable_provider_path(host, path) is not None
 
 
 def _decode_string_value(raw: str) -> str | None:

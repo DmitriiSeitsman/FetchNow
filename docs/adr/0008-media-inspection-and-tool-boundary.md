@@ -25,12 +25,21 @@ closed.
    `MediaInspectionService` that accepts only a consistent `ResolutionResult`
    validated snapshot (never a raw unvalidated URL).
 
-2. Bind inspection to stable provider media identity (VK `/video(-?)owner_id`,
-   Rutube `/video/<id>/`). yt-dlp output must present authoritative
-   `webpage_url` / `original_url` values that resolve to the **same** identity;
-   payload `id` must agree. Cross-alias hosts for the same identity may be
-   accepted; different media on the same host is rejected. Final canonical URLs
-   always come from the trusted target, never from extractor substitution.
+2. Bind inspection to stable provider media identity (VK `/video(-?)owner_id`
+   with `/clip(-?)owner_id` as an input/authoritative-URL alias that always
+   canonicalizes to `/video{owner}_{id}`; Rutube `/video/<id>/`). The shared
+   grammar lives in `fetchnow.url.provider_identity` (no media_inspection /
+   resolution / jobs imports). `ResolutionService` rewrites the validated
+   URL snapshot **for VK only** so public `/media/resolve` path and canonical
+   already use `/video…` before jobs or inspection run; Rutube path forms are
+   preserved as validated. yt-dlp output must present
+   authoritative `webpage_url` / `original_url` values that resolve to the
+   **same** identity; payload `id` must agree. Cross-alias hosts
+   (including `vk.ru` / `m.vk.ru`) for the same identity may be accepted;
+   different media on the same host is rejected. Final canonical URLs always
+   come from the trusted target, never from extractor substitution. `/clip` is
+   a stable media-identity alias, not a generic wrapper and not a reason to
+   enable the Generic extractor.
 
 3. Invoke yt-dlp **only** as a pinned CLI dependency via a hardened subprocess
    adapter (`shell=False`, fixed argv, no user flags, metadata-only /

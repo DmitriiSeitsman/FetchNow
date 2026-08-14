@@ -44,7 +44,10 @@ Bodies are soft-capped for probes, content types are probe-oriented, and methods
 
 ## VK hostname note
 
-Explicit VK video frontends `vkvideo.ru` / `www.vkvideo.ru` / `m.vkvideo.ru` are included in the VK allowlist so same-provider redirects from `vk.com` remain valid. Auth hosts such as `login.vk.ru` stay denylisted via unsupported-provider.
+Explicit VK video frontends `vkvideo.ru` / `www.vkvideo.ru` / `m.vkvideo.ru` and
+official `vk.ru` / `www.vk.ru` / `m.vk.ru` aliases are included in the VK
+allowlist so same-provider redirects from `vk.com` remain valid. Auth hosts such
+as `login.vk.ru` stay denylisted via unsupported-provider.
 
 ## Consequences
 

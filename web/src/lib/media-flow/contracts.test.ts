@@ -115,6 +115,9 @@ describe("contracts", () => {
       "vk.com",
       "www.vk.com",
       "m.vk.com",
+      "vk.ru",
+      "www.vk.ru",
+      "m.vk.ru",
       "vkvideo.ru",
       "www.vkvideo.ru",
       "m.vkvideo.ru",
@@ -144,11 +147,49 @@ describe("contracts", () => {
     }
   });
 
+  it("accepts backend video-form canonical on vk.ru; rejects clip-form canonical", () => {
+    // Backend contract: public canonical is always /video… after PR13 correction.
+    // frontend_accepts_backend_video_canonical=True
+    expect(
+      parseInspectionJob(
+        inspectedPayload({
+          providerId: "vk",
+          canonicalProviderUrl: "https://vk.ru/video-235548483_456239236",
+          mediaId: "-235548483_456239236",
+        }),
+      ).result?.canonicalProviderUrl,
+    ).toBe("https://vk.ru/video-235548483_456239236");
+    expect(
+      parseInspectionJob(
+        inspectedPayload({
+          providerId: "vk",
+          canonicalProviderUrl: "https://m.vk.ru/video-1_2",
+          mediaId: "-1_2",
+        }),
+      ).result?.canonicalProviderUrl,
+    ).toBe("https://m.vk.ru/video-1_2");
+    // frontend_accepts_clip_canonical=False — defense in depth if a buggy
+    // backend ever emitted /clip… as canonicalProviderUrl.
+    expect(() =>
+      parseInspectionJob(
+        inspectedPayload({
+          providerId: "vk",
+          canonicalProviderUrl: "https://vk.ru/clip-235548483_456239236",
+          mediaId: "-235548483_456239236",
+        }),
+      ),
+    ).toThrow(FlowError);
+  });
+
   it("rejects provider host lookalikes and suffix matches", () => {
     const lookalikes = [
       "https://vk.com.evil/video-1_2",
       "https://evilvk.com/video-1_2",
       "https://notvk.com/video-1_2",
+      "https://vk.ru.evil.test/video-1_2",
+      "https://evil.vk.ru/video-1_2",
+      "https://login.vk.ru/video-1_2",
+      "https://notvk.ru/video-1_2",
       "https://vkvideo.ru.evil.com/video-1_2",
       "https://evil-vkvideo.ru/video-1_2",
       "https://m.vkvideo.ru.attacker/video-1_2",
