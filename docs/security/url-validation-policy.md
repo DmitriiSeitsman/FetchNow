@@ -81,6 +81,12 @@ Checks apply to **both** IPv4 and IPv6.
 
 - Only explicitly allowlisted hostnames (and explicitly listed subdomains) are accepted.
 - Matching must be **label-boundary safe** (no naive `endswith`).
+- VK exact hosts (PR13): `vk.com`, `www.vk.com`, `m.vk.com`, `vk.ru`,
+  `www.vk.ru`, `m.vk.ru`, `vkvideo.ru`, `www.vkvideo.ru`, `m.vkvideo.ru`.
+  `login.vk.ru` and unknown VK subdomains are rejected before DNS.
+- VK stable path identity accepts `/video(-?)owner_id` and `/clip(-?)owner_id`
+  aliases; trusted canonical path is always `/video{owner}_{id}`. Canonical
+  never comes from raw yt-dlp output.
 
 ### Probe limits (PR2)
 

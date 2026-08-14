@@ -47,3 +47,21 @@ Fixture cases that require following `Location` to a private IP are marked `stag
 - FakeDnsResolver keeps unit/security tests offline.
 - SystemDnsResolver uses `asyncio` + `getaddrinfo` (no shell, no subprocess).
 - Adding a provider means adding an explicit descriptor with exact hostnames — never `endswith`.
+
+### VK exact hosts (PR13)
+
+VK allowlist is exact-host only:
+
+`vk.com`, `www.vk.com`, `m.vk.com`, `vk.ru`, `www.vk.ru`, `m.vk.ru`,
+`vkvideo.ru`, `www.vkvideo.ru`, `m.vkvideo.ru`.
+
+`login.vk.ru`, `api.vk.ru`, `evil.vk.ru`, and any other subdomain or suffix
+lookalike remain unsupported. Same-provider redirects among the nine aliases
+are allowed; arbitrary VK subdomains are not trusted.
+
+Stable path identity (`fetchnow.url.provider_identity`) accepts `/video…` and
+`/clip…` aliases with the same owner/id and always emits trusted canonical path
+`/video{owner}_{id}`. `ResolutionService` rewrites the validated snapshot
+(path + public canonical) to that form **for VK only** (direct and
+wrapper-terminal results) so `/media/resolve` never publishes `/clip…` as the
+terminal URL. Rutube validated path forms are left unchanged.

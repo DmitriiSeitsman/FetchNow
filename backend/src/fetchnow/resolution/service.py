@@ -31,6 +31,12 @@ from fetchnow.url.destination import (
 )
 from fetchnow.url.dns import DnsResolver
 from fetchnow.url.errors import URLValidationError
+from fetchnow.url.models import NormalizedMediaURL, ProviderID, URLValidationResult
+from fetchnow.url.provider_identity import (
+    ProviderIdentityError,
+    build_public_canonical_url,
+    parse_stable_provider_identity,
+)
 from fetchnow.url.providers import ProviderRegistry
 from fetchnow.url.validate import URLValidator
 
@@ -148,6 +154,7 @@ class ResolutionService:
                 validated = await self._validator.validate(raw_url)
             except URLValidationError as exc:
                 self._map_url_error(exc)
+            validated = self._with_stable_provider_identity(validated)
             return ResolutionResult(
                 submitted_url=raw_url,
                 validated=validated,
@@ -279,6 +286,18 @@ class ResolutionService:
                     validated = await self._validator.validate(candidate)
                 except URLValidationError as exc:
                     self._map_url_error(exc)
+                validated = self._with_stable_provider_identity(validated)
+                # Terminal hop must agree with the public /video canonical.
+                if chain:
+                    prev = chain[-1]
+                    chain[-1] = ResolutionHop(
+                        resolver_id=prev.resolver_id,
+                        wrapper_type=prev.wrapper_type,
+                        source_canonical=prev.source_canonical,
+                        target_canonical=validated.url.canonical,
+                        strategy=prev.strategy,
+                        metadata=prev.metadata,
+                    )
                 return ResolutionResult(
                     submitted_url=raw_url,
                     validated=validated,
@@ -305,6 +324,60 @@ class ResolutionService:
                 continue
 
             raise_resolution_error(ResolutionErrorKind.RESOLVED_PROVIDER_UNSUPPORTED)
+
+    def _with_stable_provider_identity(
+        self,
+        validated: URLValidationResult,
+    ) -> URLValidationResult:
+        """Rewrite VK /clip|/video aliases into a coherent trusted snapshot.
+
+        PR13 scopes this rewrite to VK only so public Rutube ``/media/resolve``
+        path forms stay as validated. Non-stable VK paths keep the prior
+        snapshot. No extra DNS or HTTP I/O.
+        """
+        if validated.provider_id != ProviderID.VK.value:
+            return validated
+        provider = self._providers.find(validated.url.hostname)
+        if provider is None:
+            return validated
+        try:
+            identity = parse_stable_provider_identity(
+                provider_id=validated.provider_id,
+                hostname=validated.url.hostname,
+                path=validated.url.path,
+                allowed_hostnames=provider.exact_hostnames,
+            )
+        except ProviderIdentityError:
+            return validated
+
+        canonical = build_public_canonical_url(
+            scheme=validated.url.scheme,
+            hostname=identity.hostname,
+            port=validated.url.port,
+            canonical_path=identity.canonical_path,
+        )
+        if (
+            validated.url.path == identity.canonical_path
+            and validated.url.canonical == canonical
+        ):
+            return validated
+
+        rebuilt_url = NormalizedMediaURL(
+            original_scheme=validated.url.original_scheme,
+            scheme=validated.url.scheme,
+            hostname=validated.url.hostname,
+            port=validated.url.port,
+            path=identity.canonical_path,
+            query=validated.url.query,
+            provider_id=validated.url.provider_id,
+            canonical=canonical,
+        )
+        return URLValidationResult(
+            provider_id=validated.provider_id,
+            provider_display_name=validated.provider_display_name,
+            url=rebuilt_url,
+            head_fallback_statuses=validated.head_fallback_statuses,
+        )
 
     @staticmethod
     def _map_url_error(exc: URLValidationError) -> None:

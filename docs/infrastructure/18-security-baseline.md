@@ -14,7 +14,7 @@
 
 Registry:
 
-- VK (`vk`, `VK`): `vk.com`, `www.vk.com`, `m.vk.com`, `vkvideo.ru`, `www.vkvideo.ru`, `m.vkvideo.ru`; enabled default `true`.
+- VK (`vk`, `VK`): `vk.com`, `www.vk.com`, `m.vk.com`, `vk.ru`, `www.vk.ru`, `m.vk.ru`, `vkvideo.ru`, `www.vkvideo.ru`, `m.vkvideo.ru`; enabled default `true`. Exact hosts only — no suffix matching; `login.vk.ru` and unknown subdomains are unsupported.
 - Rutube (`rutube`, `Rutube`): `rutube.ru`, `www.rutube.ru`; enabled default `true`.
 
 ## Реализованный safe outbound probe (PR2)

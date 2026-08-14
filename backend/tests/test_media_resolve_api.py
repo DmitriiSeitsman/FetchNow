@@ -60,6 +60,9 @@ async def client(settings: Settings) -> AsyncIterator[AsyncClient]:
     dns = FakeDnsResolver(
         records={
             "vk.com": ["8.8.8.8"],
+            "vk.ru": ["8.8.8.8"],
+            "www.vk.ru": ["8.8.8.8"],
+            "m.vk.ru": ["8.8.8.8"],
             "vkvideo.ru": ["8.8.8.8"],
             "rutube.ru": ["8.8.4.4"],
             "yandex.ru": ["1.1.1.1"],
@@ -130,6 +133,73 @@ async def test_resolve_direct_vk_no_wrapper_fetch(client: AsyncClient) -> None:
     assert body["wrapperType"] is None
     assert body["resolutionChain"] == []
     assert SECRET not in response.text
+    assert not any("yandex.ru" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_resolve_direct_vk_ru_clip_returns_video_canonical(
+    client: AsyncClient,
+) -> None:
+    calls: list[str] = client._fetchnow_calls  # type: ignore[attr-defined]
+    calls.clear()
+    response = await client.post(
+        "/api/v1/media/resolve",
+        json={"url": "https://vk.ru/clip-235548483_456239236?list=secret"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"]["id"] == "vk"
+    assert body["provenance"] == "direct_provider"
+    assert body["wrapperType"] is None
+    assert body["url"]["hostname"] == "vk.ru"
+    assert body["url"]["path"] == "/video-235548483_456239236"
+    assert body["url"]["canonical"] == (
+        "https://vk.ru/video-235548483_456239236"
+    )
+    assert "clip" not in body["url"]["path"]
+    assert "clip" not in body["url"]["canonical"]
+    assert "?" not in body["url"]["canonical"]
+    assert "#" not in body["url"]["canonical"]
+    assert "list=" not in response.text
+    assert "secret" not in response.text
+    assert body["resolutionChain"] == []
+    assert not any("yandex.ru" in c for c in calls)
+    # Frontend contract: backend /video… result is acceptable.
+    assert body["url"]["canonical"].startswith("https://vk.ru/video")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "path", "canonical"),
+    [
+        (
+            "https://rutube.ru/video/abc123",
+            "/video/abc123",
+            "https://rutube.ru/video/abc123",
+        ),
+        (
+            "https://rutube.ru/video/abc123/",
+            "/video/abc123/",
+            "https://rutube.ru/video/abc123/",
+        ),
+    ],
+)
+async def test_resolve_direct_rutube_preserves_path_form(
+    client: AsyncClient,
+    raw: str,
+    path: str,
+    canonical: str,
+) -> None:
+    calls: list[str] = client._fetchnow_calls  # type: ignore[attr-defined]
+    calls.clear()
+    response = await client.post("/api/v1/media/resolve", json={"url": raw})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"]["id"] == "rutube"
+    assert body["provenance"] == "direct_provider"
+    assert body["url"]["path"] == path
+    assert body["url"]["canonical"] == canonical
+    assert "?" not in body["url"]["canonical"]
     assert not any("yandex.ru" in c for c in calls)
 
 

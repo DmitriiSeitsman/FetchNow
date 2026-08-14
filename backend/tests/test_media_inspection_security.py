@@ -133,6 +133,32 @@ def test_cross_alias_same_identity_accepted_true() -> None:
     assert draft.canonical_provider_url == "https://vk.com/video-123_456239017"
 
 
+def test_clip_webpage_url_binds_to_video_canonical_target() -> None:
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["webpage_url"] = "https://vk.ru/clip-123_456239017"
+    payload["original_url"] = "https://m.vk.ru/clip-123_456239017"
+    draft = _parse(
+        payload,
+        canonical="https://vk.ru/video-123_456239017",
+        media_id="-123_456239017",
+        hosts=frozenset(
+            {
+                "vk.com",
+                "www.vk.com",
+                "m.vk.com",
+                "vk.ru",
+                "www.vk.ru",
+                "m.vk.ru",
+                "vkvideo.ru",
+                "www.vkvideo.ru",
+                "m.vkvideo.ru",
+            }
+        ),
+    )
+    assert draft.media_id == "-123_456239017"
+    assert draft.canonical_provider_url == "https://vk.ru/video-123_456239017"
+
+
 def test_missing_authoritative_identity_accepted_false() -> None:
     payload = copy.deepcopy(VK_FIXTURE)
     del payload["webpage_url"]

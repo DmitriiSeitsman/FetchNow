@@ -48,6 +48,9 @@ HOSTS = frozenset(
         "vk.com",
         "www.vk.com",
         "m.vk.com",
+        "vk.ru",
+        "www.vk.ru",
+        "m.vk.ru",
         "vkvideo.ru",
         "www.vkvideo.ru",
         "m.vkvideo.ru",
@@ -95,6 +98,8 @@ def _service(
             "yandex.ru": ["1.1.1.1"],
             "vkvideo.ru": ["8.8.8.8"],
             "vk.com": ["8.8.8.8"],
+            "vk.ru": ["8.8.8.8"],
+            "m.vk.ru": ["8.8.8.8"],
             "rutube.ru": ["8.8.4.4"],
             "youtube.com": ["8.8.8.8"],
             "www.youtube.com": ["8.8.8.8"],
@@ -183,18 +188,82 @@ def _target_html(
         ("/video-123_456", True),
         ("/video123_456/", True),
         ("/video-123_456/", True),
+        ("/clip123_456", True),
+        ("/clip-123_456", True),
+        ("/clip123_456/", True),
+        ("/clip-123_456/", True),
         ("/video--123_456", False),
+        ("/clip--123_456", False),
+        ("/clips-123_456", False),
+        ("/clip123_-456", False),
         ("/video_456", False),
         ("/video123_", False),
         ("/videoabc_456", False),
         ("/video123_abc", False),
         ("/video123_456/extra", False),
+        ("/clip-123_456/extra", False),
         ("/video_ext.php", False),
     ],
 )
 def test_vk_stable_path_shapes(path: str, accepted: bool) -> None:
     assert _is_stable_provider_path("vk.com", path) is accepted
+    assert _is_stable_provider_path("vk.ru", path) is accepted
     assert _is_stable_provider_path("vkvideo.ru", path) is accepted
+
+
+def test_yandex_authoritative_vk_ru_clip_rewrites_to_video() -> None:
+    url, upgraded = _normalize_stable_provider_url(
+        "https://vk.ru/clip-235548483_456239236",
+        supported_hosts=HOSTS,
+        allow_http_upgrade=True,
+    )
+    assert upgraded is False
+    assert url == "https://vk.ru/video-235548483_456239236"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "https://rutube.ru/video/abcdef0123456789",
+            "https://rutube.ru/video/abcdef0123456789",
+        ),
+        (
+            "https://rutube.ru/video/abcdef0123456789/",
+            "https://rutube.ru/video/abcdef0123456789/",
+        ),
+        (
+            "http://rutube.ru/video/abcdef0123456789",
+            "https://rutube.ru/video/abcdef0123456789",
+        ),
+    ],
+)
+def test_yandex_rutube_preserves_accepted_path_form(raw: str, expected: str) -> None:
+    url, _upgraded = _normalize_stable_provider_url(
+        raw,
+        supported_hosts=HOSTS,
+        allow_http_upgrade=True,
+    )
+    assert url == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://rutube.ru/play/embed/abcdef0123456789/",
+        "https://rutube.ru/video/abcdef0123456789.m3u8",
+        "https://rutube.ru/video/",
+        "https://rutube.ru/videos/abcdef0123456789/",
+    ],
+)
+def test_yandex_rutube_malformed_and_embed_rejected(raw: str) -> None:
+    url, upgraded = _normalize_stable_provider_url(
+        raw,
+        supported_hosts=HOSTS,
+        allow_http_upgrade=True,
+    )
+    assert url is None
+    assert upgraded is False
 
 
 def test_http_positive_owner_upgraded() -> None:
@@ -467,6 +536,27 @@ async def test_stable_candidate_passes_provider_and_validator() -> None:
     result = await svc.resolve("https://yandex.ru/video/preview/1")
     assert result.provider_id == "vk"
     assert result.canonical_provider_url == "https://vkvideo.ru/video-1_2"
+
+
+@pytest.mark.asyncio
+async def test_yandex_authoritative_vk_ru_clip_resolves_to_video_canonical() -> None:
+    body = _target_html(
+        "1",
+        video_url="https://vk.ru/clip-235548483_456239236",
+        embed_url=EMBED_DECOY,
+    )
+    body = body.replace(
+        b"</html>",
+        b'<a href="https://vk.com/video-9_9">related</a></html>',
+    )
+    svc = _service(html_body=body, preview_path="/video/preview/1")
+    result = await svc.resolve("https://yandex.ru/video/preview/1")
+    assert result.canonical_provider_url == (
+        "https://vk.ru/video-235548483_456239236"
+    )
+    assert result.provider_id == "vk"
+    assert "/clip" not in result.canonical_provider_url
+    assert "video-9_9" not in result.canonical_provider_url
 
 
 @pytest.mark.asyncio
