@@ -36,7 +36,9 @@ then blocked every quality with “muxing is not offered yet.”
 5. Mux execution downloads video then audio into private subdirectories,
    runs a fixed ffmpeg stream-copy argv, validates with bounded ffprobe JSON,
    stages into ``output/`` by same-volume link+unlink (no extra copy), then uses
-   the existing atomic publisher.
+   the existing atomic publisher. The subprocess boundary connects stdin to
+   `DEVNULL`; the ffprobe argv must not use ffmpeg-only `-nostdin`, which Debian
+   bookworm ffprobe rejects before validating the local file.
 6. Peak disk reservation is `video + audio + muxed output` plus the existing
    min-free headroom, and each mux stage is write-capped to that reservation.
    Mux concurrency is the existing single download worker
