@@ -7,8 +7,8 @@ import {
   parseDownloadJob,
   parseInspectionJob,
   parseMediaFormat,
-  pickHighestEligibleFormat,
 } from "./contracts";
+import { pickHighestEligibleFormat } from "./quality";
 import {
   DOWNLOAD_ID,
   EXPIRES,

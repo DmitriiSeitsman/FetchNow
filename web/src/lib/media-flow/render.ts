@@ -1,15 +1,11 @@
 import type { FlowSnapshot } from "./controller";
-import { isDownloadEligible } from "./contracts";
+import { progressView } from "./progress";
+import { groupQualityOptions, type QualityOption } from "./quality";
 
 function setText(el: Element | null, text: string): void {
   if (el) {
     el.textContent = text;
   }
-}
-
-function displayQuality(label: string): string {
-  const match = /^p(\d+)$/.exec(label);
-  return match ? `${match[1]}p` : label;
 }
 
 function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: boolean): string {
@@ -38,26 +34,61 @@ function formatBytes(value: number | null): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatDims(format: FlowSnapshot["formats"][number]): string {
-  const parts: string[] = [];
-  if (format.width && format.height) {
-    parts.push(`${format.width}×${format.height}`);
-  }
-  if (format.fps) {
+/** Secondary row text: container, FPS and size, only when the data exists. */
+function formatDetail(format: FlowSnapshot["formats"][number]): string {
+  const parts: string[] = [format.container.toUpperCase()];
+  if (typeof format.fps === "number" && Number.isFinite(format.fps) && format.fps > 0) {
     parts.push(`${Math.round(format.fps)} fps`);
   }
-  parts.push(format.container);
   const size = formatBytes(format.approxBytes);
   if (size) {
-    parts.push(size);
+    parts.push(`≈ ${size}`);
   }
-  parts.push(format.hasVideo && format.hasAudio ? "video + audio" : "incomplete");
   return parts.join(" · ");
 }
 
+function qualityRow(
+  option: QualityOption,
+  snapshot: FlowSnapshot,
+  selectable: boolean,
+): HTMLLabelElement {
+  const format = option.representative;
+  const item = document.createElement("label");
+  item.className = "format" + (option.eligible ? "" : " format-disabled");
+  const radio = document.createElement("input");
+  radio.type = "radio";
+  radio.name = "formatOption";
+  radio.value = format.formatOptionId;
+  radio.disabled = !option.eligible || !selectable;
+  radio.checked = snapshot.selectedFormatId === format.formatOptionId;
+  const title = document.createElement("span");
+  title.className = "format-label";
+  title.textContent = option.label;
+  const detail = document.createElement("span");
+  detail.className = "format-detail";
+  detail.textContent = formatDetail(format);
+  item.append(radio, title, detail);
+  if (!option.eligible) {
+    const reason = document.createElement("span");
+    reason.className = "format-reason";
+    reason.textContent = disabledReason(format, snapshot.muxingBlocked);
+    item.append(reason);
+  }
+  if (radio.checked && option.eligible) {
+    item.classList.add("format-selected");
+  }
+  return item;
+}
+
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
+  const progress = progressView(snapshot.phase, snapshot.progressStage);
   const status = root.querySelector("[data-flow-status]");
-  setText(status, snapshot.errorText ?? snapshot.statusText);
+  // While the progress card is visible it owns the stage copy, so the status
+  // line stays free for errors and instructions instead of repeating it.
+  setText(
+    status,
+    snapshot.errorText ?? (progress.visible ? "" : snapshot.statusText),
+  );
   if (status instanceof HTMLElement) {
     status.dataset.tone = snapshot.errorText ? "error" : "info";
     status.setAttribute("role", snapshot.errorText ? "alert" : "status");
@@ -102,14 +133,27 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     restored.hidden = !snapshot.restored;
   }
 
+  const progressCard = root.querySelector("[data-flow-progress]");
+  if (progressCard instanceof HTMLElement) {
+    progressCard.hidden = !progress.visible;
+    progressCard.dataset.tone = progress.tone;
+    setText(progressCard.querySelector("[data-flow-progress-label]"), progress.label);
+  }
+  const bar = root.querySelector("[data-flow-progress-bar]");
+  if (bar instanceof HTMLElement) {
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", String(progress.percent));
+    bar.setAttribute("aria-valuetext", progress.valueText);
+  }
+  const fill = root.querySelector("[data-flow-progress-fill]");
+  if (fill instanceof HTMLElement) {
+    fill.style.width = `${progress.percent}%`;
+  }
   const loader = root.querySelector("[data-flow-loader]");
   if (loader instanceof HTMLElement) {
-    const loading =
-      snapshot.phase === "inspecting" ||
-      snapshot.phase === "enqueueing_download" ||
-      snapshot.phase === "downloading" ||
-      snapshot.phase === "submitting";
-    loader.hidden = !loading;
+    loader.hidden = !progress.spinner;
   }
   const spinner = root.querySelector("[data-flow-spinner]");
   if (spinner instanceof HTMLElement) {
@@ -141,53 +185,31 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     }
   }
 
+  const options = groupQualityOptions(snapshot.formats, {
+    muxingBlocked: snapshot.muxingBlocked,
+    selectedFormatId: snapshot.selectedFormatId,
+  });
+  const showQuality = options.length > 0 && snapshot.result !== null;
   const list = root.querySelector("[data-flow-formats]");
   if (list instanceof HTMLElement) {
     list.replaceChildren();
-    const show = snapshot.formats.length > 0 && snapshot.result !== null;
-    list.hidden = !show;
-    if (show) {
-      for (const format of snapshot.formats) {
-        const eligible = !snapshot.muxingBlocked && isDownloadEligible(format);
-        if (format.category !== "progressive" || !format.hasVideo || !format.hasAudio) {
-          continue;
-        }
-        const item = document.createElement("label");
-        item.className = "format" + (eligible ? "" : " format-disabled");
-        const radio = document.createElement("input");
-        radio.type = "radio";
-        radio.name = "formatOption";
-        radio.value = format.formatOptionId;
-        radio.disabled = !eligible || snapshot.phase !== "inspected";
-        radio.checked = snapshot.selectedFormatId === format.formatOptionId;
-        const title = document.createElement("span");
-        title.className = "format-label";
-        title.textContent = displayQuality(format.qualityLabel);
-        const detail = document.createElement("span");
-        detail.className = "format-detail";
-        detail.textContent = formatDims(format);
-        if (!eligible) {
-          const reason = document.createElement("span");
-          reason.className = "format-reason";
-          reason.textContent = disabledReason(format, snapshot.muxingBlocked);
-          item.append(radio, title, detail, reason);
-        } else {
-          item.append(radio, title, detail);
-        }
-        if (snapshot.selectedFormatId === format.formatOptionId && eligible) {
-          item.classList.add("format-selected");
-        }
-        list.append(item);
+    list.hidden = !showQuality;
+    if (showQuality) {
+      const selectable = snapshot.phase === "inspected";
+      for (const option of options) {
+        list.append(qualityRow(option, snapshot, selectable));
       }
     }
+  }
+  const qualityCard = root.querySelector("[data-flow-quality]");
+  if (qualityCard instanceof HTMLElement) {
+    qualityCard.hidden = !showQuality;
   }
 
   const mux = root.querySelector("[data-flow-mux]");
   if (mux instanceof HTMLElement) {
     const onlyIncomplete =
-      snapshot.result !== null &&
-      (snapshot.muxingBlocked ||
-        snapshot.formats.every((format) => !isDownloadEligible(format)));
+      snapshot.result !== null && options.every((option) => !option.eligible);
     mux.hidden = !onlyIncomplete || snapshot.phase === "idle";
   }
 

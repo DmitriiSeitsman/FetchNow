@@ -1,13 +1,14 @@
 import { MediaApi } from "./api";
 import {
   isDownloadEligible,
-  pickHighestEligibleFormat,
   type DownloadJob,
   type InspectionJob,
   type InspectionResult,
   type MediaFormat,
   type ProgressStage,
 } from "./contracts";
+import { flowStatusText, STAGE_LABEL } from "./progress";
+import { pickHighestEligibleFormat, reconcileSelectedFormatId } from "./quality";
 import { generateAccessToken } from "./credentials";
 import {
   fileSystemAccessSupported,
@@ -46,33 +47,6 @@ export type FlowSnapshot = {
   canCancelTask: boolean;
   restored: boolean;
   progressStage: ProgressStage | null;
-};
-
-const STATUS: Partial<Record<FlowPhase, string>> = {
-  submitting: "Checking the link…",
-  inspecting: "Checking the media…",
-  inspected: "Choose a quality to download.",
-  enqueueing_download: "Checking the media…",
-  downloading: "Preparing your download…",
-  ready: "Ready to save",
-  saving: "Saving…",
-  completed: "Saved to your computer.",
-  cancelled: "Download cancelled",
-};
-
-const PROGRESS_STATUS: Record<ProgressStage, string> = {
-  queued: "Waiting to start…",
-  inspecting: "Checking the media…",
-  downloading_video: "Preparing video…",
-  downloading_audio: "Preparing audio…",
-  muxing: "Combining video and audio…",
-  verifying: "Verifying the file…",
-  publishing: "Finalizing your download…",
-  retrying: "Retrying preparation…",
-  ready: "Ready to save",
-  failed: "The file could not be prepared.",
-  cancelled: "Download cancelled",
-  expired: "This download expired.",
 };
 
 export type ControllerHooks = {
@@ -167,23 +141,18 @@ export class MediaFlowController {
       return "Restored an existing download task. Choose a quality or continue.";
     }
     if (this.restored && this.machine.current === "downloading") {
-      return this.progressStatus() || "Restored an existing download task.";
-    }
-    if (this.machine.current === "downloading" || this.machine.current === "enqueueing_download") {
-      return this.progressStatus() || STATUS[this.machine.current] || "";
+      return (
+        flowStatusText(this.machine.current, this.downloadJob?.progressStage ?? null) ||
+        "Restored an existing download task."
+      );
     }
     if (this.machine.current === "cancelled") {
-      return PROGRESS_STATUS.cancelled;
+      return STAGE_LABEL.cancelled;
     }
-    return STATUS[this.machine.current] ?? "";
-  }
-
-  private progressStatus(): string {
-    const stage = this.downloadJob?.progressStage;
-    if (!stage) {
-      return "";
-    }
-    return PROGRESS_STATUS[stage] ?? "";
+    return flowStatusText(
+      this.machine.current,
+      this.downloadJob?.progressStage ?? null,
+    );
   }
 
   private emit(): void {
@@ -421,9 +390,13 @@ export class MediaFlowController {
       return;
     }
     this.machine.transition("inspected", generation);
+    const formats = job.result?.formats ?? [];
+    const muxingBlocked = job.result?.muxingRequired === true;
+    this.selectedFormatId = reconcileSelectedFormatId(formats, this.selectedFormatId, {
+      muxingBlocked,
+    });
     if (!this.selectedFormatId) {
-      const formats = job.result?.formats ?? [];
-      this.selectedFormatId = pickHighestEligibleFormat(formats);
+      this.selectedFormatId = pickHighestEligibleFormat(formats, { muxingBlocked });
     }
     const resumeId = this.resumeDownloadId;
     this.clearResumeDownloadId();
