@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -131,6 +132,27 @@ class MediaDownloadJob(Base):
             ")",
             name="ck_media_download_jobs_cancel_requested",
         ),
+        CheckConstraint(
+            "("
+            "suggested_filename IS NULL OR ("
+            "char_length(suggested_filename) BETWEEN 1 AND 255 "
+            "AND position('/' in suggested_filename) = 0 "
+            "AND position(E'\\\\' in suggested_filename) = 0 "
+            "AND position(CHR(10) in suggested_filename) = 0 "
+            "AND position(CHR(13) in suggested_filename) = 0"
+            "))",
+            name="ck_media_download_jobs_suggested_filename",
+        ),
+        CheckConstraint(
+            "("
+            "progress_percent IS NULL"
+            ") OR ("
+            "progress_percent BETWEEN 0 AND 99 "
+            "AND public_state = 'downloading' "
+            "AND progress_stage IN ('downloading_video', 'downloading_audio')"
+            ")",
+            name="ck_media_download_jobs_progress_percent",
+        ),
         Index(
             "ix_media_download_jobs_claim",
             "available_at",
@@ -193,6 +215,12 @@ class MediaDownloadJob(Base):
     )
     cancel_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    suggested_filename: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    progress_percent: Mapped[int | None] = mapped_column(
+        SmallInteger, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

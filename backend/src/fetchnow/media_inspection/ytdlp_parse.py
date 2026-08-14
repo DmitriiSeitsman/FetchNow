@@ -19,6 +19,7 @@ from fetchnow.media_inspection.models import (
     InternalFormatCandidate,
 )
 from fetchnow.media_inspection.normalize import normalize_codec
+from fetchnow.media_inspection.size_estimate import estimate_format_bytes
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _CONTAINER_RE = re.compile(r"^[a-z0-9]{1,16}$")
@@ -250,6 +251,7 @@ def _parse_formats(
     max_width: int,
     max_bytes: int,
     max_format_entries: int,
+    duration_seconds: int | None,
 ) -> tuple[InternalFormatCandidate, ...]:
     raw_formats = payload.get("formats")
     if raw_formats is None:
@@ -299,10 +301,16 @@ def _parse_formats(
             continue
         fps = None if fps_num is None else float(fps_num)
 
-        size = _finite_number(item.get("filesize"))
-        if size is None:
-            size = _finite_number(item.get("filesize_approx"))
-        approx_bytes = None if size is None else int(size)
+        approx_bytes = estimate_format_bytes(
+            filesize=item.get("filesize"),
+            filesize_approx=item.get("filesize_approx"),
+            tbr=item.get("tbr"),
+            vbr=item.get("vbr"),
+            abr=item.get("abr"),
+            has_video=has_video,
+            has_audio=has_audio,
+            duration_seconds=duration_seconds,
+        )
         if approx_bytes is not None and approx_bytes > max_bytes:
             continue
 
@@ -428,6 +436,7 @@ def parse_ytdlp_json(
         max_width=max_width,
         max_bytes=max_bytes,
         max_format_entries=max_format_entries,
+        duration_seconds=duration,
     )
     if not candidates:
         raise_inspection_error(

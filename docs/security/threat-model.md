@@ -173,9 +173,20 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Guess UUID to cancel someone else's job; distinguish unknown vs unauthorized; leak stage internals or stderr via progress JSON |
 | Impact | Denial of another user's download; account oracle; tool/URL leakage |
-| Mitigation | Same parent Bearer as GET; UUID alone and wrong credential → identical `DOWNLOAD_JOB_NOT_FOUND`; public progress is an allowlisted stage enum with no percentages or failure class; cancel is fenced; stale fence cannot complete a cancelled job |
+| Mitigation | Same parent Bearer as GET; UUID alone and wrong credential → identical `DOWNLOAD_JOB_NOT_FOUND`; public progress is an allowlisted stage enum; `progressPercent` is omitted unless a bounded denominator exists; cancel is fenced; stale fence cannot complete a cancelled job or update percent |
 | Residual risk | Stolen Bearer until TTL |
 | Planned PR | **PR10** |
+
+### Filename / Content-Disposition injection (PR12)
+
+| Field | Detail |
+|---|---|
+| Attack | Hostile media title injects CR/LF, path separators, or a mismatched `filename*` |
+| Impact | Header injection, unexpected save path, confused-deputy download |
+| Mitigation | Server-side sanitization persisted at create; RFC 8187 `filename*` must match `suggestedFilename`; ASCII `filename=` must not weaken that check; browser fail-closes and cancels the body on mismatch |
+| Residual risk | Stolen Bearer until TTL |
+| Planned PR | **PR12** |
+
 
 ### Artifact delivery abuse (PR7)
 

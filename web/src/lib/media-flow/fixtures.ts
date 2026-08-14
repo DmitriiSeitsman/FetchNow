@@ -86,14 +86,22 @@ export function downloadPayload(
     maxAttempts: 3,
     nextAttemptAt: null,
     cancellable: true,
+    progressPercent: null,
+    artifactBytes: null,
+    suggestedFilename: `fetchnow-${DOWNLOAD_ID}.mp4`,
     ...overrides,
   };
   const state = merged.state;
   if (state !== "queued" && state !== "downloading") {
     merged.cancellable = false;
   }
-  if (state === "ready" && merged.progressStage === "queued") {
-    merged.progressStage = "ready";
+  if (state === "ready") {
+    if (!Object.prototype.hasOwnProperty.call(overrides, "artifactBytes")) {
+      merged.artifactBytes = 12_000_000;
+    }
+    if (merged.progressStage === "queued") {
+      merged.progressStage = "ready";
+    }
   }
   if (state === "failed" && merged.progressStage === "queued") {
     merged.progressStage = "failed";

@@ -63,7 +63,8 @@ Download jobs (PR6) additionally forbid logging or publicizing:
 - provider format tokens;
 - filesystem paths / artifact ids;
 - Range header values in full;
-- Content-Disposition is server-generated only (never user-derived filenames);
+- Content-Disposition is server-generated from a sanitized title (never a
+  trusted raw provider filename, never logged as an untrusted raw value);
 - canonical or tool URLs;
 - yt-dlp argv/stderr/stdout.
 
@@ -106,7 +107,8 @@ Tool executable paths are never returned in API responses or web build args.
 
 The browser download flow (PR8) never writes the access token, submitted URL,
 canonical provider URL, or `Authorization` header to `console`, DOM attributes,
-error text, or analytics. Thrown UI errors use catalog copy only. A tab-scoped
+error text, or analytics. Suggested filenames are not placed in the URL, token
+storage, or logs. Thrown UI errors use catalog copy only. A tab-scoped
 `sessionStorage` recovery record may hold the token and job ids; it is not a log
 and is cleared after a clean save or an unrecoverable terminal state.
 

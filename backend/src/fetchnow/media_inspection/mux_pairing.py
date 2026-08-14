@@ -20,6 +20,7 @@ from fetchnow.media_inspection.models import (
     InternalFormatCandidate,
     MediaFormat,
 )
+from fetchnow.media_inspection.size_estimate import sum_approx_bytes
 
 if TYPE_CHECKING:
     from fetchnow.core.config import Settings
@@ -225,11 +226,9 @@ def derive_mux_options(
         )
         video_bytes = video.approx_bytes
         audio_bytes = chosen.approx_bytes
-        approx: int | None
-        if video_bytes is None or audio_bytes is None:
-            approx = None
-        else:
-            approx = video_bytes + audio_bytes
+        approx = sum_approx_bytes(video_bytes, audio_bytes)
+        if approx is not None and approx > int(settings.max_source_file_bytes):
+            continue
         public = MediaFormat(
             format_option_id=option_id,
             container=output,

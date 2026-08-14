@@ -51,6 +51,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Add progress_stage (server default queued) and nullable cancel_requested_at. public_state stays on the PR9 allowlist; user cancellation is stored as expired + progress_stage=cancelled + cancel_requested_at so a rolled-back PR9 application can parse the row. A BEFORE INSERT/UPDATE trigger maps progress_stage from public_state only when a previous PR9 application omits the new column (INSERT default or UPDATE that does not change progress_stage) and does not rewrite a legal PR10 cancellation encoding. Explicit illegal pairs still fail the CHECK. Previous application claim/retry/ready/failed/expiry UPDATEs and reads of PR10-cancelled rows therefore remain valid during online expand and application rollback."
+    },
+    {
+      "from_heads": [
+        "0004_download_observability"
+      ],
+      "to_heads": [
+        "0005_download_file_details"
+      ],
+      "included_revisions": [
+        "0005_download_file_details"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Add nullable suggested_filename and progress_percent. Previous PR11 applications omit both columns on INSERT/UPDATE. A BEFORE UPDATE trigger clears progress_percent when progress_stage changes and NEW.progress_percent IS NOT DISTINCT FROM OLD.progress_percent. PostgreSQL cannot distinguish an omitted column from an explicit assignment of the same value; both are normalized to NULL so a rolled-back PR11 application remains CHECK-compatible after a PR12 percent write. An explicit write of a different illegal percent still fails the CHECK. Same-stage percent updates are preserved. Downgrade drops the trigger, function, constraints, and columns without rewriting public_state."
     }
   ]
 }

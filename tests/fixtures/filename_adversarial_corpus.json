@@ -1,0 +1,124 @@
+{
+  "jobId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "container": "mp4",
+  "cases": [
+    {
+      "id": "cyrillic",
+      "title": "Название видео",
+      "expect": "preserve"
+    },
+    {
+      "id": "emoji",
+      "title": "Video 😀 clip",
+      "expect": "preserve"
+    },
+    {
+      "id": "combining_nfc",
+      "title": "cafe\u0301",
+      "expect": "nfc"
+    },
+    {
+      "id": "zwsp",
+      "title": "hello\u200bworld",
+      "expect": "strip_format"
+    },
+    {
+      "id": "zwnj",
+      "title": "hello\u200cworld",
+      "expect": "strip_format"
+    },
+    {
+      "id": "zwj",
+      "title": "hello\u200dworld",
+      "expect": "strip_format"
+    },
+    {
+      "id": "bidi_override",
+      "title": "ab\u202ecd",
+      "expect": "strip_bidi"
+    },
+    {
+      "id": "bidi_isolate",
+      "title": "ab\u2066cd",
+      "expect": "strip_bidi"
+    },
+    {
+      "id": "private_use",
+      "title": "ab\ue000cd",
+      "expect": "strip_other"
+    },
+    {
+      "id": "controls",
+      "title": "ab\n\u0001cd",
+      "expect": "strip_other"
+    },
+    {
+      "id": "separators",
+      "title": "a/b\\c:d",
+      "expect": "strip_forbidden"
+    },
+    {
+      "id": "reserved_windows",
+      "title": "CON",
+      "expect": "fallback"
+    },
+    {
+      "id": "trailing_dot_space",
+      "title": "name. ",
+      "expect": "strip_trail"
+    },
+    {
+      "id": "long_multibyte",
+      "title": "",
+      "repeatChar": "я",
+      "repeatCount": 200,
+      "expect": "exact_stem",
+      "expectedStemRepeatChar": "я",
+      "expectedStemRepeatCount": 80
+    },
+    {
+      "id": "astral_100_emoji",
+      "title": "",
+      "repeatChar": "😀",
+      "repeatCount": 100,
+      "expect": "exact_stem",
+      "expectedStemRepeatChar": "😀",
+      "expectedStemRepeatCount": 45
+    },
+    {
+      "id": "astral_exact_stem_chars",
+      "title": "",
+      "repeatChar": "😀",
+      "repeatCount": 80,
+      "expect": "exact_stem",
+      "expectedStemRepeatChar": "😀",
+      "expectedStemRepeatCount": 45
+    },
+    {
+      "id": "mixed_bmp_astral_codepoint_limit",
+      "title": "",
+      "titlePrefix": "A",
+      "titlePrefixCount": 70,
+      "repeatChar": "😀",
+      "repeatCount": 20,
+      "expect": "exact_stem",
+      "expectedStemPrefix": "A",
+      "expectedStemPrefixCount": 70,
+      "expectedStemRepeatChar": "😀",
+      "expectedStemRepeatCount": 10
+    },
+    {
+      "id": "mixed_bmp_astral_utf8_limit",
+      "title": "",
+      "titlePrefix": "A",
+      "titlePrefixCount": 20,
+      "repeatChar": "😀",
+      "repeatCount": 50,
+      "expect": "exact_stem",
+      "expectedStemPrefix": "A",
+      "expectedStemPrefixCount": 20,
+      "expectedStemRepeatChar": "😀",
+      "expectedStemRepeatCount": 40
+    }
+  ]
+}

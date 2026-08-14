@@ -58,6 +58,8 @@ class MediaDownloadJobRepository:
         ttl_seconds: int,
         max_attempts: int,
         parent_expires_at: datetime,
+        suggested_filename: str | None = None,
+        job_id: uuid.UUID | None = None,
     ) -> tuple[MediaDownloadJob, bool]:
         """Insert a queued download job or return the existing idempotent row.
 
@@ -80,7 +82,7 @@ class MediaDownloadJobRepository:
         # gates every read of it.
         expires_at = min(now + timedelta(seconds=ttl_seconds), parent_expires_at)
         job = MediaDownloadJob(
-            id=uuid.uuid4(),
+            id=job_id or uuid.uuid4(),
             media_job_id=media_job_id,
             schema_version=1,
             public_state=MediaDownloadJobState.QUEUED.value,
@@ -105,7 +107,9 @@ class MediaDownloadJobRepository:
             artifact_container=None,
             public_error_code=None,
             progress_stage=DownloadProgressStage.QUEUED.value,
+            progress_percent=None,
             cancel_requested_at=None,
+            suggested_filename=suggested_filename,
             created_at=now,
             updated_at=now,
             started_at=None,
@@ -232,6 +236,7 @@ class MediaDownloadJobRepository:
             assert_transition(job.public_state, MediaDownloadJobState.DOWNLOADING)
             job.public_state = MediaDownloadJobState.DOWNLOADING.value
             job.progress_stage = DownloadProgressStage.INSPECTING.value
+            job.progress_percent = None
             job.lease_owner = worker_id
             job.lease_expires_at = lease_expires
             job.fence_token = int(job.fence_token) + 1
@@ -311,6 +316,7 @@ class MediaDownloadJobRepository:
             .values(
                 public_state=MediaDownloadJobState.READY.value,
                 progress_stage=DownloadProgressStage.READY.value,
+                progress_percent=None,
                 artifact_id=artifact_id,
                 artifact_bytes=artifact_bytes,
                 artifact_content_type=artifact_content_type,
@@ -353,6 +359,7 @@ class MediaDownloadJobRepository:
             .values(
                 public_state=MediaDownloadJobState.FAILED.value,
                 progress_stage=DownloadProgressStage.FAILED.value,
+                progress_percent=None,
                 public_error_code=public_error_code,
                 artifact_id=None,
                 artifact_bytes=None,
@@ -423,6 +430,7 @@ class MediaDownloadJobRepository:
             .values(
                 public_state=MediaDownloadJobState.QUEUED.value,
                 progress_stage=DownloadProgressStage.RETRYING.value,
+                progress_percent=None,
                 public_error_code=None,
                 available_at=available_at,
                 lease_owner=None,
@@ -459,6 +467,7 @@ class MediaDownloadJobRepository:
             .values(
                 public_state=MediaDownloadJobState.QUEUED.value,
                 progress_stage=DownloadProgressStage.QUEUED.value,
+                progress_percent=None,
                 attempt_count=func.greatest(MediaDownloadJob.attempt_count - 1, 0),
                 available_at=now,
                 lease_owner=None,
@@ -531,6 +540,7 @@ class MediaDownloadJobRepository:
                 if exhausted
                 else DownloadProgressStage.RETRYING.value
             )
+            job.progress_percent = None
             job.lease_owner = None
             job.lease_expires_at = None
             job.fence_token = int(job.fence_token) + 1
@@ -591,6 +601,7 @@ class MediaDownloadJobRepository:
                 artifact_ids.append(job.artifact_id)
             job.public_state = MediaDownloadJobState.EXPIRED.value
             job.progress_stage = DownloadProgressStage.EXPIRED.value
+            job.progress_percent = None
             job.lease_owner = None
             job.lease_expires_at = None
             job.cancel_requested_at = None
@@ -675,6 +686,7 @@ class MediaDownloadJobRepository:
             .values(
                 public_state=MediaDownloadJobState.EXPIRED.value,
                 progress_stage=DownloadProgressStage.CANCELLED.value,
+                progress_percent=None,
                 public_error_code=None,
                 artifact_id=None,
                 artifact_bytes=None,
@@ -726,7 +738,56 @@ class MediaDownloadJobRepository:
         if job is None:
             return False
         assert_progress_transition(job.progress_stage, target)
+        if job.progress_stage != target.value:
+            job.progress_percent = None
         job.progress_stage = target.value
+        job.updated_at = now
+        await self._session.flush()
+        return True
+
+    async def set_progress_percent(
+        self,
+        *,
+        job_id: uuid.UUID,
+        owner: str,
+        fence: int,
+        percent: int,
+        now: datetime,
+    ) -> bool:
+        """Fenced monotonic percent update during an active download subprocess."""
+        if type(percent) is bool or not isinstance(percent, int):
+            return False
+        if percent < 0 or percent > 99:
+            return False
+        stmt = (
+            select(MediaDownloadJob)
+            .where(
+                MediaDownloadJob.id == job_id,
+                MediaDownloadJob.public_state
+                == MediaDownloadJobState.DOWNLOADING.value,
+                MediaDownloadJob.lease_owner == owner,
+                MediaDownloadJob.fence_token == fence,
+                MediaDownloadJob.cancel_requested_at.is_(None),
+                MediaDownloadJob.lease_expires_at > func.clock_timestamp(),
+                MediaDownloadJob.expires_at > func.clock_timestamp(),
+                MediaDownloadJob.progress_stage.in_(
+                    (
+                        DownloadProgressStage.DOWNLOADING_VIDEO.value,
+                        DownloadProgressStage.DOWNLOADING_AUDIO.value,
+                    )
+                ),
+            )
+            .with_for_update()
+        )
+        job = await self._session.scalar(stmt)
+        if job is None:
+            return False
+        stored = job.progress_percent
+        if stored is not None and percent < int(stored):
+            return False
+        if stored is not None and percent == int(stored):
+            return True
+        job.progress_percent = percent
         job.updated_at = now
         await self._session.flush()
         return True
@@ -774,6 +835,7 @@ class MediaDownloadJobRepository:
         """Encode user cancel as PR9-readable expired + PR10 cancel markers."""
         job.public_state = MediaDownloadJobState.EXPIRED.value
         job.progress_stage = DownloadProgressStage.CANCELLED.value
+        job.progress_percent = None
         job.lease_owner = None
         job.lease_expires_at = None
         job.updated_at = now

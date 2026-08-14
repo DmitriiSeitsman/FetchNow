@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fetchnow.core.config import Settings
 from fetchnow.downloads.artifacts import ArtifactStore, AttemptWorkspace
+from fetchnow.downloads.byte_progress import ProgressPersistGate
 from fetchnow.downloads.diagnostics import (
     DownloadStageEvent,
     FailureClass,
@@ -460,6 +461,7 @@ class DownloadExecutor:
             workspace=workspace,
             output_template=_OUTPUT_TEMPLATE,
             output_dir=str(workspace.output),
+            expected_bytes=selection.approx_bytes,
         )
 
     async def _run_muxed_download(
@@ -497,6 +499,7 @@ class DownloadExecutor:
             output_dir=str(workspace.video),
             max_bytes=video_cap,
             min_free_headroom=max(0, peak_bytes - video_cap),
+            expected_bytes=selection.video_approx_bytes,
         )
         video_path = self._store.find_single_regular_file_in(
             workspace.video,
@@ -516,6 +519,7 @@ class DownloadExecutor:
             output_dir=str(workspace.audio),
             max_bytes=audio_cap,
             min_free_headroom=max(0, peak_bytes - consumed - audio_cap),
+            expected_bytes=selection.audio_approx_bytes,
         )
         audio_path = self._store.find_single_regular_file_in(
             workspace.audio,
@@ -670,6 +674,7 @@ class DownloadExecutor:
         output_dir: str,
         max_bytes: int | None = None,
         min_free_headroom: int = 0,
+        expected_bytes: int | None = None,
     ) -> None:
         settings = self._settings
         cap = int(settings.media_download_max_bytes if max_bytes is None else max_bytes)
@@ -711,6 +716,23 @@ class DownloadExecutor:
             stage=progress.value,
         )
         await self._advance_progress(snap, progress)
+        gate = ProgressPersistGate()
+
+        async def _persist_percent(percent: int) -> bool:
+            return await self._persist_progress_percent(snap, percent)
+
+        async def _on_observed(observed: int) -> None:
+            try:
+                await gate.ingest(
+                    observed_bytes=observed,
+                    expected_bytes=expected_bytes,
+                    persist=_persist_percent,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("download_progress_percent_update_failed")
+
         result = await self._run_supervised(
             snap,
             argv,
@@ -725,6 +747,7 @@ class DownloadExecutor:
                 settings.media_download_min_free_bytes + max(0, int(min_free_headroom))
             ),
             root_for_disk=str(self._store.root),
+            on_observed_bytes=_on_observed,
         )
         self._finish_tool_stage(
             snap,
@@ -952,6 +975,24 @@ class DownloadExecutor:
             raise
         except Exception:
             logger.exception("download_progress_update_failed")
+
+    async def _persist_progress_percent(
+        self, snap: DownloadClaimSnapshot, percent: int | None
+    ) -> bool:
+        if percent is None:
+            return False
+        async with self._session_factory() as session:
+            repo = MediaDownloadJobRepository(session)
+            now = await repo.database_now()
+            applied = await repo.set_progress_percent(
+                job_id=snap.job_id,
+                owner=self._worker_id,
+                fence=snap.fence,
+                percent=percent,
+                now=now,
+            )
+            await session.commit()
+            return bool(applied)
 
     def _finish_tool_stage(
         self,

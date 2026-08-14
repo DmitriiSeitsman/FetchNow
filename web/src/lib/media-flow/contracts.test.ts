@@ -493,4 +493,86 @@ describe("contracts", () => {
       ]),
     ).toBe(id720);
   });
+
+  it("requires PR12 size, percent, and filename coherence", () => {
+    const ready = parseDownloadJob(
+      downloadPayload({
+        state: "ready",
+        artifactReady: true,
+        completedAt: STAMP,
+      }),
+    );
+    expect(ready.artifactBytes).toBe(12_000_000);
+    expect(ready.progressPercent).toBeNull();
+    expect(ready.suggestedFilename).toBe(`fetchnow-${DOWNLOAD_ID}.mp4`);
+
+    const downloading = parseDownloadJob(
+      downloadPayload({
+        state: "downloading",
+        progressStage: "downloading_video",
+        progressPercent: 42,
+      }),
+    );
+    expect(downloading.progressPercent).toBe(42);
+    expect(downloading.artifactBytes).toBeNull();
+
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "downloading",
+          progressStage: "downloading_video",
+          progressPercent: 42.5,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "downloading",
+          progressStage: "downloading_video",
+          progressPercent: 100,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "downloading",
+          progressStage: "inspecting",
+          progressPercent: 10,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "queued",
+          artifactBytes: 12,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "ready",
+          artifactReady: true,
+          completedAt: STAMP,
+          artifactBytes: null,
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          state: "ready",
+          artifactReady: true,
+          completedAt: STAMP,
+          suggestedFilename: "../secret.mp4",
+        }),
+      ),
+    ).toThrow(FlowError);
+    const missing = downloadPayload({ state: "queued" });
+    delete missing.suggestedFilename;
+    expect(() => parseDownloadJob(missing)).toThrow(FlowError);
+  });
 });

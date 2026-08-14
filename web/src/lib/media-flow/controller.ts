@@ -47,6 +47,8 @@ export type FlowSnapshot = {
   canCancelTask: boolean;
   restored: boolean;
   progressStage: ProgressStage | null;
+  progressPercent: number | null;
+  artifactBytes: number | null;
 };
 
 export type ControllerHooks = {
@@ -130,6 +132,8 @@ export class MediaFlowController {
         (phase === "downloading" || phase === "enqueueing_download"),
       restored: this.restored,
       progressStage: this.downloadJob?.progressStage ?? null,
+      progressPercent: this.downloadJob?.progressPercent ?? null,
+      artifactBytes: this.downloadJob?.artifactBytes ?? null,
     };
   }
 
@@ -142,17 +146,25 @@ export class MediaFlowController {
     }
     if (this.restored && this.machine.current === "downloading") {
       return (
-        flowStatusText(this.machine.current, this.downloadJob?.progressStage ?? null) ||
-        "Restored an existing download task."
+        flowStatusText(
+          this.machine.current,
+          this.downloadJob?.progressStage ?? null,
+          {
+            progressPercent: this.downloadJob?.progressPercent ?? null,
+            artifactBytes: this.downloadJob?.artifactBytes ?? null,
+            formats: this.mediaJob?.result?.formats ?? [],
+          },
+        ) || "Restored an existing download task."
       );
     }
     if (this.machine.current === "cancelled") {
       return STAGE_LABEL.cancelled;
     }
-    return flowStatusText(
-      this.machine.current,
-      this.downloadJob?.progressStage ?? null,
-    );
+    return flowStatusText(this.machine.current, this.downloadJob?.progressStage ?? null, {
+      progressPercent: this.downloadJob?.progressPercent ?? null,
+      artifactBytes: this.downloadJob?.artifactBytes ?? null,
+      formats: this.mediaJob?.result?.formats ?? [],
+    });
   }
 
   private emit(): void {
@@ -539,6 +551,9 @@ export class MediaFlowController {
         if (!this.machine.isCurrentGeneration(generation)) {
           return;
         }
+        if (this.downloadJob && isStaleDownloadPoll(value, this.downloadJob)) {
+          return;
+        }
         this.downloadJob = value;
         this.persist();
         this.emit();
@@ -603,6 +618,7 @@ export class MediaFlowController {
         downloadJobId: this.downloadJob.id,
         token: this.token,
         container: this.downloadJob.selectedFormat.container,
+        suggestedFilename: this.downloadJob.suggestedFilename,
         signal: this.abort.signal,
       });
       if (!this.machine.isCurrentGeneration(generation)) {
@@ -679,4 +695,36 @@ export class MediaFlowController {
 
 function valueExpires(): string {
   return new Date(Date.now() + 60_000).toISOString();
+}
+
+export function isStaleDownloadPoll(
+  incoming: DownloadJob,
+  current: DownloadJob,
+): boolean {
+  if (incoming.attempt < current.attempt) {
+    return true;
+  }
+  if (incoming.attempt > current.attempt) {
+    return false;
+  }
+  const incomingMs = Date.parse(incoming.updatedAt);
+  const currentMs = Date.parse(current.updatedAt);
+  if (!Number.isFinite(incomingMs) || !Number.isFinite(currentMs)) {
+    return true;
+  }
+  if (incomingMs < currentMs) {
+    return true;
+  }
+  if (incomingMs > currentMs) {
+    return false;
+  }
+  if (
+    incoming.progressStage === current.progressStage &&
+    incoming.progressPercent !== null &&
+    current.progressPercent !== null &&
+    incoming.progressPercent < current.progressPercent
+  ) {
+    return true;
+  }
+  return false;
 }

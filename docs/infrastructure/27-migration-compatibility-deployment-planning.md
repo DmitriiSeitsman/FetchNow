@@ -210,3 +210,14 @@ clear diagnostic (mutation blocked until `recover-migration` resolves it).
 | PRD1C3B2C | Unified deploy orchestration |
 | PRD1C3A | Application rollout when compatibility envelope permits |
 | PRD1D | First real staging deployment |
+
+PR12 adds the `0004_download_observability` → `0005_download_file_details`
+online-expand transition: nullable `suggested_filename` and `progress_percent`.
+A previous PR11 application may INSERT/UPDATE without those columns. A BEFORE
+UPDATE trigger clears `progress_percent` when `progress_stage` changes and
+`NEW.progress_percent` is not distinct from `OLD.progress_percent`. PostgreSQL
+cannot distinguish an omitted column from an explicit assignment of the same
+value; both are normalized to NULL so PR11 lifecycle DML remains valid after a
+PR12 percent write. An explicit write of a different illegal percent still
+fails the CHECK. Downgrade drops the trigger, function, constraints, and
+columns and does not rewrite `public_state`.

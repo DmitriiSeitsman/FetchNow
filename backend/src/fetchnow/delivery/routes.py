@@ -175,9 +175,7 @@ async def _handle_content(
             length = selected.length
             status = 206
 
-        disposition = service.content_disposition(
-            download_job_id, artifact.container
-        )
+        disposition = service.content_disposition(authz.job)
         headers = service.security_headers(
             content_type=artifact.content_type,
             content_disposition=disposition,

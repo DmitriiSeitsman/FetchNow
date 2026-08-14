@@ -70,7 +70,7 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
     contract = load_compatibility_contract(
         ROOT / "deploy" / "migrations" / "compatibility.json"
     )
-    assert graph.heads == ("0004_download_observability",)
+    assert graph.heads == ("0005_download_file_details",)
 
     steps = (
         (
@@ -87,6 +87,11 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
             frozenset({"0003_download_jobs"}),
             frozenset({"0004_download_observability"}),
             frozenset({"0004_download_observability"}),
+        ),
+        (
+            frozenset({"0004_download_observability"}),
+            frozenset({"0005_download_file_details"}),
+            frozenset({"0005_download_file_details"}),
         ),
     )
     for from_heads, to_heads, included in steps:
@@ -109,7 +114,12 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
         frozenset({"0001_baseline"}), frozenset(graph.heads)
     )
     assert full_included == frozenset(
-        {"0002_media_jobs", "0003_download_jobs", "0004_download_observability"}
+        {
+            "0002_media_jobs",
+            "0003_download_jobs",
+            "0004_download_observability",
+            "0005_download_file_details",
+        }
     )
     with pytest.raises(CompatibilityError, match="no compatibility transition"):
         find_matching_transition(

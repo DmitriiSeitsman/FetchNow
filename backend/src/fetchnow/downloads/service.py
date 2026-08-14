@@ -10,10 +10,16 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.core.config import Settings
+from fetchnow.downloads.byte_progress import DOWNLOAD_PERCENT_STAGES
 from fetchnow.downloads.errors import (
     DownloadError,
     DownloadErrorCode,
     raise_download_error,
+)
+from fetchnow.downloads.filename import (
+    fallback_filename,
+    is_safe_suggested_filename,
+    suggested_filename_for,
 )
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.progress import (
@@ -54,6 +60,9 @@ class DownloadJobView:
     max_attempts: int
     next_attempt_at: datetime | None
     cancellable: bool
+    progress_percent: int | None = None
+    artifact_bytes: int | None = None
+    suggested_filename: str = ""
     created: bool = False
 
     def __repr__(self) -> str:
@@ -161,6 +170,12 @@ class DownloadJobService:
         fmt = _find_format(metadata.formats, format_option_id)
         _assert_format_eligible(fmt, muxing_required=metadata.muxing_required)
         snapshot = format_snapshot_from_media_format(fmt)
+        job_id = uuid.uuid4()
+        filename = suggested_filename_for(
+            title=metadata.title,
+            container=fmt.container,
+            download_job_id=job_id,
+        )
 
         repo = MediaDownloadJobRepository(session)
         job, created = await repo.enqueue_or_get(
@@ -178,6 +193,8 @@ class DownloadJobService:
             ttl_seconds=self._settings.media_download_artifact_ttl_seconds,
             max_attempts=self._settings.media_download_max_attempts,
             parent_expires_at=parent.expires_at,
+            suggested_filename=filename,
+            job_id=job_id,
         )
         await session.flush()
         return self._to_view(job, created=created)
@@ -351,8 +368,77 @@ class DownloadJobService:
             max_attempts=int(job.max_attempts),
             next_attempt_at=next_attempt,
             cancellable=cancellable,
+            progress_percent=self._public_progress_percent(job, state, stage),
+            artifact_bytes=self._public_artifact_bytes(job, state),
+            suggested_filename=self._public_suggested_filename(job, selected),
             created=created,
         )
+
+    @staticmethod
+    def _public_progress_percent(
+        job: MediaDownloadJob,
+        state: MediaDownloadJobState,
+        stage: DownloadProgressStage,
+    ) -> int | None:
+        raw = job.progress_percent
+        if (
+            state is not MediaDownloadJobState.DOWNLOADING
+            or stage.value not in DOWNLOAD_PERCENT_STAGES
+        ):
+            if raw is not None:
+                raise_download_error(
+                    DownloadErrorCode.INTERNAL_ERROR,
+                    internal_reason="PROGRESS_PERCENT_INVALID",
+                )
+            return None
+        if raw is None:
+            return None
+        if type(raw) is bool or not isinstance(raw, int) or raw < 0 or raw > 99:
+            raise_download_error(
+                DownloadErrorCode.INTERNAL_ERROR,
+                internal_reason="PROGRESS_PERCENT_INVALID",
+            )
+        return int(raw)
+
+    @staticmethod
+    def _public_artifact_bytes(
+        job: MediaDownloadJob, state: MediaDownloadJobState
+    ) -> int | None:
+        raw = job.artifact_bytes
+        if state is not MediaDownloadJobState.READY:
+            if raw is not None:
+                raise_download_error(
+                    DownloadErrorCode.INTERNAL_ERROR,
+                    internal_reason="ARTIFACT_BYTES_INVALID",
+                )
+            return None
+        if type(raw) is bool or not isinstance(raw, int) or raw <= 0:
+            raise_download_error(
+                DownloadErrorCode.INTERNAL_ERROR,
+                internal_reason="ARTIFACT_BYTES_INVALID",
+            )
+        return int(raw)
+
+    @staticmethod
+    def _public_suggested_filename(
+        job: MediaDownloadJob, selected: dict[str, Any]
+    ) -> str:
+        container = str(selected.get("container") or job.artifact_container or "mp4")
+        stored = job.suggested_filename
+        try:
+            if stored is None or stored == "":
+                return fallback_filename(job.id, container)
+            if not is_safe_suggested_filename(stored, container=container):
+                raise_download_error(
+                    DownloadErrorCode.INTERNAL_ERROR,
+                    internal_reason="SUGGESTED_FILENAME_INVALID",
+                )
+            return stored
+        except ValueError:
+            raise_download_error(
+                DownloadErrorCode.INTERNAL_ERROR,
+                internal_reason="SUGGESTED_FILENAME_INVALID",
+            )
 
     def to_public_dict(self, view: DownloadJobView) -> dict[str, Any]:
         """Serialize a DownloadJobView to camelCase API fields (no secrets).
@@ -380,4 +466,7 @@ class DownloadJobService:
                 view.next_attempt_at.isoformat() if view.next_attempt_at else None
             ),
             "cancellable": view.cancellable,
+            "progressPercent": view.progress_percent,
+            "artifactBytes": view.artifact_bytes,
+            "suggestedFilename": view.suggested_filename,
         }

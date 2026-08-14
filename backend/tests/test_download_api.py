@@ -98,8 +98,9 @@ async def enabled_client() -> AsyncIterator[AsyncClient]:
 
 def _view(*, created: bool = True) -> DownloadJobView:
     now = datetime.now(tz=UTC)
+    job_id = uuid.uuid4()
     return DownloadJobView(
-        id=uuid.uuid4(),
+        id=job_id,
         media_job_id=uuid.uuid4(),
         public_state="queued",
         format_option_id="fmt_abc123",
@@ -120,6 +121,9 @@ def _view(*, created: bool = True) -> DownloadJobView:
         max_attempts=3,
         next_attempt_at=None,
         cancellable=True,
+        progress_percent=None,
+        artifact_bytes=None,
+        suggested_filename="Example.mp4",
         created=created,
     )
 
@@ -185,6 +189,9 @@ async def test_create_response_has_no_path_token_url(
     assert body["cancellable"] is True
     assert body["attempt"] == 0
     assert body["maxAttempts"] == 3
+    assert body["progressPercent"] is None
+    assert body["artifactBytes"] is None
+    assert body["suggestedFilename"] == "Example.mp4"
     assert "failureClass" not in body
     assert "failure_class" not in body
 

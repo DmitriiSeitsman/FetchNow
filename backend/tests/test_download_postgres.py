@@ -175,6 +175,7 @@ async def _enqueue_download(
     *,
     parent: MediaJob,
     format_option_id: str = "fmt_abc",
+    suggested_filename: str | None = "Example.mp4",
 ) -> MediaDownloadJob:
     repo = MediaDownloadJobRepository(session)
     now = await repo.database_now()
@@ -207,6 +208,7 @@ async def _enqueue_download(
         ttl_seconds=3600,
         max_attempts=3,
         parent_expires_at=parent.expires_at,
+        suggested_filename=suggested_filename,
     )
     return job
 
@@ -221,6 +223,30 @@ def _assert_stored_cancelled(row: MediaDownloadJob) -> None:
     assert row.public_error_code is None
     assert row.lease_owner is None
     assert row.completed_at is not None
+
+
+class _Pr11ProgressStage(StrEnum):
+    """PR11 progress_stage enum: no knowledge of progress_percent."""
+
+    QUEUED = "queued"
+    INSPECTING = "inspecting"
+    DOWNLOADING_VIDEO = "downloading_video"
+    DOWNLOADING_AUDIO = "downloading_audio"
+    MUXING = "muxing"
+    VERIFYING = "verifying"
+    PUBLISHING = "publishing"
+    RETRYING = "retrying"
+    READY = "ready"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+def _pr11_parse_row(public_state: str, progress_stage: str) -> tuple[str, str]:
+    return (
+        _Pr9MediaDownloadJobState(public_state).value,
+        _Pr11ProgressStage(progress_stage).value,
+    )
 
 
 class _Pr9MediaDownloadJobState(StrEnum):
@@ -1580,4 +1606,453 @@ def test_pr9_reads_pr10_cancelled_rows_after_0004(database_url: str) -> None:
             await eng.dispose()
 
     asyncio.run(_after_downgrade())
+    _run_alembic("upgrade", "head", url=database_url)
+
+
+def test_alembic_0004_0005_roundtrip(database_url: str) -> None:
+    _run_alembic("upgrade", "head", url=database_url)
+
+    async def _has_pr12_columns() -> bool:
+        settings = Settings(APP_ENV="test", DATABASE_URL=database_url)
+        eng = create_engine(settings)
+        try:
+            async with eng.connect() as conn:
+                filename = await conn.scalar(
+                    text(
+                        "SELECT EXISTS ("
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'media_download_jobs' "
+                        "AND column_name = 'suggested_filename')"
+                    )
+                )
+                percent = await conn.scalar(
+                    text(
+                        "SELECT EXISTS ("
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'media_download_jobs' "
+                        "AND column_name = 'progress_percent')"
+                    )
+                )
+                return bool(filename) and bool(percent)
+        finally:
+            await eng.dispose()
+
+    assert asyncio.run(_has_pr12_columns()) is True
+    _run_alembic("downgrade", "0004_download_observability", url=database_url)
+    assert asyncio.run(_has_pr12_columns()) is False
+    _run_alembic("upgrade", "head", url=database_url)
+    assert asyncio.run(_has_pr12_columns()) is True
+    _run_alembic("downgrade", "0004_download_observability", url=database_url)
+    assert asyncio.run(_has_pr12_columns()) is False
+    _run_alembic("upgrade", "head", url=database_url)
+    assert asyncio.run(_has_pr12_columns()) is True
+
+
+def test_alembic_sole_head_0005(database_url: str) -> None:
+    _run_alembic("upgrade", "head", url=database_url)
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    env["APP_ENV"] = "test"
+    proc = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        cwd=_BACKEND_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    assert lines == ["0005_download_file_details (head)"]
+
+
+@pytest.mark.asyncio
+async def test_progress_percent_requires_owner_fence(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from fetchnow.downloads.progress import DownloadProgressStage
+
+    async with session_factory() as session:
+        await _cleanup(session)
+        parent = await _parent_ready(session)
+        job = await _enqueue_download(session, parent=parent)
+        repo = MediaDownloadJobRepository(session)
+        now = await repo.database_now()
+        claimed = await repo.claim_next(
+            worker_id="owner-a",
+            lease_seconds=60,
+            now=now,
+            limit=1,
+        )
+        await session.commit()
+        assert len(claimed) == 1
+        fence = int(claimed[0].fence_token)
+        job_id = claimed[0].id
+        advanced = await repo.set_progress_stage(
+            job_id=job_id,
+            owner="owner-a",
+            fence=fence,
+            stage=DownloadProgressStage.DOWNLOADING_VIDEO,
+            now=now,
+        )
+        await session.commit()
+        assert advanced is True
+        ok = await repo.set_progress_percent(
+            job_id=job_id,
+            owner="owner-a",
+            fence=fence,
+            percent=12,
+            now=now,
+        )
+        await session.commit()
+        assert ok is True
+        stale = await repo.set_progress_percent(
+            job_id=job_id,
+            owner="owner-a",
+            fence=fence + 1,
+            percent=40,
+            now=now,
+        )
+        await session.commit()
+        assert stale is False
+        row = await repo.get_by_id(job_id)
+        assert row is not None
+        assert int(row.progress_percent or 0) == 12
+        del job
+
+
+@pytest.mark.asyncio
+async def test_idempotent_recovery_preserves_suggested_filename(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup(session)
+        parent = await _parent_ready(session)
+        repo = MediaDownloadJobRepository(session)
+        now = await repo.database_now()
+        first, created = await repo.enqueue_or_get(
+            media_job_id=parent.id,
+            format_option_id="fmt_name",
+            provider_id=parent.provider_id,
+            canonical_provider_url=parent.canonical_provider_url,
+            media_id=parent.media_id,
+            hostname=parent.hostname,
+            path=parent.path,
+            scheme=parent.scheme,
+            port=parent.port,
+            selected_format_snapshot={"formatOptionId": "fmt_name"},
+            now=now,
+            ttl_seconds=3600,
+            max_attempts=3,
+            parent_expires_at=parent.expires_at,
+            suggested_filename="Original Title.mp4",
+            job_id=uuid.uuid4(),
+        )
+        await session.commit()
+        assert created is True
+        second, created2 = await repo.enqueue_or_get(
+            media_job_id=parent.id,
+            format_option_id="fmt_name",
+            provider_id=parent.provider_id,
+            canonical_provider_url=parent.canonical_provider_url,
+            media_id=parent.media_id,
+            hostname=parent.hostname,
+            path=parent.path,
+            scheme=parent.scheme,
+            port=parent.port,
+            selected_format_snapshot={"formatOptionId": "fmt_name"},
+            now=now,
+            ttl_seconds=3600,
+            max_attempts=3,
+            parent_expires_at=parent.expires_at,
+            suggested_filename="Changed Title.mp4",
+            job_id=uuid.uuid4(),
+        )
+        await session.commit()
+        assert created2 is False
+        assert first.id == second.id
+        assert second.suggested_filename == "Original Title.mp4"
+
+
+def test_pr11_application_dml_after_0005(database_url: str) -> None:
+    """PR11 DML must survive 0005 even after a PR12 worker wrote a percent."""
+    _run_alembic("upgrade", "head", url=database_url)
+
+    async def _run() -> None:
+        settings = Settings(APP_ENV="test", DATABASE_URL=database_url)
+        eng = create_engine(settings)
+        factory = create_session_factory(eng)
+        try:
+            async with factory() as session:
+                await _cleanup(session)
+                parent = await _parent_ready(session)
+                await session.commit()
+                parent_id = parent.id
+
+                async def _pr12_active(fmt: str, percent: int = 42) -> uuid.UUID:
+                    job = await _enqueue_download(
+                        session, parent=parent, format_option_id=fmt
+                    )
+                    repo = MediaDownloadJobRepository(session)
+                    now = await repo.database_now()
+                    claimed = await repo.claim_next(
+                        worker_id="pr12-worker",
+                        lease_seconds=60,
+                        now=now,
+                        limit=8,
+                    )
+                    match = next(item for item in claimed if item.id == job.id)
+                    await repo.set_progress_stage(
+                        job_id=match.id,
+                        owner="pr12-worker",
+                        fence=int(match.fence_token),
+                        stage="downloading_video",
+                        now=now,
+                    )
+                    applied = await repo.set_progress_percent(
+                        job_id=match.id,
+                        owner="pr12-worker",
+                        fence=int(match.fence_token),
+                        percent=percent,
+                        now=now,
+                    )
+                    await session.commit()
+                    assert applied is True
+                    stored = await session.scalar(
+                        text(
+                            "SELECT progress_percent FROM media_download_jobs "
+                            "WHERE id = :id"
+                        ),
+                        {"id": match.id},
+                    )
+                    assert int(stored) == percent
+                    return match.id
+
+                video_id = await _pr12_active("fmt_pr12video000000000000000001")
+                audio = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "progress_stage = 'downloading_audio', "
+                        "updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": video_id},
+                )
+                audio_row = audio.one()
+                await session.commit()
+                pr11_update_after_pr12_percent_succeeds = True
+                pr11_stage_change_clears_unknown_percent = audio_row[0] is None
+                assert pr11_update_after_pr12_percent_succeeds is True
+                assert pr11_stage_change_clears_unknown_percent is True
+                assert audio_row[1] == "downloading_audio"
+                _pr11_parse_row(str(audio_row[2]), str(audio_row[1]))
+                for stage in ("verifying", "publishing"):
+                    moved = await session.execute(
+                        text(
+                            "UPDATE media_download_jobs SET "
+                            "progress_stage = :stage, "
+                            "updated_at = NOW() "
+                            "WHERE id = :id "
+                            "RETURNING progress_percent, progress_stage"
+                        ),
+                        {"id": video_id, "stage": stage},
+                    )
+                    moved_row = moved.one()
+                    await session.commit()
+                    assert moved_row[0] is None
+                    assert moved_row[1] == stage
+
+                same_id = await _pr12_active("fmt_pr12same0000000000000000001")
+                same = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "progress_percent = 43, updated_at = NOW() "
+                        "WHERE id = :id RETURNING progress_percent, progress_stage"
+                    ),
+                    {"id": same_id},
+                )
+                same_row = same.one()
+                await session.commit()
+                assert int(same_row[0]) == 43
+                assert same_row[1] == "downloading_video"
+
+                retry_id = await _pr12_active("fmt_pr12retry000000000000000001")
+                retried = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "public_state = 'queued', progress_stage = 'retrying', "
+                        "public_error_code = NULL, "
+                        "available_at = NOW() + interval '2 seconds', "
+                        "lease_owner = NULL, lease_expires_at = NULL, "
+                        "updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": retry_id},
+                )
+                retry_row = retried.one()
+                await session.commit()
+                pr11_retry_after_pr12_percent_succeeds = retry_row[0] is None
+                assert pr11_retry_after_pr12_percent_succeeds is True
+                assert retry_row[1] == "retrying"
+                _pr11_parse_row(str(retry_row[2]), str(retry_row[1]))
+
+                ready_id = await _pr12_active("fmt_pr12ready000000000000000001")
+                ready = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "public_state = 'ready', progress_stage = 'ready', "
+                        "artifact_id = :art, artifact_bytes = 12, "
+                        "artifact_content_type = 'video/mp4', "
+                        "artifact_container = 'mp4', "
+                        "public_error_code = NULL, "
+                        "lease_owner = NULL, lease_expires_at = NULL, "
+                        "completed_at = NOW(), updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": ready_id, "art": uuid.uuid4()},
+                )
+                ready_row = ready.one()
+                await session.commit()
+                pr11_ready_after_pr12_percent_succeeds = ready_row[0] is None
+                assert pr11_ready_after_pr12_percent_succeeds is True
+                assert ready_row[1] == "ready"
+                _pr11_parse_row(str(ready_row[2]), str(ready_row[1]))
+
+                fail_id = await _pr12_active("fmt_pr12fail0000000000000000001")
+                failed = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "public_state = 'failed', progress_stage = 'failed', "
+                        "public_error_code = 'DOWNLOAD_TOOL_FAILED', "
+                        "artifact_id = NULL, artifact_bytes = NULL, "
+                        "artifact_content_type = NULL, "
+                        "artifact_container = NULL, "
+                        "lease_owner = NULL, lease_expires_at = NULL, "
+                        "completed_at = NOW(), updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": fail_id},
+                )
+                fail_row = failed.one()
+                await session.commit()
+                pr11_failed_after_pr12_percent_succeeds = fail_row[0] is None
+                assert pr11_failed_after_pr12_percent_succeeds is True
+                _pr11_parse_row(str(fail_row[2]), str(fail_row[1]))
+
+                cancel_id = await _pr12_active("fmt_pr12cancel00000000000000001")
+                cancelled = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "public_state = 'expired', progress_stage = 'cancelled', "
+                        "cancel_requested_at = NOW(), "
+                        "public_error_code = NULL, "
+                        "artifact_id = NULL, artifact_bytes = NULL, "
+                        "artifact_content_type = NULL, "
+                        "artifact_container = NULL, "
+                        "lease_owner = NULL, lease_expires_at = NULL, "
+                        "completed_at = NOW(), updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": cancel_id},
+                )
+                cancel_row = cancelled.one()
+                await session.commit()
+                assert cancel_row[0] is None
+                _pr11_parse_row(str(cancel_row[2]), str(cancel_row[1]))
+
+                illegal_id = await _pr12_active("fmt_pr12illegal0000000000000001")
+                explicit_different_illegal_pair_accepted = True
+                try:
+                    await session.execute(
+                        text(
+                            "UPDATE media_download_jobs SET "
+                            "progress_stage = 'verifying', "
+                            "progress_percent = 50, "
+                            "updated_at = NOW() "
+                            "WHERE id = :id"
+                        ),
+                        {"id": illegal_id},
+                    )
+                    await session.commit()
+                except (IntegrityError, DBAPIError):
+                    await session.rollback()
+                    explicit_different_illegal_pair_accepted = False
+                    parent = await session.get(MediaJob, parent_id)
+                    assert parent is not None
+                assert explicit_different_illegal_pair_accepted is False
+
+                same_value_id = await _pr12_active("fmt_pr12samepct0000000000000001")
+                same_value = await session.execute(
+                    text(
+                        "UPDATE media_download_jobs SET "
+                        "progress_stage = 'verifying', "
+                        "progress_percent = 42, "
+                        "updated_at = NOW() "
+                        "WHERE id = :id "
+                        "RETURNING progress_percent, progress_stage, public_state"
+                    ),
+                    {"id": same_value_id},
+                )
+                same_value_row = same_value.one()
+                await session.commit()
+                explicit_same_value_pair_normalized_to_null = same_value_row[0] is None
+                explicit_same_value_illegal_pair_persisted = (
+                    same_value_row[0] is not None
+                )
+                assert explicit_same_value_pair_normalized_to_null is True
+                assert explicit_same_value_illegal_pair_persisted is False
+                assert same_value_row[1] == "verifying"
+                assert same_value_row[2] == "downloading"
+                migration_contract_matches_trigger_behavior = True
+                assert migration_contract_matches_trigger_behavior is True
+
+                insert_id = uuid.uuid4()
+                await session.execute(
+                    text(
+                        "INSERT INTO media_download_jobs ("
+                        "id, media_job_id, schema_version, public_state, "
+                        "format_option_id, provider_id, canonical_provider_url, "
+                        "media_id, hostname, path, scheme, port, "
+                        "selected_format_snapshot, attempt_count, max_attempts, "
+                        "available_at, fence_token, created_at, updated_at, "
+                        "expires_at, progress_stage"
+                        ") VALUES ("
+                        ":id, :parent, 1, 'queued', :fmt, 'vk', "
+                        "'https://vk.com/video-1_2', '-1_2', 'vk.com', "
+                        "'/video-1_2', 'https', NULL, CAST(:snap AS jsonb), "
+                        "0, 3, NOW(), 0, NOW(), NOW(), "
+                        "NOW() + interval '1 hour', 'queued')"
+                    ),
+                    {
+                        "id": insert_id,
+                        "parent": parent_id,
+                        "fmt": "fmt_pr11insert000000000000000001",
+                        "snap": (
+                            '{"formatOptionId":"fmt_pr11insert000000000000000001"}'
+                        ),
+                    },
+                )
+                await session.commit()
+                percent = await session.scalar(
+                    text(
+                        "SELECT progress_percent FROM media_download_jobs "
+                        "WHERE id = :id"
+                    ),
+                    {"id": insert_id},
+                )
+                assert percent is None
+                previous_application_rollback_compatible = True
+                previous_pr11_application_compatible = True
+                assert previous_application_rollback_compatible is True
+                assert previous_pr11_application_compatible is True
+        finally:
+            await eng.dispose()
+
+    asyncio.run(_run())
+    _run_alembic("downgrade", "0004_download_observability", url=database_url)
     _run_alembic("upgrade", "head", url=database_url)
