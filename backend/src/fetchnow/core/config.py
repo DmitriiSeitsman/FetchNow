@@ -399,6 +399,25 @@ class Settings(BaseSettings):
         alias="MEDIA_DELIVERY_RANGE_ENABLED",
     )
 
+    # Browser-native delivery grants (PR14) — fail closed / disabled by default.
+    # API issues grants; delivery authenticates the exact-path cookie.
+    media_browser_delivery_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_BROWSER_DELIVERY_ENABLED",
+    )
+    media_browser_grant_ttl_seconds: int = Field(
+        default=300,
+        alias="MEDIA_BROWSER_GRANT_TTL_SECONDS",
+        ge=30,
+        le=3600,
+    )
+    media_browser_grant_max_active: int = Field(
+        default=4,
+        alias="MEDIA_BROWSER_GRANT_MAX_ACTIVE",
+        ge=1,
+        le=16,
+    )
+
     # Bounded stream-copy muxing (PR9) — fail closed / disabled by default.
     # ffmpeg/ffprobe paths are worker-only; API and delivery must not receive them.
     media_muxing_enabled: bool = Field(

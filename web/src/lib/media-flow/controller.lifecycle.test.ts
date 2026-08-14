@@ -5,13 +5,14 @@ import { FlowSession, SESSION_KEY } from "./session";
 import { generateAccessToken } from "./credentials";
 import { PickerCancelledError, saveArtifactStream } from "./download";
 import {
+  browserGrantPayload,
   downloadPayload,
   inspectedPayload,
   inspectionPayload,
   DOWNLOAD_ID,
   OPTION_ID,
 } from "./fixtures";
-import { parseDownloadJob, parseInspectionJob } from "./contracts";
+import { parseBrowserGrant, parseDownloadJob, parseInspectionJob } from "./contracts";
 import { flowErrorFromCode } from "./errors";
 
 function deferred<T = void>() {
@@ -56,6 +57,7 @@ function mockApi() {
       );
     }),
     cancelDownloadJob: vi.fn(),
+    createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
   };
 }
 
@@ -70,6 +72,7 @@ function makeController(
     session: new FlowSession(store),
     generateToken: () => token,
     pickerSupported: () => true,
+    secureContext: () => true,
     documentHidden: () => false,
     save: save as unknown as typeof saveArtifactStream,
   });
@@ -80,7 +83,9 @@ async function reachReady(controller: MediaFlowController): Promise<void> {
   await controller.submit("https://vk.com/video-1_2");
   controller.selectFormat(OPTION_ID);
   await controller.enqueueDownload();
-  expect(controller.snapshot().phase).toBe("ready");
+  await vi.waitFor(() => {
+    expect(controller.snapshot().phase).toBe("ready");
+  });
 }
 
 describe("controller cancellation and lifecycle", () => {
@@ -95,7 +100,8 @@ describe("controller cancellation and lifecycle", () => {
     const snap = controller.snapshot();
     expect(snap.phase).toBe("ready");
     expect(snap.busy).toBe(false);
-    expect(snap.canSave).toBe(true);
+    expect(snap.canSaveAs).toBe(true);
+    expect(snap.canNativeDownload).toBe(true);
     expect(store.map.size).toBe(1);
   });
 
@@ -137,7 +143,8 @@ describe("controller cancellation and lifecycle", () => {
     await controller.saveFile();
     expect(controller.snapshot().phase).toBe("ready");
     expect(controller.snapshot().busy).toBe(false);
-    expect(controller.snapshot().canSave).toBe(true);
+    expect(controller.snapshot().canSaveAs).toBe(true);
+    expect(controller.snapshot().canNativeDownload).toBe(true);
     expect(store.map.size).toBe(1);
   });
 

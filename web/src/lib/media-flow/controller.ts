@@ -12,6 +12,10 @@ import { pickHighestEligibleFormat, reconcileSelectedFormatId } from "./quality"
 import { generateAccessToken } from "./credentials";
 import {
   fileSystemAccessSupported,
+  computeGrantRefreshDelayMs,
+  GRANT_HANDOFF_SAFETY_MS,
+  GRANT_REISSUE_BUFFER_MS,
+  isSecureDeliveryContext,
   PickerCancelledError,
   saveArtifactStream,
 } from "./download";
@@ -39,10 +43,16 @@ export type FlowSnapshot = {
   selectedFormatId: string | null;
   downloadEligible: boolean;
   muxingBlocked: boolean;
+  httpsRequired: boolean;
+  grantArming: boolean;
+  canNativeDownload: boolean;
+  canRetryGrant: boolean;
+  canSaveAs: boolean;
+  downloadHref: string | null;
+  nativeDownloadHandoff: boolean;
   browserUnsupported: boolean;
   busy: boolean;
   canSubmit: boolean;
-  canSave: boolean;
   canStartOver: boolean;
   canCancelTask: boolean;
   restored: boolean;
@@ -59,6 +69,7 @@ export type ControllerHooks = {
   generateToken?: () => string;
   documentHidden?: () => boolean;
   pickerSupported?: () => boolean;
+  secureContext?: () => boolean;
   onChange?: (snapshot: FlowSnapshot) => void;
   now?: () => number;
 };
@@ -71,16 +82,24 @@ export class MediaFlowController {
   private readonly generateToken: () => string;
   private readonly documentHidden: () => boolean;
   private readonly pickerSupported: () => boolean;
+  private readonly secureContext: () => boolean;
   private readonly now: () => number;
   private readonly onChange?: (snapshot: FlowSnapshot) => void;
 
   private abort: AbortController | null = null;
+  private grantAbort: AbortController | null = null;
+  private grantRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private token: string | null = null;
   private mediaJob: InspectionJob | null = null;
   private downloadJob: DownloadJob | null = null;
   private selectedFormatId: string | null = null;
   private errorText: string | null = null;
-  private browserUnsupported = false;
+  private grantArming = false;
+  private grantNeedsRetry = false;
+  private grantExpiresAt: string | null = null;
+  private downloadPath: string | null = null;
+  private nativeDownloadHandoff = false;
+  private grantGeneration = 0;
   private resumeDownloadId: string | null = null;
   private restored = false;
 
@@ -93,6 +112,7 @@ export class MediaFlowController {
     this.documentHidden =
       hooks.documentHidden ?? (() => globalThis.document?.hidden === true);
     this.pickerSupported = hooks.pickerSupported ?? fileSystemAccessSupported;
+    this.secureContext = hooks.secureContext ?? isSecureDeliveryContext;
     this.now = hooks.now ?? Date.now;
     this.onChange = hooks.onChange;
   }
@@ -105,6 +125,18 @@ export class MediaFlowController {
     const downloadEligible =
       !muxingBlocked && selected !== undefined && isDownloadEligible(selected);
     const phase = this.machine.current;
+    const httpsRequired = phase === "ready" && !this.secureContext();
+    const armed =
+      !httpsRequired &&
+      this.downloadPath !== null &&
+      !this.grantArming &&
+      this.grantStillValid(GRANT_HANDOFF_SAFETY_MS);
+    const canRetryGrant =
+      phase === "ready" &&
+      !httpsRequired &&
+      !this.grantArming &&
+      !armed &&
+      (this.grantNeedsRetry || this.downloadPath === null);
     return {
       phase,
       statusText: this.statusText(),
@@ -114,9 +146,17 @@ export class MediaFlowController {
       selectedFormatId: this.selectedFormatId,
       downloadEligible,
       muxingBlocked,
-      browserUnsupported: this.browserUnsupported,
+      httpsRequired,
+      grantArming: this.grantArming,
+      canNativeDownload: phase === "ready" && armed,
+      canRetryGrant,
+      canSaveAs: phase === "ready" && this.pickerSupported(),
+      downloadHref: armed ? this.downloadPath : null,
+      nativeDownloadHandoff: this.nativeDownloadHandoff,
+      browserUnsupported: phase === "ready" && !this.pickerSupported(),
       busy:
         this.machine.isBusy() ||
+        this.grantArming ||
         [
           "submitting",
           "inspecting",
@@ -125,7 +165,6 @@ export class MediaFlowController {
           "saving",
         ].includes(phase),
       canSubmit: phase === "idle",
-      canSave: phase === "ready" && !this.browserUnsupported,
       canStartOver: phase !== "idle",
       canCancelTask:
         Boolean(this.downloadJob?.cancellable) &&
@@ -140,6 +179,20 @@ export class MediaFlowController {
   private statusText(): string {
     if (this.errorText) {
       return this.errorText;
+    }
+    if (this.machine.current === "ready") {
+      if (!this.secureContext()) {
+        return userMessageForCode("HTTPS_REQUIRED").text;
+      }
+      if (this.grantArming) {
+        return "Preparing secure download…";
+      }
+      if (this.nativeDownloadHandoff && this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)) {
+        return "Sent to your browser";
+      }
+      if (this.grantNeedsRetry || this.downloadPath === null) {
+        return "Download access needs to be refreshed.";
+      }
     }
     if (this.restored && this.machine.current === "inspected") {
       return "Restored an existing download task. Choose a quality or continue.";
@@ -207,6 +260,7 @@ export class MediaFlowController {
       this.machine.resetToIdle();
     }
     if (isTerminalPhase(this.machine.current)) {
+      this.clearGrantState();
       this.session.clear();
       this.token = null;
     }
@@ -230,27 +284,110 @@ export class MediaFlowController {
     this.resumeDownloadId = null;
   }
 
+  private clearGrantRefreshTimer(): void {
+    if (this.grantRefreshTimer !== null) {
+      clearTimeout(this.grantRefreshTimer);
+      this.grantRefreshTimer = null;
+    }
+  }
+
+  private clearGrantState(): void {
+    this.grantAbort?.abort();
+    this.grantAbort = null;
+    this.clearGrantRefreshTimer();
+    this.grantArming = false;
+    this.grantNeedsRetry = false;
+    this.grantExpiresAt = null;
+    this.downloadPath = null;
+    this.nativeDownloadHandoff = false;
+    this.grantGeneration += 1;
+  }
+
+  private grantStillValid(safetyMs = 0): boolean {
+    if (!this.grantExpiresAt || !this.downloadPath) {
+      return false;
+    }
+    const expiresMs = Date.parse(this.grantExpiresAt);
+    return Number.isFinite(expiresMs) && expiresMs - safetyMs > this.now();
+  }
+
+  private invalidateExpiredGrantHref(): void {
+    if (this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)) {
+      return;
+    }
+    this.clearGrantRefreshTimer();
+    this.downloadPath = null;
+    this.grantExpiresAt = null;
+    this.nativeDownloadHandoff = false;
+    if (this.machine.current === "ready" && this.secureContext()) {
+      this.grantNeedsRetry = true;
+    }
+  }
+
+  private scheduleGrantRefresh(generation: number): void {
+    this.clearGrantRefreshTimer();
+    if (!this.grantExpiresAt || this.machine.current !== "ready") {
+      return;
+    }
+    const expiresMs = Date.parse(this.grantExpiresAt);
+    if (!Number.isFinite(expiresMs)) {
+      return;
+    }
+    const delay = computeGrantRefreshDelayMs(expiresMs, this.now());
+    if (delay === null) {
+      // Already expired — never setTimeout(0). Resume/click/retry re-arms.
+      this.invalidateExpiredGrantHref();
+      this.emit();
+      return;
+    }
+    this.grantRefreshTimer = setTimeout(() => {
+      this.grantRefreshTimer = null;
+      void this.armNativeDownload(generation);
+    }, delay);
+  }
+
   disconnect(): void {
     this.abort?.abort();
+    this.grantAbort?.abort();
+    this.clearGrantRefreshTimer();
   }
 
   onPageHide(): void {
     this.persist();
     this.abort?.abort();
+    this.grantAbort?.abort();
+    this.clearGrantRefreshTimer();
+  }
+
+  onForegroundResume(): void {
+    if (this.machine.current !== "ready") {
+      return;
+    }
+    this.invalidateExpiredGrantHref();
+    this.emit();
+    if (!this.secureContext() || this.grantArming) {
+      return;
+    }
+    if (!this.grantStillValid(GRANT_REISSUE_BUFFER_MS)) {
+      void this.armNativeDownload();
+    } else {
+      this.scheduleGrantRefresh(this.machine.generationId);
+    }
   }
 
   onPageShow(persisted: boolean): Promise<void> {
     if (!persisted) {
+      this.onForegroundResume();
       return Promise.resolve();
     }
     this.abort?.abort();
     this.abort = null;
+    this.clearGrantState();
     this.token = null;
     this.mediaJob = null;
     this.downloadJob = null;
     this.selectedFormatId = null;
     this.errorText = null;
-    this.browserUnsupported = false;
     this.restored = false;
     this.clearResumeDownloadId();
     this.machine.resetToIdle();
@@ -261,12 +398,12 @@ export class MediaFlowController {
     this.machine.resetToIdle();
     this.abort?.abort();
     this.abort = null;
+    this.clearGrantState();
     this.token = null;
     this.mediaJob = null;
     this.downloadJob = null;
     this.selectedFormatId = null;
     this.errorText = null;
-    this.browserUnsupported = false;
     this.restored = false;
     this.clearResumeDownloadId();
     this.session.clear();
@@ -322,6 +459,7 @@ export class MediaFlowController {
     this.mediaJob = null;
     this.downloadJob = null;
     this.selectedFormatId = null;
+    this.clearGrantState();
     this.clearResumeDownloadId();
     try {
       this.machine.transition("submitting");
@@ -491,6 +629,7 @@ export class MediaFlowController {
       return;
     }
     this.errorText = null;
+    this.clearGrantState();
     try {
       this.machine.transition("enqueueing_download");
     } catch {
@@ -569,6 +708,7 @@ export class MediaFlowController {
     }
     if (job.state === "cancelled") {
       this.errorText = null;
+      this.clearGrantState();
       this.machine.transition("cancelled", generation);
       this.session.clear();
       this.token = null;
@@ -580,11 +720,138 @@ export class MediaFlowController {
       this.fail("download_failed", flowErrorFromCode(job.errorCode), generation);
       return;
     }
-    this.browserUnsupported = !this.pickerSupported();
+    this.nativeDownloadHandoff = false;
     this.machine.transition("ready", generation);
     this.machine.endAction();
     this.persist();
     this.emit();
+    void this.armNativeDownload(generation);
+  }
+
+  async armNativeDownload(generation?: number): Promise<void> {
+    const activeGeneration = generation ?? this.machine.generationId;
+    if (this.machine.current !== "ready" || !this.secureContext()) {
+      return;
+    }
+    if (!this.token || !this.downloadJob) {
+      return;
+    }
+    // Collapse concurrent retries / refreshes into one in-flight request.
+    if (this.grantArming) {
+      return;
+    }
+    const now = this.now();
+    if (
+      this.downloadPath &&
+      this.grantExpiresAt &&
+      Date.parse(this.grantExpiresAt) - now > GRANT_REISSUE_BUFFER_MS
+    ) {
+      this.grantNeedsRetry = false;
+      this.scheduleGrantRefresh(activeGeneration);
+      return;
+    }
+    const previousPath = this.downloadPath;
+    const previousExpires = this.grantExpiresAt;
+    const hadValidGrant = this.grantStillValid(GRANT_HANDOFF_SAFETY_MS);
+    this.grantAbort?.abort();
+    const grantAbort = new AbortController();
+    this.grantAbort = grantAbort;
+    const grantGeneration = ++this.grantGeneration;
+    this.grantArming = true;
+    // Clear href while re-arming so stale anchors are not clickable mid-flight.
+    this.downloadPath = null;
+    this.grantExpiresAt = null;
+    this.emit();
+    try {
+      const grant = await this.api.createBrowserGrant(
+        this.downloadJob.id,
+        this.token,
+        grantAbort.signal,
+      );
+      if (
+        !this.machine.isCurrentGeneration(activeGeneration) ||
+        grantGeneration !== this.grantGeneration ||
+        this.machine.current !== "ready"
+      ) {
+        return;
+      }
+      this.downloadPath = grant.downloadPath;
+      this.grantExpiresAt = grant.expiresAt;
+      this.grantArming = false;
+      this.grantNeedsRetry = false;
+      this.errorText = null;
+      this.emit();
+      this.scheduleGrantRefresh(activeGeneration);
+    } catch (err) {
+      if (
+        !this.machine.isCurrentGeneration(activeGeneration) ||
+        grantGeneration !== this.grantGeneration
+      ) {
+        return;
+      }
+      if (isAbortError(err)) {
+        // Ownership abort: restore prior valid grant if we still had one.
+        this.grantArming = false;
+        if (hadValidGrant && previousPath && previousExpires) {
+          this.downloadPath = previousPath;
+          this.grantExpiresAt = previousExpires;
+          this.scheduleGrantRefresh(activeGeneration);
+        }
+        this.emit();
+        return;
+      }
+      this.grantArming = false;
+      // Failed re-arm must not destroy an already-valid grant.
+      if (hadValidGrant && previousPath && previousExpires) {
+        this.downloadPath = previousPath;
+        this.grantExpiresAt = previousExpires;
+        this.grantNeedsRetry = false;
+        this.scheduleGrantRefresh(activeGeneration);
+      } else {
+        this.downloadPath = null;
+        this.grantExpiresAt = null;
+        this.grantNeedsRetry = true;
+      }
+      this.errorText =
+        err instanceof FlowError
+          ? err.userMessage
+          : userMessageForCode("INTERNAL_ERROR").text;
+      this.emit();
+    }
+  }
+
+  /**
+   * Validate a native download click. Returns true when the browser should
+   * continue with genuine anchor navigation; false when the click must be
+   * cancelled and the grant re-armed.
+   */
+  onNativeDownloadClick(): boolean {
+    if (this.machine.current !== "ready" || this.grantArming) {
+      return false;
+    }
+    if (
+      !this.downloadPath ||
+      !this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)
+    ) {
+      this.invalidateExpiredGrantHref();
+      this.emit();
+      void this.armNativeDownload();
+      return false;
+    }
+    this.nativeDownloadHandoff = true;
+    this.persist();
+    this.emit();
+    return true;
+  }
+
+  retryGrantAccess(): void {
+    if (this.machine.current !== "ready" || this.grantArming) {
+      return;
+    }
+    this.errorText = null;
+    this.grantNeedsRetry = true;
+    this.emit();
+    void this.armNativeDownload();
   }
 
   async saveFile(): Promise<void> {
@@ -592,9 +859,7 @@ export class MediaFlowController {
       return;
     }
     if (!this.pickerSupported()) {
-      this.browserUnsupported = true;
       this.machine.endAction();
-      this.errorText = userMessageForCode("BROWSER_UNSUPPORTED").text;
       this.emit();
       return;
     }
@@ -624,6 +889,7 @@ export class MediaFlowController {
       if (!this.machine.isCurrentGeneration(generation)) {
         return;
       }
+      this.clearGrantState();
       this.machine.transition("completed", generation);
       this.session.clear();
       this.token = null;
@@ -670,6 +936,7 @@ export class MediaFlowController {
       this.emit();
       if (job.state === "cancelled") {
         this.errorText = null;
+        this.clearGrantState();
         this.machine.transition("cancelled", generation);
         this.session.clear();
         this.token = null;

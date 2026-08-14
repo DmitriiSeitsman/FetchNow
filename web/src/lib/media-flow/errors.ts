@@ -180,7 +180,11 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     retryable: true,
   },
   BROWSER_UNSUPPORTED: {
-    text: "Saving requires a browser with the File System Access API (current Chromium desktop). The prepared file stays available until it expires.",
+    text: "Save as… requires a browser with the File System Access API (current Chromium desktop). Use Download file, or open this page in a supported browser to pick a save location.",
+    retryable: false,
+  },
+  HTTPS_REQUIRED: {
+    text: "Open this page over HTTPS to download the prepared file.",
     retryable: false,
   },
   SAVE_FAILED: {

@@ -50,10 +50,16 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     selectedFormatId: null,
     downloadEligible: false,
     muxingBlocked: false,
+    httpsRequired: false,
+    grantArming: false,
+    canNativeDownload: false,
+    canRetryGrant: false,
+    canSaveAs: false,
+    downloadHref: null,
+    nativeDownloadHandoff: false,
     browserUnsupported: false,
     busy: false,
     canSubmit: true,
-    canSave: false,
     canStartOver: false,
     canCancelTask: false,
     restored: false,
@@ -98,7 +104,8 @@ function mountFlow(): void {
       <p class="hint" data-flow-mux hidden></p>
       <p class="hint" data-flow-browser hidden></p>
       <button data-flow-download hidden>Prepare download</button>
-      <button data-flow-save hidden>Save file</button>
+      <a data-flow-native-download hidden download>Download file</a>
+      <button data-flow-save-as hidden>Save as…</button>
     </section>
   `;
 }
@@ -157,7 +164,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
         formats: [progressiveFormat],
       }),
     );
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to save · 11.4 MB");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to download · 11.4 MB");
     expect(el("[data-flow-progress-label]").textContent).not.toContain("≈");
   });
 

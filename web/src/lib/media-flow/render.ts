@@ -65,17 +65,18 @@ function qualityRow(
 }
 
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
+  const hideProgressAfterHandoff =
+    snapshot.phase === "ready" && snapshot.nativeDownloadHandoff;
   const progress = progressView(snapshot.phase, snapshot.progressStage, {
     progressPercent: snapshot.progressPercent,
     artifactBytes: snapshot.artifactBytes,
     formats: snapshot.formats,
   });
+  const progressVisible = progress.visible && !hideProgressAfterHandoff;
   const status = root.querySelector("[data-flow-status]");
-  // While the progress card is visible it owns the stage copy, so the status
-  // line stays free for errors and instructions instead of repeating it.
   setText(
     status,
-    snapshot.errorText ?? (progress.visible ? "" : snapshot.statusText),
+    snapshot.errorText ?? (progressVisible ? "" : snapshot.statusText),
   );
   if (status instanceof HTMLElement) {
     status.dataset.tone = snapshot.errorText ? "error" : "info";
@@ -91,14 +92,51 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (input) {
     input.disabled = !snapshot.canSubmit;
   }
-  const save = root.querySelector<HTMLButtonElement>("[data-flow-save]");
-  if (save) {
-    save.disabled = !snapshot.canSave || snapshot.busy;
-    save.hidden =
-      snapshot.phase !== "ready" &&
-      snapshot.phase !== "saving" &&
-      snapshot.phase !== "completed";
+
+  const nativeDownload = root.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
+  if (nativeDownload) {
+    const showPrimary =
+      snapshot.canNativeDownload ||
+      (snapshot.nativeDownloadHandoff && snapshot.downloadHref !== null);
+    nativeDownload.hidden = !showPrimary;
+    nativeDownload.textContent = snapshot.nativeDownloadHandoff
+      ? "Download again"
+      : "Download file";
+    if (snapshot.downloadHref) {
+      nativeDownload.href = snapshot.downloadHref;
+    } else {
+      nativeDownload.removeAttribute("href");
+    }
+    nativeDownload.setAttribute("aria-disabled", showPrimary ? "false" : "true");
   }
+
+  const grantRetry = root.querySelector<HTMLButtonElement>("[data-flow-grant-retry]");
+  if (grantRetry) {
+    grantRetry.hidden = !snapshot.canRetryGrant;
+    grantRetry.disabled = !snapshot.canRetryGrant || snapshot.busy;
+  }
+
+  const grantPending = root.querySelector("[data-flow-grant-pending]");
+  if (grantPending instanceof HTMLElement) {
+    grantPending.hidden = !snapshot.grantArming;
+  }
+
+  const handoff = root.querySelector("[data-flow-handoff]");
+  if (handoff instanceof HTMLElement) {
+    handoff.hidden = !snapshot.nativeDownloadHandoff;
+  }
+
+  const httpsRequired = root.querySelector("[data-flow-https]");
+  if (httpsRequired instanceof HTMLElement) {
+    httpsRequired.hidden = !snapshot.httpsRequired;
+  }
+
+  const saveAs = root.querySelector<HTMLButtonElement>("[data-flow-save-as]");
+  if (saveAs) {
+    saveAs.disabled = !snapshot.canSaveAs || snapshot.busy;
+    saveAs.hidden = snapshot.phase !== "ready" && snapshot.phase !== "saving";
+  }
+
   const enqueue = root.querySelector<HTMLButtonElement>("[data-flow-download]");
   if (enqueue) {
     enqueue.disabled =
@@ -123,7 +161,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
 
   const progressCard = root.querySelector("[data-flow-progress]");
   if (progressCard instanceof HTMLElement) {
-    progressCard.hidden = !progress.visible;
+    progressCard.hidden = !progressVisible;
     progressCard.dataset.tone = progress.tone;
     setText(progressCard.querySelector("[data-flow-progress-label]"), progress.label);
   }
@@ -141,7 +179,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   }
   const loader = root.querySelector("[data-flow-loader]");
   if (loader instanceof HTMLElement) {
-    loader.hidden = !progress.spinner;
+    loader.hidden = !progress.spinner || hideProgressAfterHandoff;
   }
   const spinner = root.querySelector("[data-flow-spinner]");
   if (spinner instanceof HTMLElement) {
@@ -203,6 +241,6 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
 
   const unsupported = root.querySelector("[data-flow-browser]");
   if (unsupported instanceof HTMLElement) {
-    unsupported.hidden = !snapshot.browserUnsupported;
+    unsupported.hidden = !snapshot.browserUnsupported || snapshot.phase !== "ready";
   }
 }

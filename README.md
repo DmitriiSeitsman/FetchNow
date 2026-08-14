@@ -31,7 +31,7 @@ Security and product boundaries are documented **before** media processing ships
 - Durable media-inspection jobs: PostgreSQL queue with client-generated access tokens, `SKIP LOCKED` claims, and lease fencing ([ADR 0009](docs/adr/0009-postgresql-media-job-orchestration.md)). Defaults off; API does not run yt-dlp.
 - Durable download execution foundation: progressive download jobs, exact option rebinding, private artifact store ([ADR 0010](docs/adr/0010-durable-download-execution-and-private-artifact-boundary.md)). Defaults off; no client file delivery in PR6.
 - Authenticated private artifact delivery: dedicated `delivery` process, parent Bearer auth, FD-based streaming ([ADR 0011](docs/adr/0011-authenticated-private-artifact-delivery.md)). Defaults off; API does not mount artifact storage; delivery never invokes yt-dlp and receives no tool path (shared image still contains the binary; DB role is not read-only).
-- Browser download flow: static Astro orchestration of inspection → download → File System Access streaming save ([ADR 0012](docs/adr/0012-browser-download-flow.md), [browser flow](docs/api/browser-download-flow.md)). UI flag `PUBLIC_MEDIA_FLOW_ENABLED` defaults false and does not enable server flags.
+- Browser download flow: static Astro orchestration of inspection → download → **native browser download** via short-lived HttpOnly delivery grants ([ADR 0016](docs/adr/0016-browser-native-delivery-grants.md), [browser flow](docs/api/browser-download-flow.md)); optional Chromium “Save as…” still uses File System Access ([ADR 0012](docs/adr/0012-browser-download-flow.md)). UI flag `PUBLIC_MEDIA_FLOW_ENABLED` defaults false and does not enable server flags.
 - Bounded muxing: worker-only stream-copy of compatible video-only + audio-only streams ([ADR 0013](docs/adr/0013-bounded-media-muxing.md)). `MEDIA_MUXING_ENABLED` defaults false; ffmpeg/ffprobe paths never reach API, delivery, or web.
 - Threat coverage for SSRF, redirects, tool abuse, and resource exhaustion: [Threat model](docs/security/threat-model.md).
 - Production logs must not contain full source URLs, cookies, or secrets: [Logging and privacy](docs/security/logging-and-privacy.md).
@@ -62,7 +62,7 @@ The web UI uses a **system font stack only** (no Google Fonts CDN).
 | [ADR 0011](docs/adr/0011-authenticated-private-artifact-delivery.md) | Authenticated private artifact delivery |
 | [ADR 0012](docs/adr/0012-browser-download-flow.md) | Browser orchestration + streaming save |
 | [Browser download flow](docs/api/browser-download-flow.md) | Client sequence and constraints |
-| [Browser support](docs/product/browser-support.md) | File System Access API boundary |
+| [Browser support](docs/product/browser-support.md) | Native download + optional File System Access |
 
 ## Validate API (PR1)
 

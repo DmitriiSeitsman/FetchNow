@@ -461,6 +461,21 @@ def check_media_jobs_env_split() -> None:
         "base: MEDIA_DELIVERY_ENABLED must default false on delivery",
     )
     _assert(
+        str(api_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_BROWSER_DELIVERY_ENABLED must default false on api",
+    )
+    _assert(
+        str(delivery_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_BROWSER_DELIVERY_ENABLED must default false on delivery",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: MEDIA_BROWSER_DELIVERY_ENABLED must default false on worker",
+    )
+    _assert(
         str(worker_env.get("MEDIA_JOBS_ENABLED", "false")).lower() in {"false", "0"},
         "base: MEDIA_JOBS_ENABLED must default false on worker",
     )
@@ -802,6 +817,65 @@ def check_media_flow_flag() -> None:
     print("OK: media flow UI flag defaults false (web build arg)")
 
 
+def check_browser_grant_uuid4_route() -> None:
+    """Public grant delivery paths must use exact lowercase canonical UUID4."""
+    text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    exact = (
+        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    )
+    _assert(
+        f"/api/v1/media/browser-grants/{exact}/content" in text,
+        "gateway: browser-grants location must use exact UUID4 grammar",
+    )
+    grant_block = text.split("browser-grants/", 1)[1].split("location /api/", 1)[0]
+    _assert(
+        "[0-9a-fA-F-]{36}" not in grant_block,
+        "gateway: browser-grants must not use loose [0-9a-fA-F-]{36} grammar",
+    )
+    _assert(
+        "4[0-9a-f]{3}" in grant_block and "[89ab][0-9a-f]{3}" in grant_block,
+        "gateway: browser-grants must require UUID version/variant nibbles",
+    )
+    _assert(
+        'if ($args != "")' in grant_block and "return 404;" in grant_block,
+        "gateway: browser-grants must reject non-empty query args",
+    )
+    _assert(
+        "proxy_pass http://$fetchnow_delivery$uri;" in grant_block,
+        "gateway: browser-grants must proxy $uri only (no query forward)",
+    )
+    _assert(
+        "$request_uri" not in grant_block,
+        "gateway: browser-grants must not proxy $request_uri",
+    )
+    _assert(
+        "log_format browser_grant_delivery" in text,
+        "gateway: browser-grants must define a sanitized access log format",
+    )
+    _assert(
+        "access_log /dev/stdout browser_grant_delivery;" in grant_block,
+        "gateway: browser-grants must use the sanitized access log",
+    )
+    fmt = text.split("log_format browser_grant_delivery", 1)[1].split(";", 1)[0]
+    for forbidden, label in (
+        ('"$request"', "raw $request"),
+        ("$request_uri", "$request_uri"),
+        ("$args", "$args"),
+        ("$http_referer", "Referer"),
+        ("$http_cookie", "Cookie"),
+        ("$http_authorization", "Authorization"),
+    ):
+        _assert(
+            forbidden not in fmt,
+            f"gateway: browser_grant_delivery log must not include {label}",
+        )
+    _assert(
+        "$uri" in fmt and "$request_method" in fmt,
+        "gateway: browser_grant_delivery log must record method and normalized $uri",
+    )
+    print("OK: gateway browser-grants route uses exact UUID4 grammar")
+
+
 def check_gateway_csp() -> None:
     """Interactive HTML CSP is same-origin only and is not applied to delivery."""
     text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
@@ -838,6 +912,7 @@ def main() -> int:
     check_muxing_and_storage_init()
     check_media_flow_flag()
     check_gateway_nginx_config()
+    check_browser_grant_uuid4_route()
     check_gateway_csp()
     print("All Compose contract checks passed.")
     return 0

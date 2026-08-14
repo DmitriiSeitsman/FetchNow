@@ -12,13 +12,14 @@ import { FlowSession } from "./session";
 import { generateAccessToken } from "./credentials";
 import { progressView, STAGE_COMPLETION } from "./progress";
 import {
+  browserGrantPayload,
   downloadPayload,
   inspectedPayload,
   inspectionPayload,
   progressiveFormat,
   OPTION_ID,
 } from "./fixtures";
-import { parseDownloadJob, parseInspectionJob, type MediaFormat } from "./contracts";
+import { parseBrowserGrant, parseDownloadJob, parseInspectionJob, type MediaFormat } from "./contracts";
 import { flowErrorFromCode } from "./errors";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,10 +49,16 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     selectedFormatId: null,
     downloadEligible: false,
     muxingBlocked: false,
+    httpsRequired: false,
+    grantArming: false,
+    canNativeDownload: false,
+    canRetryGrant: false,
+    canSaveAs: false,
+    downloadHref: null,
+    nativeDownloadHandoff: false,
     browserUnsupported: false,
     busy: false,
     canSubmit: true,
-    canSave: false,
     canStartOver: false,
     canCancelTask: false,
     restored: false,
@@ -101,7 +108,8 @@ function mountFlow(): void {
       <p class="hint" data-flow-mux hidden></p>
       <p class="hint" data-flow-browser hidden></p>
       <button data-flow-download hidden>Prepare download</button>
-      <button data-flow-save hidden>Save file</button>
+      <a data-flow-native-download hidden download>Download file</a>
+      <button data-flow-save-as hidden>Save as…</button>
       <button data-flow-reset hidden>Start over</button>
       <button data-flow-cancel hidden>Cancel task</button>
     </section>
@@ -374,10 +382,10 @@ describe("PR11 loader, quality and stage progress UI", () => {
 
     renderFlow(
       document,
-      snapshot({ phase: "ready", progressStage: "ready", statusText: "Ready to save" }),
+      snapshot({ phase: "ready", progressStage: "ready", statusText: "Ready to download" }),
     );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to save");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to download");
     expect(el("[data-flow-progress]").dataset.tone).toBe("done");
     expect(el("[data-flow-loader]").hidden).toBe(true);
 
@@ -471,6 +479,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
         );
       }),
       cancelDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
     };
     let renders = 0;
     const controller = new MediaFlowController({
@@ -482,6 +491,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       }),
       generateToken: () => generateAccessToken(),
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => {
         renders += 1;
@@ -527,6 +537,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
         );
       }),
       cancelDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
     };
     const labels: string[] = [];
     const controller = new MediaFlowController({
@@ -538,6 +549,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       }),
       generateToken: () => generateAccessToken(),
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => {
         renderFlow(document, snap);
@@ -551,7 +563,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(controller.snapshot().errorText).toBeNull();
     expect(labels).not.toContain("The file could not be prepared.");
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Ready to save · 11.4 MB",
+      "Ready to download · 11.4 MB",
     );
   });
 
@@ -573,6 +585,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
         ),
       ),
       cancelDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
     };
     const session = new FlowSession({
       getItem: (k) => store.get(k) ?? null,
@@ -597,16 +610,20 @@ describe("PR11 loader, quality and stage progress UI", () => {
       session,
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => renderFlow(document, snap),
     });
     await controller.restore();
+    await vi.waitFor(() => {
+      expect(controller.snapshot().canNativeDownload).toBe(true);
+    });
     expect(controller.snapshot().restored).toBe(true);
     expect(controller.snapshot().phase).toBe("ready");
     expect(el("[data-flow-restored]").hidden).toBe(false);
     expect(el("[data-flow-progress]").hidden).toBe(false);
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Ready to save · 11.4 MB",
+      "Ready to download · 11.4 MB",
     );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
   });

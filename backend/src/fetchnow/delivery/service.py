@@ -11,12 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.core.config import Settings
 from fetchnow.delivery.reader import ArtifactReader, OpenArtifactHandle
+from fetchnow.downloads.browser_grant_tokens import (
+    grant_hashes_match,
+    hash_grant_token,
+    parse_grant_token,
+)
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
 from fetchnow.downloads.filename import (
     content_disposition_header,
     fallback_filename,
     is_safe_suggested_filename,
 )
+from fetchnow.downloads.grant_repository import BrowserGrantRepository
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.states import MediaDownloadJobState
@@ -139,6 +145,98 @@ class DeliveryService:
             )
 
         self._assert_ready_pointer(job)
+        return DeliveryAuthorization(job=job, now=now)
+
+    async def authorize_browser_grant(
+        self,
+        *,
+        grant_id: uuid.UUID,
+        raw_token: str,
+        session: AsyncSession,
+    ) -> DeliveryAuthorization:
+        """Authorize a native browser GET/HEAD via grant UUID + cookie token.
+
+        Unknown grant, wrong hash, expired grant/job, non-ready job, replaced
+        artifact, or stale fence are externally indistinguishable
+        (``DOWNLOAD_JOB_NOT_FOUND`` or ``DOWNLOAD_EXPIRED`` as appropriate).
+
+        Uses a plain immutable SELECT (no ``FOR UPDATE``). Authorization is
+        decided before streaming opens the artifact FD — the same TOCTOU class
+        as artifact expiry between authorize and open. Issuance continues to
+        lock the parent download row when enforcing the active-grant cap.
+        """
+        # Validate token shape before any DB work.
+        parse_grant_token(raw_token)
+        token_hash = hash_grant_token(raw_token)
+
+        if not self._settings.media_delivery_enabled:
+            raise_download_error(
+                DownloadErrorCode.DELIVERY_DISABLED,
+                internal_reason="DELIVERY_DISABLED",
+            )
+        if not self._settings.media_browser_delivery_enabled:
+            raise_download_error(
+                DownloadErrorCode.DELIVERY_DISABLED,
+                internal_reason="BROWSER_DELIVERY_DISABLED",
+            )
+
+        grants = BrowserGrantRepository(session)
+        grant = await grants.get_by_id(grant_id)
+        if grant is None or not grant_hashes_match(grant.token_hash, token_hash):
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="GRANT_UNAUTHORIZED",
+            )
+
+        now = await grants.database_now()
+        if grant.revoked_at is not None or grant.expires_at <= now:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_EXPIRED,
+                internal_reason="GRANT_EXPIRED",
+            )
+
+        repo = MediaDownloadJobRepository(session)
+        job = await repo.get_by_id(grant.download_job_id)
+        if job is None:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="GRANT_JOB_MISSING",
+            )
+
+        parent_repo = MediaJobRepository(session)
+        parent = await parent_repo.get_by_id(job.media_job_id)
+        if parent is None:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="GRANT_PARENT_MISSING",
+            )
+
+        if (
+            parent.public_state == MediaJobState.EXPIRED.value
+            or parent.expires_at <= now
+            or job.public_state == MediaDownloadJobState.EXPIRED.value
+            or job.expires_at <= now
+        ):
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_EXPIRED,
+                internal_reason="TTL_ELAPSED",
+            )
+
+        if job.public_state != MediaDownloadJobState.READY.value:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_NOT_READY,
+                internal_reason="NOT_READY",
+            )
+
+        self._assert_ready_pointer(job)
+        if job.artifact_id != grant.artifact_id or int(job.fence_token) != int(
+            grant.fence_token
+        ):
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
+                internal_reason="GRANT_ARTIFACT_MISMATCH",
+            )
+
         return DeliveryAuthorization(job=job, now=now)
 
     def open_artifact(self, authz: DeliveryAuthorization) -> OpenArtifactHandle:
