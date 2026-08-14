@@ -462,23 +462,6 @@ export function isDownloadEligible(format: MediaFormat): boolean {
   );
 }
 
-export function pickHighestEligibleFormat(formats: readonly MediaFormat[]): string | null {
-  const eligible = formats.filter(
-    (format) => isDownloadEligible(format) && (format.height ?? 0) <= 720,
-  );
-  if (eligible.length === 0) {
-    return null;
-  }
-  const ranked = [...eligible].sort((left, right) => {
-    const height = (right.height ?? 0) - (left.height ?? 0);
-    if (height !== 0) {
-      return height;
-    }
-    return left.formatOptionId.localeCompare(right.formatOptionId);
-  });
-  return ranked[0].formatOptionId;
-}
-
 function parseInspectionResult(value: unknown): InspectionResult {
   if (!isRecord(value)) {
     fail();

@@ -13,13 +13,37 @@ inspection, downloads, and delivery are also enabled by an operator.
 5. `POST /api/v1/media/jobs/{id}/downloads` with `{ "formatOptionId": "…" }`.
 6. Poll `GET /api/v1/media/download-jobs/{id}` until `ready` / `failed` /
    `cancelled` / `expired`. The UI shows sanitized `progressStage` copy
-   (Checking the media… / Preparing video… / …) without percentages.
+   (Waiting to start… / Downloading video… / Placing the file in temporary
+   storage… / …) without byte percentages.
 7. `Cancel task` calls `POST …/download-jobs/{id}/cancel`. `Start over` is a
    local reset and does **not** cancel the server job.
 8. User gesture opens `showSaveFilePicker`, then `GET …/content` with the same Bearer.
 9. `response.body` is streamed to disk. Credentials are cleared only after a clean close.
 
 The token is never placed in the URL, filename, DOM, or logs.
+
+## UI presentation (PR11)
+
+- Quality selection is a dedicated `Choose quality` card with one row per
+  normalized quality. Rows are native radios, so grouping and keyboard
+  behaviour stay standard.
+- The response may expose several formats for the same quality. The UI groups
+  them by numeric `height`, or by a strictly normalized `qualityLabel` when the
+  height is unknown, and shows one representative per group. The ranking is
+  eligible first, then the already selected id, then MP4 before WebM, then the
+  higher finite FPS, then the smaller known `approxBytes`, then the
+  `formatOptionId`. It is independent of the response order. Representative ids
+  are always the opaque ids from the response; the UI never builds one.
+- Progress is a stage indicator: the card reports which preparation step the
+  backend is on, not how many bytes were downloaded. `ready` and `completed`
+  reach 100 when server-side preparation is complete; `saving` remains at 100
+  with an active spinner while the browser writes that prepared artifact to
+  the user's file. A retry starts a new preparation attempt and may reset the
+  stage completion value. Idle, error, cancelled, and expired states never
+  render as active progress, and a direct progressive job may go from
+  `downloading_video` straight to `publishing`.
+- The spinner lives inside the progress card and is only rendered while an
+  operation is in flight. `prefers-reduced-motion` disables its animation.
 
 ## Why not `<a href>`?
 

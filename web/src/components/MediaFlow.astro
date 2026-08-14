@@ -46,9 +46,6 @@ const enabled = isMediaFlowEnabled();
   <p class="hint" data-flow-restored hidden>
     Restored an existing download task.
   </p>
-  <div class="loader" data-flow-loader hidden>
-    <span class="spinner" data-flow-spinner aria-hidden="true"></span>
-  </div>
   <article class="meta-card" data-flow-meta hidden>
     <h2 class="meta-title" data-flow-title></h2>
     <p class="meta-line">
@@ -57,9 +54,38 @@ const enabled = isMediaFlowEnabled();
       <span data-flow-duration></span>
     </p>
   </article>
-  <fieldset class="formats" data-flow-formats hidden>
-    <legend class="field-label">Quality</legend>
+  <fieldset class="quality-card" data-flow-quality hidden>
+    <legend class="card-title">Choose quality</legend>
+    <div class="quality-list" data-flow-formats hidden></div>
   </fieldset>
+  <section class="progress-card" data-flow-progress data-tone="active" hidden>
+    <div class="progress-head">
+      <span class="loader" data-flow-loader hidden>
+        <span class="spinner" data-flow-spinner aria-hidden="true"></span>
+      </span>
+      <p
+        class="progress-stage"
+        data-flow-progress-label
+        role="status"
+        aria-live="polite"
+      >
+      </p>
+    </div>
+    <div
+      class="progress-track"
+      data-flow-progress-bar
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="0"
+      aria-valuetext="Waiting to start…"
+    >
+      <span class="progress-fill" data-flow-progress-fill></span>
+    </div>
+    <p class="hint progress-note">
+      These are preparation steps on our side, not a download percentage.
+    </p>
+  </section>
   <p class="hint" data-flow-mux hidden>
     This media is not available in the current free download mode. A combined video and
     audio file is required.

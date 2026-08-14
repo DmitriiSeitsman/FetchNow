@@ -61,9 +61,13 @@ describe("PR10 loader, format, and contrast UX", () => {
   it("shows stage copy, hides spinner from assistive tech, and never claims a percent", () => {
     document.body.innerHTML = `
       <p data-flow-status></p>
-      <div data-flow-loader hidden>
-        <span class="spinner" data-flow-spinner></span>
-      </div>
+      <section data-flow-progress hidden>
+        <span class="loader" data-flow-loader hidden>
+          <span class="spinner" data-flow-spinner></span>
+        </span>
+        <p data-flow-progress-label></p>
+        <div data-flow-progress-bar><span data-flow-progress-fill></span></div>
+      </section>
       <button data-flow-cancel hidden>Cancel task</button>
       <button data-flow-reset hidden>Start over</button>
       <p data-flow-restored hidden>Restored an existing download task.</p>
@@ -71,12 +75,14 @@ describe("PR10 loader, format, and contrast UX", () => {
     renderFlow(
       document,
       snapshot({
-        statusText: "Preparing video…",
+        statusText: "Downloading video…",
         progressStage: "downloading_video",
       }),
     );
+    const stage = document.querySelector("[data-flow-progress-label]");
+    expect(stage?.textContent).toBe("Downloading video…");
     const status = document.querySelector("[data-flow-status]");
-    expect(status?.textContent).toBe("Preparing video…");
+    expect(status?.textContent).toBe("");
     expect(status?.getAttribute("aria-live")).toBe("polite");
     expect(document.body.textContent ?? "").not.toMatch(/\d+%/);
     const loader = document.querySelector<HTMLElement>("[data-flow-loader]");
