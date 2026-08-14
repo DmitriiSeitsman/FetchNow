@@ -15,7 +15,7 @@ const enabled = isMediaFlowEnabled();
         name="url"
         inputmode="url"
         autocomplete="url"
-        placeholder="https://vk.com/video… or https://rutube.ru/video…"
+        placeholder="https://examplelink.com/..."
         required
         disabled={!enabled}
         aria-disabled={enabled ? "false" : "true"}
@@ -83,7 +83,7 @@ const enabled = isMediaFlowEnabled();
       <span class="progress-fill" data-flow-progress-fill></span>
     </div>
     <p class="hint progress-note">
-      These are preparation steps on our side, not a download percentage.
+      Progress follows preparation stages. Download percentages appear when an estimated size is available.
     </p>
   </section>
   <p class="hint" data-flow-mux hidden>

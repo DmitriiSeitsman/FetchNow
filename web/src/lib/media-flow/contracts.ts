@@ -58,6 +58,44 @@ const PROGRESS_FOR_STATE: Record<DownloadState, readonly ProgressStage[]> = {
 export const FORMAT_CATEGORIES = ["progressive", "video_only", "audio_only"] as const;
 export type FormatCategory = (typeof FORMAT_CATEGORIES)[number];
 
+export const DOWNLOAD_PERCENT_STAGES = [
+  "downloading_video",
+  "downloading_audio",
+] as const;
+
+const FORBIDDEN_FILENAME_CHARS = new Set([
+  "/",
+  "\\",
+  ":",
+  "*",
+  "?",
+  '"',
+  "<",
+  ">",
+  "|",
+  "\u0000",
+]);
+const BIDI_CODEPOINTS = new Set([
+  0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067,
+  0x2068, 0x2069,
+]);
+const WINDOWS_RESERVED = new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`),
+  ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`),
+]);
+const UUID_FALLBACK_NAME =
+  /^fetchnow-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{2,8}$/i;
+/** Unicode code-point limits; UTF-16 `string.length` must not be used. */
+const MAX_FILENAME_CHARS = 255;
+const MAX_FILENAME_UTF8_BYTES = 240;
+const MAX_STEM_CHARS = 80;
+const MAX_STEM_UTF8_BYTES = 180;
+const ALLOWED_CONTAINERS = new Set(["mp4", "webm", "mkv", "m4a", "mp3", "ogg"]);
+
 const FORBIDDEN_KEYS = new Set([
   "url",
   "urls",
@@ -135,6 +173,9 @@ const DOWNLOAD_KEYS = new Set([
   "maxAttempts",
   "nextAttemptAt",
   "cancellable",
+  "progressPercent",
+  "artifactBytes",
+  "suggestedFilename",
 ]);
 
 export type MediaFormat = {
@@ -192,6 +233,9 @@ export type DownloadJob = {
   maxAttempts: number;
   nextAttemptAt: string | null;
   cancellable: boolean;
+  progressPercent: number | null;
+  artifactBytes: number | null;
+  suggestedFilename: string;
 };
 
 export type ApiErrorBody = {
@@ -395,11 +439,119 @@ function explicitPortInAuthority(authority: string): boolean {
   return authority.includes(":");
 }
 
+function requireIntegerInRange(value: unknown, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    fail();
+  }
+  return value;
+}
+
 function requireBoolean(value: unknown): boolean {
   if (typeof value !== "boolean") {
     fail();
   }
   return value;
+}
+
+export function isSafeSuggestedFilename(name: unknown, container: string): name is string {
+  if (typeof name !== "string" || !ALLOWED_CONTAINERS.has(container)) {
+    return false;
+  }
+  const suffix = `.${container}`;
+  if (!name.endsWith(suffix)) {
+    return false;
+  }
+  if (unicodeCharCount(name) < 1 || unicodeCharCount(name) > MAX_FILENAME_CHARS) {
+    return false;
+  }
+  const utf8 = new TextEncoder().encode(name);
+  if (utf8.length < 1 || utf8.length > MAX_FILENAME_UTF8_BYTES) {
+    return false;
+  }
+  if (
+    [...name].some((ch) => FORBIDDEN_FILENAME_CHARS.has(ch)) ||
+    name.includes("\r") ||
+    name.includes("\n")
+  ) {
+    return false;
+  }
+  const stem = Array.from(name).slice(0, -suffix.length).join("");
+  if (stem !== sanitizeFilenameStem(stem)) {
+    return UUID_FALLBACK_NAME.test(name);
+  }
+  return true;
+}
+
+export function sanitizeFilenameStem(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined || typeof raw !== "string") {
+    return null;
+  }
+  const text = raw.normalize("NFC");
+  const cleaned: string[] = [];
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (BIDI_CODEPOINTS.has(code) || FORBIDDEN_FILENAME_CHARS.has(char)) {
+      continue;
+    }
+    if (code >= 0xd800 && code <= 0xdfff) {
+      continue;
+    }
+    if (/\p{C}/u.test(char)) {
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      cleaned.push(" ");
+      continue;
+    }
+    cleaned.push(char);
+  }
+  let collapsed = cleaned.join("").replace(/\s+/g, " ").replace(/^[ .]+|[ .]+$/g, "");
+  if (!collapsed || collapsed === "." || collapsed === "..") {
+    return null;
+  }
+  const head = collapsed.split(".", 1)[0]?.toUpperCase() ?? "";
+  if (WINDOWS_RESERVED.has(head)) {
+    return null;
+  }
+  if (unicodeCharCount(collapsed) > MAX_STEM_CHARS) {
+    collapsed = unicodePrefix(collapsed, MAX_STEM_CHARS).replace(/[ .]+$/g, "");
+  }
+  let encoded = new TextEncoder().encode(collapsed);
+  if (encoded.length > MAX_STEM_UTF8_BYTES) {
+    encoded = encoded.subarray(0, MAX_STEM_UTF8_BYTES);
+    collapsed = decodeUtf8IgnoreIncomplete(encoded).replace(/[ .]+$/g, "");
+  }
+  if (!collapsed || collapsed === "." || collapsed === "..") {
+    return null;
+  }
+  if (WINDOWS_RESERVED.has(collapsed.toUpperCase())) {
+    return null;
+  }
+  return collapsed;
+}
+
+function unicodeCharCount(text: string): number {
+  return Array.from(text).length;
+}
+
+function unicodePrefix(text: string, maxChars: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= maxChars) {
+    return text;
+  }
+  return chars.slice(0, maxChars).join("");
+}
+
+function decodeUtf8IgnoreIncomplete(bytes: Uint8Array): string {
+  let end = bytes.length;
+  while (end > 0) {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, end));
+    } catch {
+      end -= 1;
+    }
+  }
+  return "";
 }
 
 export function parseMediaFormat(value: unknown): MediaFormat {
@@ -783,6 +935,20 @@ export function parseDownloadJob(value: unknown): DownloadJob {
   ) {
     fail();
   }
+  const progressPercent = parseProgressPercent(
+    value.progressPercent,
+    typedDownloadState,
+    typedProgress,
+  );
+  const artifactBytes = parseArtifactBytes(
+    value.artifactBytes,
+    typedDownloadState,
+    artifactReady,
+  );
+  const suggestedFilename = value.suggestedFilename;
+  if (!isSafeSuggestedFilename(suggestedFilename, selectedFormat.container)) {
+    fail();
+  }
   const createdAt = requireIso(value.createdAt);
   const updatedAt = requireIso(value.updatedAt);
   const expiresAt = requireIso(value.expiresAt);
@@ -812,7 +978,41 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     maxAttempts,
     nextAttemptAt,
     cancellable,
+    progressPercent,
+    artifactBytes,
+    suggestedFilename,
   };
+}
+
+function parseProgressPercent(
+  value: unknown,
+  state: DownloadState,
+  stage: ProgressStage,
+): number | null {
+  const allowed =
+    state === "downloading" &&
+    (DOWNLOAD_PERCENT_STAGES as readonly string[]).includes(stage);
+  if (value === null) {
+    return null;
+  }
+  if (!allowed) {
+    fail();
+  }
+  return requireIntegerInRange(value, 0, 99);
+}
+
+function parseArtifactBytes(
+  value: unknown,
+  state: DownloadState,
+  artifactReady: boolean,
+): number | null {
+  if (state === "ready" && artifactReady) {
+    return requireIntegerInRange(value, 1, Number.MAX_SAFE_INTEGER);
+  }
+  if (value !== null) {
+    fail();
+  }
+  return null;
 }
 
 export function parseApiError(value: unknown): ApiErrorBody {

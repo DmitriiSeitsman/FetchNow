@@ -126,7 +126,7 @@ status exposes `artifactReady` only.
 | Endpoint | Notes |
 |---|---|
 | `POST /api/v1/media/jobs/{mediaJobId}/downloads` | Body: `formatOptionId`; requires parent MediaJob `Authorization: Bearer <accessToken>`. UUID alone never authorizes. |
-| `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. Public JSON may include `progressStage`, `attempt`, `maxAttempts`, `nextAttemptAt` (only while retrying), and `cancellable`. Internal failure class is never returned. |
+| `GET /api/v1/media/download-jobs/{id}` | Same Bearer as parent. Missing/wrong credential → `DOWNLOAD_JOB_NOT_FOUND`. Public JSON may include `progressStage`, `progressPercent` (integer 0..99 or `null`, only during download stages with a bounded denominator), `artifactBytes` (positive integer only when `ready`), `suggestedFilename`, `attempt`, `maxAttempts`, `nextAttemptAt` (only while retrying), and `cancellable`. Internal failure class is never returned. |
 | `POST /api/v1/media/download-jobs/{id}/cancel` | Same Bearer. Idempotent. `Cache-Control: no-store`. UUID alone never authorizes. Unknown and unauthorized are indistinguishable (`DOWNLOAD_JOB_NOT_FOUND`). Queued → `cancelled` without running a tool. Downloading records a cancel request; the worker commits `cancelled`. Ready/failed/expired are unchanged (ready artifacts are not deleted). |
 
 See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
@@ -148,6 +148,11 @@ the PR9 allowlist; PR10 projects cancellation from `expired` +
 (`progressStage`), not a percentage. Catalog errors stay catalog errors;
 internal `failure_class` values are logs-only.
 
+PR12 adds public `progressPercent` only for download stages with a bounded
+denominator, exact `artifactBytes` only when ready, and `suggestedFilename`
+from a sanitized title. See
+[ADR 0015](../adr/0015-size-progress-filename-trust-boundary.md).
+
 See [ADR 0014](../adr/0014-download-observability-cancellation-progress.md).
 
 ## Browser client (PR8)
@@ -168,4 +173,5 @@ generic fallback. See [browser download flow](browser-download-flow.md).
 - [ADR 0012 — browser download flow](../adr/0012-browser-download-flow.md)
 - [ADR 0013 — bounded media muxing](../adr/0013-bounded-media-muxing.md)
 - [ADR 0014 — download observability, cancellation, and progress](../adr/0014-download-observability-cancellation-progress.md)
+- [ADR 0015 — size, progress percent, and filename trust boundary](../adr/0015-size-progress-filename-trust-boundary.md)
 - [Capacity policy](../operations/capacity-policy.md)

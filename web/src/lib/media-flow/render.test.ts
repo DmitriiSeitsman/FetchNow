@@ -32,6 +32,8 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     canCancelTask: false,
     restored: false,
     progressStage: null,
+    progressPercent: null,
+    artifactBytes: null,
     ...partial,
   };
 }

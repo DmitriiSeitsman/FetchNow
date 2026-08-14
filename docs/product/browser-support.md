@@ -17,4 +17,7 @@ Unsupported browsers:
 - may finish saving later in a supported browser/tab until `expiresAt`.
 
 There is no Blob fallback, no query-token download, and no service-worker
-credential proxy in PR8.
+credential proxy in PR8. Save uses `showSaveFilePicker({ suggestedName })`
+with the server `suggestedFilename`. Unicode names rely on RFC 8187
+`filename*` in `Content-Disposition`; the ASCII `filename=` parameter is a
+safe fallback and must not weaken the browser check.

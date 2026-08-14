@@ -53,7 +53,9 @@ When free disk falls below soft/hard thresholds (`TEMP_STORAGE_SOFT_LIMIT_BYTES`
 - Prepared files are **not** placed under the public web root and are **not** indexed.
 - Objects are **not** reachable via guessable paths or sequential IDs alone.
 - Storage keys are **cryptographically random**; the original filename is never the storage key.
-- Original filenames, if shown to users, are display metadata only and must be sanitized for logs (`docs/security/logging-and-privacy.md`).
+- Display names are a sanitized provider title (not a trusted raw filename).
+  Pre-download size shown to users is approximate; the ready artifact size is
+  exact. No extra CDN request is made just to estimate size.
 
 ## Related documents
 

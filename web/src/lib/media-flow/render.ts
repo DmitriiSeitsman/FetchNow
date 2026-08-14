@@ -1,4 +1,5 @@
 import type { FlowSnapshot } from "./controller";
+import { formatApproxBytes } from "./bytes";
 import { progressView } from "./progress";
 import { groupQualityOptions, type QualityOption } from "./quality";
 
@@ -21,29 +22,12 @@ function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: 
   return "Not available in the current free download mode.";
 }
 
-function formatBytes(value: number | null): string {
-  if (value === null) {
-    return "";
-  }
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** Secondary row text: container, FPS and size, only when the data exists. */
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
   const parts: string[] = [format.container.toUpperCase()];
   if (typeof format.fps === "number" && Number.isFinite(format.fps) && format.fps > 0) {
     parts.push(`${Math.round(format.fps)} fps`);
   }
-  const size = formatBytes(format.approxBytes);
-  if (size) {
-    parts.push(`≈ ${size}`);
-  }
+  parts.push(formatApproxBytes(format.approxBytes));
   return parts.join(" · ");
 }
 
@@ -81,7 +65,11 @@ function qualityRow(
 }
 
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
-  const progress = progressView(snapshot.phase, snapshot.progressStage);
+  const progress = progressView(snapshot.phase, snapshot.progressStage, {
+    progressPercent: snapshot.progressPercent,
+    artifactBytes: snapshot.artifactBytes,
+    formats: snapshot.formats,
+  });
   const status = root.querySelector("[data-flow-status]");
   // While the progress card is visible it owns the stage copy, so the status
   // line stays free for errors and instructions instead of repeating it.

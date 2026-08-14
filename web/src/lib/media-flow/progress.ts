@@ -1,12 +1,10 @@
-import type { ProgressStage } from "./contracts";
+import type { MediaFormat, ProgressStage } from "./contracts";
+import { formatExactBytes } from "./bytes";
 import type { FlowPhase } from "./state-machine";
 
 /**
- * Stage-based preparation progress.
- *
- * The backend reports the preparation stage, never the number of downloaded
- * bytes, so the indicator describes how many preparation steps are done. It is
- * deliberately not a download byte percentage.
+ * Stage-based preparation progress, with real byte percent only inside
+ * download stages when the backend supplies a bounded denominator.
  */
 export type ProgressTone = "active" | "done";
 
@@ -27,7 +25,7 @@ export type ProgressView = {
 export const STAGE_LABEL: Readonly<Record<ProgressStage, string>> = Object.freeze({
   queued: "Waiting to start…",
   inspecting: "Confirming the selected quality…",
-  downloading_video: "Downloading video…",
+  downloading_video: "Downloading file…",
   downloading_audio: "Downloading audio…",
   muxing: "Combining video and audio…",
   verifying: "Checking the prepared file…",
@@ -71,6 +69,18 @@ export const STAGE_COMPLETION: Readonly<Record<ProgressStage, number>> = Object.
   expired: 0,
 });
 
+const STAGE_RANGE_START: Readonly<Partial<Record<ProgressStage, number>>> = Object.freeze({
+  queued: 0,
+  retrying: STAGE_COMPLETION.queued,
+  inspecting: STAGE_COMPLETION.queued,
+  downloading_video: STAGE_COMPLETION.inspecting,
+  downloading_audio: STAGE_COMPLETION.downloading_video,
+  muxing: STAGE_COMPLETION.downloading_audio,
+  verifying: STAGE_COMPLETION.muxing,
+  publishing: STAGE_COMPLETION.verifying,
+  ready: STAGE_COMPLETION.publishing,
+});
+
 const PHASE_COMPLETION: Readonly<Partial<Record<FlowPhase, number>>> = Object.freeze({
   submitting: 4,
   inspecting: 12,
@@ -82,7 +92,7 @@ const PHASE_COMPLETION: Readonly<Partial<Record<FlowPhase, number>>> = Object.fr
 });
 
 export const PROGRESS_NOTE =
-  "These are preparation steps on our side, not a download percentage.";
+  "Progress follows preparation stages. Download percentages appear when an estimated size is available.";
 
 const STAGE_DRIVEN_PHASES: ReadonlySet<FlowPhase> = new Set([
   "enqueueing_download",
@@ -107,10 +117,28 @@ const HALTED_STAGES: ReadonlySet<ProgressStage> = new Set([
   "expired",
 ]);
 
+const DOWNLOAD_STAGES: ReadonlySet<ProgressStage> = new Set([
+  "downloading_video",
+  "downloading_audio",
+]);
+
+export type ProgressOptions = {
+  progressPercent?: number | null;
+  artifactBytes?: number | null;
+  formats?: readonly MediaFormat[];
+};
+
 /** Status copy for the current phase, using the stage while a job is running. */
-export function flowStatusText(phase: FlowPhase, stage: ProgressStage | null): string {
+export function flowStatusText(
+  phase: FlowPhase,
+  stage: ProgressStage | null,
+  options: ProgressOptions = {},
+): string {
   if (STAGE_DRIVEN_PHASES.has(phase) && stage) {
-    return STAGE_LABEL[stage] ?? PHASE_LABEL[phase] ?? "";
+    return downloadAwareLabel(stage, options);
+  }
+  if (phase === "ready" && options.artifactBytes != null && options.artifactBytes > 0) {
+    return `${PHASE_LABEL.ready} · ${formatExactBytes(options.artifactBytes)}`;
   }
   return PHASE_LABEL[phase] ?? "";
 }
@@ -118,12 +146,13 @@ export function flowStatusText(phase: FlowPhase, stage: ProgressStage | null): s
 export function progressView(
   phase: FlowPhase,
   stage: ProgressStage | null,
+  options: ProgressOptions = {},
 ): ProgressView {
   const halted = stage !== null && HALTED_STAGES.has(stage);
   const visible = PROGRESS_PHASES.has(phase) && !halted;
   const done = DONE_PHASES.has(phase);
-  const label = visible ? flowStatusText(phase, stage) : "";
-  const percent = visible ? completion(phase, stage) : 0;
+  const label = visible ? flowStatusText(phase, stage, options) : "";
+  const percent = visible ? completion(phase, stage, options.progressPercent ?? null) : 0;
   return {
     visible,
     label,
@@ -134,11 +163,41 @@ export function progressView(
   };
 }
 
-function completion(phase: FlowPhase, stage: ProgressStage | null): number {
+function downloadAwareLabel(stage: ProgressStage, options: ProgressOptions): string {
+  const percent = options.progressPercent ?? null;
+  if (stage === "downloading_audio") {
+    return withOptionalPercent("Downloading audio", percent);
+  }
+  if (stage === "downloading_video") {
+    return withOptionalPercent("Downloading file", percent);
+  }
+  return STAGE_LABEL[stage] ?? "";
+}
+
+function withOptionalPercent(base: string, percent: number | null): string {
+  if (percent === null) {
+    return `${base}…`;
+  }
+  return `${base} (${percent}%)`;
+}
+
+function completion(
+  phase: FlowPhase,
+  stage: ProgressStage | null,
+  progressPercent: number | null,
+): number {
   if (DONE_PHASES.has(phase) || phase === "saving") {
     return PHASE_COMPLETION[phase] ?? 100;
   }
   if (STAGE_DRIVEN_PHASES.has(phase) && stage) {
+    if (DOWNLOAD_STAGES.has(stage)) {
+      const start = STAGE_RANGE_START[stage] ?? 0;
+      const end = STAGE_COMPLETION[stage];
+      if (progressPercent === null) {
+        return start;
+      }
+      return start + Math.floor(((end - start) * progressPercent) / 99);
+    }
     return STAGE_COMPLETION[stage] ?? PHASE_COMPLETION[phase] ?? 0;
   }
   return PHASE_COMPLETION[phase] ?? 0;

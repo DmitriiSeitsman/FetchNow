@@ -12,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fetchnow.core.config import Settings
 from fetchnow.delivery.reader import ArtifactReader, OpenArtifactHandle
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
+from fetchnow.downloads.filename import (
+    content_disposition_header,
+    fallback_filename,
+    is_safe_suggested_filename,
+)
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.states import MediaDownloadJobState
@@ -186,11 +191,27 @@ class DeliveryService:
             )
 
     @staticmethod
-    def content_disposition(download_job_id: uuid.UUID, container: str) -> str:
-        """Server-generated ASCII attachment filename (never user-derived)."""
-        safe_container = container.strip().lower()
-        name = f"fetchnow-{download_job_id}.{safe_container}"
-        return f'attachment; filename="{name}"'
+    def content_disposition(job: MediaDownloadJob) -> str:
+        """RFC 8187 attachment name from the persisted suggested filename."""
+        container = str(job.artifact_container or "").strip().lower()
+        try:
+            fallback = fallback_filename(job.id, container)
+            stored = job.suggested_filename
+            if stored is None or stored == "":
+                name = fallback
+            elif not is_safe_suggested_filename(stored, container=container):
+                raise_download_error(
+                    DownloadErrorCode.INTERNAL_ERROR,
+                    internal_reason="SUGGESTED_FILENAME_INVALID",
+                )
+            else:
+                name = stored
+            return content_disposition_header(filename=name, ascii_fallback=fallback)
+        except ValueError:
+            raise_download_error(
+                DownloadErrorCode.INTERNAL_ERROR,
+                internal_reason="CONTENT_DISPOSITION_INVALID",
+            )
 
     @staticmethod
     def security_headers(

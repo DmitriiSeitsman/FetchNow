@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
 from fetchnow.downloads.artifacts import ArtifactStore
@@ -40,10 +40,71 @@ async def _terminate_download_group(
 
 # Re-export sanitized env helpers for download adapters.
 __all__ = [
+    "CoalescingProgressWriter",
     "DownloadProcessRunner",
     "assert_env_has_no_secrets",
     "build_sanitized_env",
 ]
+
+
+class CoalescingProgressWriter:
+    """At most one persist task; new samples replace the pending observed value.
+
+    The size/disk monitor must never await this writer. Shutdown cancels and
+    awaits the in-flight task so it cannot outlive ``run()``.
+    """
+
+    def __init__(self, persist: Callable[[int], Awaitable[None]]) -> None:
+        self._persist = persist
+        self._latest: int | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._closed = False
+        self.spawn_count = 0
+
+    def observe(self, observed_bytes: int) -> None:
+        """Record the latest observed size without waiting for persistence."""
+        if self._closed:
+            return
+        if type(observed_bytes) is bool or not isinstance(observed_bytes, int):
+            return
+        value = max(0, observed_bytes)
+        if self._latest is None:
+            self._latest = value
+        else:
+            self._latest = max(self._latest, value)
+        if self._task is None or self._task.done():
+            self.spawn_count += 1
+            self._task = asyncio.create_task(
+                self._drain(), name="download-progress-writer"
+            )
+
+    @property
+    def task(self) -> asyncio.Task[None] | None:
+        return self._task
+
+    async def aclose(self) -> None:
+        self._closed = True
+        task = self._task
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _drain(self) -> None:
+        try:
+            while self._latest is not None and not self._closed:
+                value = self._latest
+                self._latest = None
+                try:
+                    await self._persist(value)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Persistence failures must not disable size/runtime checks.
+                    # Do not log callback details; they may contain paths.
+                    return
+        except asyncio.CancelledError:
+            raise
 
 
 async def _read_bounded(
@@ -77,7 +138,10 @@ class DownloadProcessRunner:
     Callers receive empty stdout/stderr so public error/log paths cannot leak
     tool output. Internal readers still enforce byte ceilings. Optional output
     tree / free-disk monitors kill the process group when budgets are exceeded.
+    Progress persistence is coalesced off the safety-monitor loop.
     """
+
+    progress_writer_spawns: int = 0
 
     async def run(
         self,
@@ -101,6 +165,7 @@ class DownloadProcessRunner:
         ),
         spawn_code: DownloadErrorCode = DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
         started: asyncio.Event | None = None,
+        on_observed_bytes: Callable[[int], Awaitable[None]] | None = None,
     ) -> ProcessResult:
         if not argv:
             raise_download_error(
@@ -129,6 +194,12 @@ class DownloadProcessRunner:
         stdout_task: asyncio.Task[bytes] | None = None
         stderr_task: asyncio.Task[bytes] | None = None
         monitor_task: asyncio.Task[None] | None = None
+        progress_writer = (
+            CoalescingProgressWriter(on_observed_bytes)
+            if on_observed_bytes is not None
+            else None
+        )
+        self.progress_writer_spawns = 0
         failure_path = False
         limit_code: DownloadErrorCode | None = None
         captured_stdout = b""
@@ -199,11 +270,12 @@ class DownloadProcessRunner:
             nonlocal limit_code
             while True:
                 await asyncio.sleep(0.2)
+                watched = _watched_bytes() if size_roots else 0
                 if (
                     size_roots
                     and max_output_bytes is not None
                     and max_output_bytes > 0
-                    and _watched_bytes() > max_output_bytes
+                    and watched > max_output_bytes
                 ):
                     limit_code = too_large_code
                     await _terminate_download_group(proc, pgid=pgid)
@@ -223,6 +295,8 @@ class DownloadProcessRunner:
                         limit_code = storage_code
                         await _terminate_download_group(proc, pgid=pgid)
                         return
+                if progress_writer is not None and size_roots:
+                    progress_writer.observe(watched)
 
         async def _cancel_aux() -> None:
             tasks = [
@@ -234,6 +308,9 @@ class DownloadProcessRunner:
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            if progress_writer is not None:
+                await progress_writer.aclose()
+                self.progress_writer_spawns = progress_writer.spawn_count
 
         timed_out = False
         try:

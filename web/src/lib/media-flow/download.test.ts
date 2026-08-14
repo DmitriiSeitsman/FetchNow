@@ -5,8 +5,12 @@ import {
   saveArtifactStream,
   suggestedFilename,
   fileSystemAccessSupported,
+  contentDispositionHeader,
 } from "./download";
 import { DOWNLOAD_ID } from "./fixtures";
+
+const SAVE_NAME = suggestedFilename(DOWNLOAD_ID, "mp4");
+const DISPOSITION = contentDispositionHeader(SAVE_NAME, SAVE_NAME);
 
 function chunkStream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   let i = 0;
@@ -49,7 +53,7 @@ describe("download streaming", () => {
         headers: {
           "Content-Type": "video/mp4",
           "Content-Length": "3",
-          "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+          "Content-Disposition": DISPOSITION,
         },
       });
     });
@@ -57,6 +61,7 @@ describe("download streaming", () => {
       downloadJobId: DOWNLOAD_ID,
       token: "tokentokentokentokentokentokentoken12",
       container: "mp4",
+      suggestedFilename: SAVE_NAME,
       signal: new AbortController().signal,
       deps: {
         origin: "http://localhost",
@@ -82,6 +87,7 @@ describe("download streaming", () => {
         downloadJobId: DOWNLOAD_ID,
         token: "tokentokentokentokentokentokentoken12",
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -98,7 +104,7 @@ describe("download streaming", () => {
               headers: {
                 "Content-Type": "video/mp4",
                 "Content-Length": length,
-                "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+                "Content-Disposition": DISPOSITION,
               },
             })) as unknown as typeof fetch,
         },
@@ -118,6 +124,7 @@ describe("download streaming", () => {
         downloadJobId: DOWNLOAD_ID,
         token: "tokentokentokentokentokentokentoken12",
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -137,7 +144,7 @@ describe("download streaming", () => {
         headers: {
           "Content-Type": "video/mp4",
           "Content-Length": "4",
-          "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+          "Content-Disposition": DISPOSITION,
         },
       });
     });
@@ -146,6 +153,7 @@ describe("download streaming", () => {
         downloadJobId: DOWNLOAD_ID,
         token: "tokentokentokentokentokentokentoken12",
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -202,7 +210,7 @@ function contentHeaders(length: string): Headers {
   return new Headers({
     "Content-Type": "video/mp4",
     "Content-Length": length,
-    "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+    "Content-Disposition": DISPOSITION,
   });
 }
 
@@ -217,6 +225,7 @@ describe("download resource lifecycle", () => {
       downloadJobId: DOWNLOAD_ID,
       token,
       container: "mp4",
+      suggestedFilename: SAVE_NAME,
       signal: new AbortController().signal,
       deps: {
         origin: "http://localhost",
@@ -244,6 +253,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -270,6 +280,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -293,6 +304,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -323,6 +335,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -373,6 +386,7 @@ describe("download resource lifecycle", () => {
       downloadJobId: DOWNLOAD_ID,
       token,
       container: "mp4",
+      suggestedFilename: SAVE_NAME,
       signal: ac.signal,
       deps: {
         origin: "http://localhost",
@@ -405,6 +419,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -425,6 +440,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -457,6 +473,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -489,6 +506,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -513,6 +531,7 @@ describe("download resource lifecycle", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -551,6 +570,7 @@ describe("pre-stream header rejection cancels the body", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -575,7 +595,7 @@ describe("pre-stream header rejection cancels the body", () => {
       new Headers({
         "Content-Type": "text/html",
         "Content-Length": "3",
-        "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+        "Content-Disposition": DISPOSITION,
       }),
     );
     expect(thrown).toMatchObject({ code: "CONTRACT" });
@@ -589,7 +609,7 @@ describe("pre-stream header rejection cancels the body", () => {
     const { tracked, close, thrown } = await rejectPrestream(
       new Headers({
         "Content-Length": "3",
-        "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+        "Content-Disposition": DISPOSITION,
       }),
     );
     expect(thrown).toMatchObject({ code: "CONTRACT" });
@@ -603,7 +623,7 @@ describe("pre-stream header rejection cancels the body", () => {
       new Headers({
         "Content-Type": "video/mp4",
         "Content-Length": "not-a-number",
-        "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+        "Content-Disposition": DISPOSITION,
       }),
     );
     expect(thrown).toMatchObject({ code: "CONTRACT" });
@@ -617,7 +637,7 @@ describe("pre-stream header rejection cancels the body", () => {
       new Headers({
         "Content-Type": "video/mp4",
         "Content-Length": "536870913",
-        "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+        "Content-Disposition": DISPOSITION,
       }),
     );
     expect(thrown).toMatchObject({ code: "DOWNLOAD_TOO_LARGE" });
@@ -673,6 +693,7 @@ describe("pre-stream header rejection cancels the body", () => {
         downloadJobId: DOWNLOAD_ID,
         token,
         container: "mp4",
+        suggestedFilename: SAVE_NAME,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -697,7 +718,7 @@ describe("pre-stream header rejection cancels the body", () => {
       new Headers({
         "Content-Type": "text/plain",
         "Content-Length": "3",
-        "Content-Disposition": `attachment; filename="${suggestedFilename(DOWNLOAD_ID, "mp4")}"`,
+        "Content-Disposition": DISPOSITION,
       }),
       true,
     );

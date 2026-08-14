@@ -56,6 +56,8 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     canCancelTask: false,
     restored: false,
     progressStage: null,
+    progressPercent: null,
+    artifactBytes: null,
     ...partial,
   };
 }
@@ -93,7 +95,7 @@ function mountFlow(): void {
           <span class="progress-fill" data-flow-progress-fill></span>
         </div>
         <p class="hint progress-note">
-          These are preparation steps on our side, not a download percentage.
+          Progress follows preparation stages. Download percentages appear when an estimated size is available.
         </p>
       </section>
       <p class="hint" data-flow-mux hidden></p>
@@ -275,7 +277,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
         downloadEligible: true,
       }),
     );
-    expect(el(".format-detail").textContent).toBe("MP4");
+    expect(el(".format-detail").textContent).toBe(
+      "MP4 · Size available after preparation",
+    );
   });
 
   it("disables an unavailable quality with a short reason", () => {
@@ -314,7 +318,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const cases: Array<[FlowSnapshot["progressStage"], string]> = [
       ["queued", "Waiting to start…"],
       ["inspecting", "Confirming the selected quality…"],
-      ["downloading_video", "Downloading video…"],
+      ["downloading_video", "Downloading file…"],
       ["downloading_audio", "Downloading audio…"],
       ["muxing", "Combining video and audio…"],
       ["verifying", "Checking the prepared file…"],
@@ -336,7 +340,10 @@ describe("PR11 loader, quality and stage progress UI", () => {
     }
     expect([...seen].sort((a, b) => a - b)).toEqual(seen);
     expect(document.body.textContent ?? "").not.toMatch(/\d+\s*%/);
-    expect(el(".progress-note").textContent).toMatch(/not a download percentage/i);
+    expect(el(".progress-note").textContent).toMatch(
+      /Download percentages appear when an estimated size is available/i,
+    );
+    expect(el(".progress-note").textContent ?? "").not.toMatch(/not a download percentage/i);
   });
 
   it("lets a direct progressive job skip the audio and muxing stages", () => {
@@ -543,7 +550,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(controller.snapshot().phase).toBe("ready");
     expect(controller.snapshot().errorText).toBeNull();
     expect(labels).not.toContain("The file could not be prepared.");
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to save");
+    expect(el("[data-flow-progress-label]").textContent).toBe(
+      "Ready to save · 11.4 MB",
+    );
   });
 
   it("restores an active download into the progress card", async () => {
@@ -596,7 +605,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(controller.snapshot().phase).toBe("ready");
     expect(el("[data-flow-restored]").hidden).toBe(false);
     expect(el("[data-flow-progress]").hidden).toBe(false);
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to save");
+    expect(el("[data-flow-progress-label]").textContent).toBe(
+      "Ready to save · 11.4 MB",
+    );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
   });
 });

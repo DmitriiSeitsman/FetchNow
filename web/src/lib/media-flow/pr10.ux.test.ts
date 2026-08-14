@@ -41,6 +41,8 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     canCancelTask: true,
     restored: false,
     progressStage: "downloading_video",
+    progressPercent: null,
+    artifactBytes: null,
     ...partial,
   };
 }
@@ -75,12 +77,12 @@ describe("PR10 loader, format, and contrast UX", () => {
     renderFlow(
       document,
       snapshot({
-        statusText: "Downloading video…",
+        statusText: "Downloading file…",
         progressStage: "downloading_video",
       }),
     );
     const stage = document.querySelector("[data-flow-progress-label]");
-    expect(stage?.textContent).toBe("Downloading video…");
+    expect(stage?.textContent).toBe("Downloading file…");
     const status = document.querySelector("[data-flow-status]");
     expect(status?.textContent).toBe("");
     expect(status?.getAttribute("aria-live")).toBe("polite");

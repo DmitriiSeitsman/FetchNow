@@ -40,7 +40,7 @@ Development defaults live in `backend/.env.example` and root `.env.example`.
 
 ## Size and duration
 
-Reject or fail jobs exceeding `MAX_SOURCE_DURATION_SECONDS`, `MAX_SOURCE_FILE_BYTES`, or `MAX_OUTPUT_FILE_BYTES` with `DURATION_TOO_LONG` / `FILE_TOO_LARGE` as applicable.
+Reject or fail jobs exceeding `MAX_SOURCE_DURATION_SECONDS`, `MAX_SOURCE_FILE_BYTES`, or `MAX_OUTPUT_FILE_BYTES` with `DURATION_TOO_LONG` / `FILE_TOO_LARGE` as applicable. Inspection size estimates that exceed `MAX_SOURCE_FILE_BYTES` are dropped from the offered formats rather than advertised. Those estimates are approximate; the ready artifact size is exact. No extra CDN request is made just to estimate size.
 
 PR4 media inspection reads the same duration/byte caps (and
 `MEDIA_INSPECTION_MAX_*` / JSON structural bounds) when projecting metadata.
