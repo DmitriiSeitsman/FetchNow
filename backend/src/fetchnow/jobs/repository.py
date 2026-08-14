@@ -419,6 +419,11 @@ class MediaJobRepository:
         for job in jobs:
             assert_transition(job.public_state, MediaJobState.EXPIRED)
             job.public_state = MediaJobState.EXPIRED.value
+            # ck_media_jobs_result_state requires expired rows to store
+            # NULL result_metadata and public_error_code. Clear only after
+            # this row is selected for expiry (SKIP LOCKED).
+            job.result_metadata = None
+            job.public_error_code = None
             job.lease_owner = None
             job.lease_expires_at = None
             job.updated_at = now

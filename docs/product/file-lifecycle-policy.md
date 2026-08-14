@@ -23,6 +23,7 @@ Transitions are fail-closed: unknown or illegal transitions must not re-expose b
 
 - **Ready-file TTL** (`READY_FILE_TTL_SECONDS`): maximum time an object may remain downloadable after becoming `ready`.
 - **Absolute job TTL** (`JOB_ABSOLUTE_TTL_SECONDS`): wall-clock ceiling from job creation to forced terminal cleanup, regardless of state.
+- **Media inspection job TTL** (`MEDIA_JOB_ABSOLUTE_TTL_SECONDS`): wall-clock ceiling for inspection rows (`queued` / `inspecting` / `inspected` / `failed` → `expired`). Expiry clears persisted `result_metadata` and `public_error_code` (privacy/capacity). `completed_at` is kept when already set. The job row is not deleted.
 - Download tokens (future) inherit a **short TTL** strictly ≤ ready-file TTL.
 
 Defaults are environment-driven; see `docs/operations/capacity-policy.md`.

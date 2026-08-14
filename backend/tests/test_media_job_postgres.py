@@ -13,9 +13,11 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fetchnow.core.config import Settings
@@ -93,32 +95,65 @@ async def _cleanup_jobs(session: AsyncSession) -> None:
     await session.commit()
 
 
+_INSPECTED_METADATA = {
+    "providerId": "vk",
+    "canonicalProviderUrl": "https://vk.com/video-1_2",
+    "mediaId": "-1_2",
+    "title": None,
+    "durationSeconds": 10,
+    "formats": [],
+    "muxingRequired": False,
+    "extractionTool": "ytdlp",
+    "extractionToolVersion": None,
+}
+
+
 async def _enqueue_job(
     session: AsyncSession,
     *,
     max_attempts: int = 3,
+    media_id: str = "-1_2",
+    now: datetime | None = None,
+    ttl_seconds: int = 3600,
 ) -> tuple[MediaJobRepository, MediaJob]:
     repo = MediaJobRepository(session)
-    now = await repo.database_now()
+    if now is None:
+        now = await repo.database_now()
     token = generate_access_token()
+    canonical = f"https://vk.com/video{media_id}"
     job, _ = await repo.enqueue_or_get(
         credential_hash=hash_access_token(token),
         request_fingerprint=hash_request_fingerprint(
             access_token=token,
-            normalized_request="https://vk.com/video-1_2",
+            normalized_request=canonical,
         ),
         provider_id="vk",
-        canonical_provider_url="https://vk.com/video-1_2",
-        media_id="-1_2",
+        canonical_provider_url=canonical,
+        media_id=media_id,
         hostname="vk.com",
-        path="/video-1_2",
+        path=f"/video{media_id}",
         scheme="https",
         port=None,
         now=now,
-        ttl_seconds=3600,
+        ttl_seconds=ttl_seconds,
         max_attempts=max_attempts,
     )
     return repo, job
+
+
+def _identity(job: MediaJob) -> tuple[object, ...]:
+    return (
+        job.provider_id,
+        job.canonical_provider_url,
+        job.media_id,
+        job.hostname,
+        job.path,
+        job.scheme,
+        job.port,
+        bytes(job.credential_hash),
+        bytes(job.request_fingerprint),
+        job.expires_at,
+    )
 
 
 def test_alembic_upgrade_downgrade_upgrade(database_url: str) -> None:
@@ -495,3 +530,381 @@ async def test_crash_recovery_stops_at_max_attempts(
             limit=1,
         ) == []
         await session.commit()
+
+
+async def _mark_ttl_elapsed(session: AsyncSession, job_id: uuid.UUID) -> MediaJob:
+    repo = MediaJobRepository(session)
+    row = await repo.get_by_id(job_id)
+    assert row is not None
+    row.expires_at = (await repo.database_now()) - timedelta(seconds=5)
+    await session.flush()
+    loaded = await repo.get_by_id(job_id)
+    assert loaded is not None
+    return loaded
+
+
+async def _complete_inspected(
+    repo: MediaJobRepository,
+    job: MediaJob,
+    *,
+    now: datetime,
+    owner: str = "worker-a",
+) -> MediaJob:
+    claimed = await repo.claim_next(
+        worker_id=owner, lease_seconds=60, now=now, limit=1
+    )
+    assert len(claimed) == 1
+    applied = await repo.complete(
+        job_id=job.id,
+        owner=owner,
+        fence=int(claimed[0].fence_token),
+        metadata_json=_INSPECTED_METADATA,
+        now=now,
+    )
+    assert applied is True
+    loaded = await repo.get_by_id(job.id)
+    assert loaded is not None
+    return loaded
+
+
+def _assert_expired_payload_cleared(row: MediaJob) -> None:
+    assert row.public_state == MediaJobState.EXPIRED.value
+    assert row.result_metadata is None
+    assert row.public_error_code is None
+    assert row.lease_owner is None
+    assert row.lease_expires_at is None
+    assert row.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_expire_inspected_clears_result_and_keeps_completed_at(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        inspected = await _complete_inspected(repo, job, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        due = await _mark_ttl_elapsed(session, inspected.id)
+        completed_before = due.completed_at
+        fence_before = int(due.fence_token)
+        identity = _identity(due)
+        repo = MediaJobRepository(session)
+        now = await repo.database_now()
+        count = await repo.expire_due_jobs(now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(inspected.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+        assert row.completed_at == completed_before
+        assert int(row.fence_token) == fence_before + 1
+        assert row.updated_at == now
+        assert _identity(row) == identity
+
+
+@pytest.mark.asyncio
+async def test_expire_failed_clears_error_and_keeps_completed_at(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        claimed = await repo.claim_next(
+            worker_id="worker-a", lease_seconds=60, now=now, limit=1
+        )
+        assert len(claimed) == 1
+        applied = await repo.fail_permanent(
+            job_id=job.id,
+            owner="worker-a",
+            fence=int(claimed[0].fence_token),
+            public_error_code=JobErrorCode.MEDIA_INSPECTION_FAILED.value,
+            now=now,
+        )
+        assert applied is True
+        await session.commit()
+
+    async with session_factory() as session:
+        due = await _mark_ttl_elapsed(session, job.id)
+        completed_before = due.completed_at
+        fence_before = int(due.fence_token)
+        identity = _identity(due)
+        repo = MediaJobRepository(session)
+        now = await repo.database_now()
+        count = await repo.expire_due_jobs(now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(job.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+        assert row.completed_at == completed_before
+        assert int(row.fence_token) == fence_before + 1
+        assert _identity(row) == identity
+
+
+@pytest.mark.asyncio
+async def test_expire_queued_sets_completed_at(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo = MediaJobRepository(session)
+        db_now = await repo.database_now()
+        _, job = await _enqueue_job(
+            session,
+            now=db_now - timedelta(hours=2),
+            ttl_seconds=60,
+        )
+        identity = _identity(job)
+        count = await repo.expire_due_jobs(db_now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(job.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+        assert row.completed_at == db_now
+        assert _identity(row) == identity
+
+
+@pytest.mark.asyncio
+async def test_expire_inspecting_drops_lease_and_blocks_stale_complete(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        claimed = await repo.claim_next(
+            worker_id="worker-a", lease_seconds=120, now=now, limit=1
+        )
+        assert len(claimed) == 1
+        stale_owner = claimed[0].lease_owner
+        stale_fence = int(claimed[0].fence_token)
+        await session.commit()
+
+    async with session_factory() as session:
+        due = await _mark_ttl_elapsed(session, job.id)
+        assert due.lease_owner == stale_owner
+        fence_before = int(due.fence_token)
+        repo = MediaJobRepository(session)
+        now = await repo.database_now()
+        count = await repo.expire_due_jobs(now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(job.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+        assert row.completed_at == now
+        assert int(row.fence_token) == fence_before + 1
+        applied = await repo.complete(
+            job_id=job.id,
+            owner=str(stale_owner),
+            fence=stale_fence,
+            metadata_json=_INSPECTED_METADATA,
+            now=now,
+        )
+        assert applied is False
+        still = await repo.get_by_id(job.id)
+        assert still is not None
+        assert still.public_state == MediaJobState.EXPIRED.value
+        assert still.result_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_result_state_check_rejects_expired_with_metadata(
+    session_factory: async_sessionmaker[AsyncSession],
+    engine: AsyncEngine,
+) -> None:
+    async with engine.connect() as conn:
+        definition = await conn.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'ck_media_jobs_result_state'"
+            )
+        )
+    assert isinstance(definition, str)
+    lowered = definition.lower()
+    assert "ck_media_jobs_result_state" not in lowered  # definition body only
+    assert "inspected" in lowered
+    assert "failed" in lowered
+    assert "result_metadata is not null" in lowered
+    assert "public_error_code is null" in lowered
+    assert "result_metadata is null" in lowered
+    assert "public_error_code is not null" in lowered
+    assert "completed_at is not null" in lowered
+    assert "<> all" in lowered or "not in" in lowered
+
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        await _complete_inspected(repo, job, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(IntegrityError):
+            await session.execute(
+                text(
+                    "UPDATE media_jobs SET public_state = 'expired' "
+                    "WHERE id = :id"
+                ),
+                {"id": job.id},
+            )
+            await session.commit()
+        await session.rollback()
+        row = await MediaJobRepository(session).get_by_id(job.id)
+        assert row is not None
+        assert row.public_state == MediaJobState.INSPECTED.value
+        assert row.result_metadata is not None
+
+    async with session_factory() as session:
+        await _mark_ttl_elapsed(session, job.id)
+        repo = MediaJobRepository(session)
+        now = await repo.database_now()
+        count = await repo.expire_due_jobs(now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(job.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+
+
+@pytest.mark.asyncio
+async def test_locked_expiry_candidate_is_skipped(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        await _complete_inspected(repo, job, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        await _mark_ttl_elapsed(session, job.id)
+        await session.commit()
+
+    async with session_factory() as locker:
+        locked = await locker.scalar(
+            select(MediaJob).where(MediaJob.id == job.id).with_for_update()
+        )
+        assert locked is not None
+        async with session_factory() as other:
+            repo = MediaJobRepository(other)
+            now = await repo.database_now()
+            skipped = await asyncio.wait_for(repo.expire_due_jobs(now), timeout=2.0)
+            assert skipped == 0
+            current = await repo.get_by_id(job.id)
+            assert current is not None
+            assert current.public_state == MediaJobState.INSPECTED.value
+            assert current.result_metadata is not None
+            await other.rollback()
+        await locker.rollback()
+
+    async with session_factory() as session:
+        repo = MediaJobRepository(session)
+        now = await repo.database_now()
+        count = await repo.expire_due_jobs(now)
+        await session.commit()
+        assert count == 1
+        row = await repo.get_by_id(job.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_expire_mutates_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, job = await _enqueue_job(session)
+        now = await repo.database_now()
+        inspected = await _complete_inspected(repo, job, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        due = await _mark_ttl_elapsed(session, inspected.id)
+        fence_before = int(due.fence_token)
+        await session.commit()
+
+    async def expire_once() -> int:
+        async with session_factory() as session:
+            repo = MediaJobRepository(session)
+            now = await repo.database_now()
+            count = await repo.expire_due_jobs(now)
+            await session.commit()
+            return count
+
+    first, second = await asyncio.gather(expire_once(), expire_once())
+    assert sorted((first, second)) == [0, 1]
+    async with session_factory() as session:
+        row = await MediaJobRepository(session).get_by_id(inspected.id)
+        assert row is not None
+        _assert_expired_payload_cleared(row)
+        assert int(row.fence_token) == fence_before + 1
+
+
+@pytest.mark.asyncio
+async def test_poison_inspected_expiry_does_not_block_queued_claim(
+    session_factory: async_sessionmaker[AsyncSession],
+    engine: AsyncEngine,
+) -> None:
+    from fetchnow.jobs.worker_loop import MediaJobWorkerRunner
+
+    async with session_factory() as session:
+        await _cleanup_jobs(session)
+        repo, poison = await _enqueue_job(session, media_id="-1_2")
+        now = await repo.database_now()
+        await _complete_inspected(repo, poison, now=now)
+        _, queued = await _enqueue_job(session, media_id="-9_9")
+        await session.commit()
+        queued_id = queued.id
+        poison_id = poison.id
+
+    async with session_factory() as session:
+        await _mark_ttl_elapsed(session, poison_id)
+        await session.commit()
+
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_TEST_URL,
+        MEDIA_JOBS_ENABLED=True,
+        MEDIA_INSPECTION_ENABLED=True,
+        MEDIA_INSPECTION_YTDLP_PATH="/usr/bin/yt-dlp",
+        MEDIA_DOWNLOADS_ENABLED=False,
+        WORKER_CONCURRENCY=1,
+    )
+    runner = MediaJobWorkerRunner(
+        settings,
+        engine=engine,
+        session_factory=session_factory,
+        http_client=MagicMock(aclose=AsyncMock()),
+    )
+    runner._run_claimed = AsyncMock()  # type: ignore[method-assign]
+    try:
+        await runner._poll_once()
+    except IntegrityError:
+        pytest.fail("expire_due_jobs IntegrityError aborted worker poll")
+    finally:
+        leftover = list(runner._active_inspection)
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            await asyncio.gather(*leftover, return_exceptions=True)
+
+    async with session_factory() as session:
+        repo = MediaJobRepository(session)
+        expired = await repo.get_by_id(poison_id)
+        fresh = await repo.get_by_id(queued_id)
+        assert expired is not None
+        _assert_expired_payload_cleared(expired)
+        assert fresh is not None
+        assert fresh.attempt_count == 1
+        assert fresh.public_state == MediaJobState.INSPECTING.value
+        assert fresh.id == queued_id

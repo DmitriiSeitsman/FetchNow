@@ -81,7 +81,7 @@ stdout/stderr ceilings are worker-only Settings.
 
 ## TTL interaction
 
-Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention.
+Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention. Media-job absolute TTL (`MEDIA_JOB_ABSOLUTE_TTL_SECONDS`) expires inspection rows independently of download artifacts and clears persisted inspection metadata and public error codes so expired rows remain a privacy/capacity boundary (CHECK `ck_media_jobs_result_state`). The job row is retained; payloads are not.
 
 ## Related documents
 

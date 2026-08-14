@@ -290,3 +290,198 @@ async def test_existing_job_retry_skips_resolution() -> None:
     assert result.job.id == job.id
     assert result.job.created is False
     resolution.resolve.assert_not_awaited()
+
+
+_INSPECTED_METADATA = {
+    "providerId": "vk",
+    "canonicalProviderUrl": "https://vk.com/video-1_2",
+    "mediaId": "-1_2",
+    "title": None,
+    "durationSeconds": 10,
+    "formats": [],
+    "muxingRequired": False,
+    "extractionTool": "ytdlp",
+    "extractionToolVersion": None,
+}
+
+
+def _service_job(
+    *,
+    token: str,
+    public_state: str,
+    result_metadata: dict[str, object] | None = None,
+    public_error_code: str | None = None,
+    expires_at: datetime | None = None,
+    completed_at: datetime | None = None,
+) -> MediaJob:
+    now = datetime.now(tz=UTC)
+    return MediaJob(
+        id=uuid.uuid4(),
+        schema_version=1,
+        result_version=1 if result_metadata is not None else 0,
+        public_state=public_state,
+        provider_id="vk",
+        canonical_provider_url="https://vk.com/video-1_2",
+        media_id="-1_2",
+        hostname="vk.com",
+        path="/video-1_2",
+        scheme="https",
+        port=None,
+        credential_hash=hash_access_token(token),
+        request_fingerprint=hash_request_fingerprint(
+            access_token=token,
+            normalized_request="https://vk.com/video-1_2",
+        ),
+        result_metadata=result_metadata,
+        public_error_code=public_error_code,
+        attempt_count=1,
+        max_attempts=3,
+        available_at=now,
+        lease_owner=None,
+        lease_expires_at=None,
+        fence_token=1,
+        created_at=now,
+        updated_at=now,
+        started_at=now,
+        completed_at=completed_at,
+        expires_at=expires_at or (now + timedelta(hours=1)),
+    )
+
+
+def _job_service() -> MediaJobService:
+    return MediaJobService(
+        Settings(APP_ENV="test", DATABASE_URL=_DB, MEDIA_JOBS_ENABLED=True)
+    )
+
+
+def test_to_view_expired_never_exposes_result_or_error() -> None:
+    token = generate_access_token()
+    job = _service_job(
+        token=token,
+        public_state="expired",
+        result_metadata=_INSPECTED_METADATA,
+        public_error_code=JobErrorCode.MEDIA_INSPECTION_FAILED.value,
+        expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+        completed_at=datetime.now(tz=UTC),
+    )
+    view = _job_service()._to_view(job, created=False, include_result=True)
+    assert view.result is None
+    assert view.error_code is None
+    public = _job_service().job_to_public_dict(view)
+    assert public["result"] is None
+    assert "errorCode" not in public or public.get("errorCode") is None
+
+
+def test_to_view_inspected_returns_metadata_before_expiry() -> None:
+    token = generate_access_token()
+    job = _service_job(
+        token=token,
+        public_state="inspected",
+        result_metadata=_INSPECTED_METADATA,
+        completed_at=datetime.now(tz=UTC),
+    )
+    view = _job_service()._to_view(job, created=False, include_result=True)
+    assert view.result is not None
+    assert view.result.provider_id == "vk"
+    public = _job_service().job_to_public_dict(view)
+    assert public["result"]["providerId"] == "vk"
+
+
+@pytest.mark.asyncio
+async def test_get_job_expired_raises_without_returning_result() -> None:
+    token = generate_access_token()
+    job = _service_job(
+        token=token,
+        public_state="expired",
+        result_metadata=None,
+        expires_at=datetime.now(tz=UTC) - timedelta(minutes=1),
+        completed_at=datetime.now(tz=UTC),
+    )
+    session = MagicMock()
+    repo = MagicMock()
+    repo.get_by_id = AsyncMock(return_value=job)
+    repo.database_now = AsyncMock(return_value=datetime.now(tz=UTC))
+    with (
+        patch(
+            "fetchnow.jobs.service.MediaJobRepository",
+            return_value=repo,
+        ),
+        pytest.raises(JobError) as exc_info,
+    ):
+        await _job_service().get_job(
+            job_id=job.id,
+            access_token=token,
+            session=session,
+        )
+    assert exc_info.value.code == JobErrorCode.JOB_EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_get_job_inspected_returns_result_before_ttl() -> None:
+    token = generate_access_token()
+    job = _service_job(
+        token=token,
+        public_state="inspected",
+        result_metadata=_INSPECTED_METADATA,
+        completed_at=datetime.now(tz=UTC),
+    )
+    session = MagicMock()
+    repo = MagicMock()
+    repo.get_by_id = AsyncMock(return_value=job)
+    repo.database_now = AsyncMock(return_value=datetime.now(tz=UTC))
+    with patch(
+        "fetchnow.jobs.service.MediaJobRepository",
+        return_value=repo,
+    ):
+        view = await _job_service().get_job(
+            job_id=job.id,
+            access_token=token,
+            session=session,
+        )
+    assert view.result is not None
+    assert view.public_state == "inspected"
+
+
+@pytest.mark.asyncio
+async def test_get_job_wrong_token_stays_indistinguishable_not_found() -> None:
+    owner = generate_access_token()
+    other = generate_access_token()
+    job = _service_job(token=owner, public_state="inspected")
+    session = MagicMock()
+    repo = MagicMock()
+    repo.get_by_id = AsyncMock(return_value=job)
+    with (
+        patch(
+            "fetchnow.jobs.service.MediaJobRepository",
+            return_value=repo,
+        ),
+        pytest.raises(JobError) as exc_info,
+    ):
+        await _job_service().get_job(
+            job_id=job.id,
+            access_token=other,
+            session=session,
+        )
+    assert exc_info.value.code == JobErrorCode.JOB_NOT_FOUND
+    assert exc_info.value.http_status == 404
+
+
+@pytest.mark.asyncio
+async def test_get_job_unknown_id_stays_not_found() -> None:
+    session = MagicMock()
+    repo = MagicMock()
+    repo.get_by_id = AsyncMock(return_value=None)
+    with (
+        patch(
+            "fetchnow.jobs.service.MediaJobRepository",
+            return_value=repo,
+        ),
+        pytest.raises(JobError) as exc_info,
+    ):
+        await _job_service().get_job(
+            job_id=uuid.uuid4(),
+            access_token=generate_access_token(),
+            session=session,
+        )
+    assert exc_info.value.code == JobErrorCode.JOB_NOT_FOUND
+    assert exc_info.value.http_status == 404
