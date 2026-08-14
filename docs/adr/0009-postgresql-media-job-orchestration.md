@@ -81,6 +81,15 @@ Retryable inspection kinds (timeout / tool unavailable / transient media /
 internal) reschedule to `queued` with bounded exponential backoff until
 `max_attempts`. Permanent failures go terminal `failed`. Absolute TTL
 (`MEDIA_JOB_ABSOLUTE_TTL_SECONDS`) expires rows independently of lease state.
+The expiry transition stores `public_state=expired` with `result_metadata` and
+`public_error_code` NULL so the row satisfies `ck_media_jobs_result_state`.
+`completed_at` is preserved when already set (inspected/failed) and set to the
+expiry clock when missing (queued/inspecting). Lease fields are cleared and
+`fence_token` is incremented once. Terminal inspection payloads are a
+privacy/capacity boundary: they must not remain after TTL and must not be
+logged when cleared. Leaving inspected/failed payloads in place causes
+PostgreSQL to reject the UPDATE, rolls back the worker poll transaction, and
+blocks claim of new queued jobs.
 
 ### API / worker trust boundary
 

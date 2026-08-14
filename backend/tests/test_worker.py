@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from fetchnow.core.config import Settings
 from fetchnow.jobs.worker_loop import MediaJobWorkerRunner, _ClaimedSnapshot
@@ -149,3 +151,107 @@ async def test_lease_loss_cancels_inflight_inspection() -> None:
 
     assert started.is_set()
     assert cancelled.is_set()
+
+
+def _poll_settings() -> Settings:
+    return Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_JOBS_ENABLED=True,
+        MEDIA_INSPECTION_ENABLED=True,
+        MEDIA_INSPECTION_YTDLP_PATH="/usr/bin/yt-dlp",
+        MEDIA_DOWNLOADS_ENABLED=False,
+        WORKER_CONCURRENCY=1,
+    )
+
+
+def _claimed_job() -> MagicMock:
+    job = MagicMock()
+    job.id = uuid.uuid4()
+    job.fence_token = 1
+    job.provider_id = "vk"
+    job.canonical_provider_url = "https://vk.com/video-1_2"
+    job.media_id = "-1_2"
+    job.hostname = "vk.com"
+    job.path = "/video-1_2"
+    job.scheme = "https"
+    job.port = None
+    job.attempt_count = 1
+    return job
+
+
+@pytest.mark.asyncio
+async def test_poll_claims_queued_job_after_successful_expiry() -> None:
+    """One poll iteration expires due jobs then claims; no IntegrityError."""
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    session.commit = AsyncMock()
+    session_factory = MagicMock(return_value=session)
+    repo = MagicMock()
+    repo.database_now = AsyncMock(return_value=datetime.now(tz=UTC))
+    repo.reclaim_expired_leases = AsyncMock(return_value=0)
+    repo.expire_due_jobs = AsyncMock(return_value=1)
+    queued = _claimed_job()
+    repo.claim_next = AsyncMock(return_value=[queued])
+    claimed = asyncio.Event()
+
+    async def _set_claimed(_snap: _ClaimedSnapshot) -> None:
+        claimed.set()
+
+    runner = MediaJobWorkerRunner(
+        _poll_settings(),
+        engine=MagicMock(dispose=AsyncMock()),
+        session_factory=session_factory,
+        http_client=MagicMock(aclose=AsyncMock()),
+    )
+    runner._run_claimed = AsyncMock(side_effect=_set_claimed)  # type: ignore[method-assign]
+
+    with patch(
+        "fetchnow.jobs.worker_loop.MediaJobRepository",
+        return_value=repo,
+    ):
+        await runner._poll_once()
+        await asyncio.wait_for(claimed.wait(), timeout=1.0)
+
+    repo.expire_due_jobs.assert_awaited()
+    repo.claim_next.assert_awaited()
+    session.commit.assert_awaited()
+    assert not isinstance(repo.expire_due_jobs.side_effect, IntegrityError)
+
+
+@pytest.mark.asyncio
+async def test_expiry_integrity_error_would_skip_claim() -> None:
+    """Poison expire IntegrityError must not be treated as success."""
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    session.commit = AsyncMock()
+    session_factory = MagicMock(return_value=session)
+    repo = MagicMock()
+    repo.database_now = AsyncMock(return_value=datetime.now(tz=UTC))
+    repo.reclaim_expired_leases = AsyncMock(return_value=0)
+    repo.expire_due_jobs = AsyncMock(
+        side_effect=IntegrityError("ck_media_jobs_result_state", {}, Exception())
+    )
+    repo.claim_next = AsyncMock(return_value=[])
+
+    runner = MediaJobWorkerRunner(
+        _poll_settings(),
+        engine=MagicMock(dispose=AsyncMock()),
+        session_factory=session_factory,
+        http_client=MagicMock(aclose=AsyncMock()),
+    )
+
+    with (
+        patch(
+            "fetchnow.jobs.worker_loop.MediaJobRepository",
+            return_value=repo,
+        ),
+        pytest.raises(IntegrityError),
+    ):
+        await runner._poll_once()
+
+    session.commit.assert_not_awaited()
+    repo.claim_next.assert_not_awaited()

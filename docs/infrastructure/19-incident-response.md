@@ -23,6 +23,7 @@
 | Compromised server | изолировать сеть через согласованный provider/control-plane процесс, сохранить forensic evidence, готовить rebuild на clean host |
 | Массовые provider errors | временно установить соответствующий `PROVIDER_*_ENABLED=false` через контролируемый env/recreate; оставить live/ready доступными, если core исправен |
 | Жалоба правообладателя | следовать [abuse/copyright process](../product/abuse-and-copyright-process.md), минимизировать retained data, не обещать юридический исход |
+| Повторные `ck_media_jobs_result_state` в `expire_due_jobs` | poll-транзакция worker откатывается; новые `queued` jobs остаются с `attempt_count=0`. Не ослаблять CHECK и не считать IntegrityError успехом. Истечение TTL должно очищать `result_metadata` и `public_error_code` до `expired`. Не логировать очищаемый metadata payload |
 
 Provider enable flags уже реализованы, но это startup configuration, а не динамический control plane: изменение требует проверить rendered config и recreate API. Job-level disable отсутствует. «Остановить worker» — **WARNING modifying** и допустимо только когда scope подтверждён; текущий worker media jobs всё равно не выполняет. API health можно оставить доступным, если он не продолжает опасную работу.
 

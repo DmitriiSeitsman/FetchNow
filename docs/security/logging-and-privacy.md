@@ -57,6 +57,8 @@ Media jobs (PR5) additionally forbid logging or publicizing:
 `JobError` str/repr never include the raw token or `internal_reason`. Both create
 and status receive the client-owned token only as an Authorization Bearer
 credential, never echo it, and return `Cache-Control: no-store`.
+Absolute TTL expiry clears persisted `result_metadata` and `public_error_code`
+before the row is stored as `expired`; the cleared payload must not be logged.
 
 Download jobs (PR6) additionally forbid logging or publicizing:
 
