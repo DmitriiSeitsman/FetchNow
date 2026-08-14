@@ -6,7 +6,12 @@ import os
 
 
 def build_ffprobe_argv(*, executable: str, input_path: str) -> list[str]:
-    """Build a fully server-controlled ffprobe argv for one local file."""
+    """Build a fully server-controlled ffprobe argv for one local file.
+
+    The process runner connects stdin to ``DEVNULL``.  Do not add ffmpeg's
+    ``-nostdin`` flag here: Debian bookworm ffprobe does not expose it and
+    rejects the command before inspecting the local artifact.
+    """
     if not executable or executable.startswith("-") or not os.path.isabs(executable):
         raise ValueError("executable path invalid")
     if not input_path or input_path.startswith("-") or not os.path.isabs(input_path):
@@ -16,7 +21,6 @@ def build_ffprobe_argv(*, executable: str, input_path: str) -> list[str]:
     return [
         executable,
         "-hide_banner",
-        "-nostdin",
         "-loglevel",
         "error",
         "-protocol_whitelist",
