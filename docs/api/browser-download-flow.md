@@ -9,9 +9,13 @@ operator.
 
 1. Browser generates a 43-character unpadded base64url access token (32 random bytes, Web Crypto).
 2. `POST /api/v1/media/jobs` with `Authorization: Bearer` and `{ "url": "…" }`.
+   Responses include top-level `providerCapabilities` (product policy for the
+   resolved provider) or `null` when the provider has no public profile. This
+   is not stored inside `result`.
 3. Poll `GET /api/v1/media/jobs/{id}` until `inspected` / `failed` / `expired`.
 4. User selects a `formatOptionId` that is progressive, has video+audio, and `freeTierEligible` (direct file **or** a server-derived muxed option when muxing is enabled).
 5. `POST /api/v1/media/jobs/{id}/downloads` with `{ "formatOptionId": "…" }`.
+   Download job JSON also carries top-level `providerCapabilities` (same shape).
 6. Poll `GET /api/v1/media/download-jobs/{id}` until `ready` / `failed` /
    `cancelled` / `expired`. The UI shows sanitized `progressStage` copy.
    A real byte percentage is shown only during download stages when the

@@ -103,6 +103,7 @@ def _view(*, created: bool = True) -> DownloadJobView:
         id=job_id,
         media_job_id=uuid.uuid4(),
         public_state="queued",
+        provider_id="vk",
         format_option_id="fmt_abc123",
         selected_format={
             "formatOptionId": "fmt_abc123",
@@ -192,6 +193,8 @@ async def test_create_response_has_no_path_token_url(
     assert body["progressPercent"] is None
     assert body["artifactBytes"] is None
     assert body["suggestedFilename"] == "Example.mp4"
+    assert body["providerCapabilities"]["providerId"] == "vk"
+    assert body["providerCapabilities"]["operations"]["downloadVideo"] == "enabled"
     assert "failureClass" not in body
     assert "failure_class" not in body
 
@@ -341,6 +344,7 @@ async def test_get_expired_job_returns_expired_state(
         id=uuid.uuid4(),
         media_job_id=uuid.uuid4(),
         public_state="expired",
+        provider_id="vk",
         format_option_id="fmt_abc123",
         selected_format={
             "formatOptionId": "fmt_abc123",
@@ -452,6 +456,7 @@ def test_service_projects_stored_cancelled_encoding() -> None:
     assert public["cancellable"] is False
     assert public["artifactReady"] is False
     assert public["errorCode"] is None
+    assert public["providerCapabilities"]["providerId"] == "vk"
 
     ordinary = _row(dict(_VALID_SNAPSHOT))
     ordinary.public_state = "expired"
@@ -460,6 +465,24 @@ def test_service_projects_stored_cancelled_encoding() -> None:
     expired = DownloadJobService(settings)._to_view(ordinary, created=False)
     assert expired.public_state == "expired"
     assert expired.error_code == "DOWNLOAD_EXPIRED"
+
+
+def test_to_public_dict_unknown_provider_capabilities_null() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_DOWNLOADS_ENABLED=True,
+        PROVIDER_VK_ENABLED=True,
+        PROVIDER_RUTUBE_ENABLED=True,
+    )
+    row = _row(dict(_VALID_SNAPSHOT))
+    row.provider_id = "not-a-provider"
+    public = DownloadJobService(settings).to_public_dict(
+        DownloadJobService(settings)._to_view(row, created=False)
+    )
+    assert "providerCapabilities" in public
+    assert public["providerCapabilities"] is None
 
 
 @pytest.mark.asyncio
@@ -666,6 +689,7 @@ async def test_cancel_is_idempotent_and_does_not_run_tools(
         id=queued.id,
         media_job_id=queued.media_job_id,
         public_state="cancelled",
+        provider_id=queued.provider_id,
         format_option_id=queued.format_option_id,
         selected_format=queued.selected_format,
         created_at=queued.created_at,
@@ -697,6 +721,7 @@ async def test_cancel_is_idempotent_and_does_not_run_tools(
     assert first.status_code == second.status_code == 200
     assert first.json()["state"] == "cancelled"
     assert second.json()["state"] == "cancelled"
+    assert first.json()["providerCapabilities"]["providerId"] == "vk"
     assert first.json()["cancellable"] is False
     assert "failureClass" not in first.json()
     assert service.cancel.await_count == 2

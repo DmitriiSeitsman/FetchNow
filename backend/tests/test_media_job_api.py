@@ -194,6 +194,7 @@ async def test_api_does_not_call_ytdlp_on_mocked_create(
     view = JobView(
         id=uuid.uuid4(),
         public_state="queued",
+        provider_id="vk",
         created_at=now,
         updated_at=now,
         expires_at=now + timedelta(hours=1),
@@ -231,6 +232,7 @@ async def test_api_does_not_call_ytdlp_on_mocked_create(
 
     assert create.status_code == 202
     assert create.json()["id"] == str(view.id)
+    assert create.json()["providerCapabilities"]["providerId"] == "vk"
     assert "accessToken" not in create.json()
     assert create.headers["cache-control"] == "no-store"
     assert get.status_code == 404
@@ -370,6 +372,7 @@ def test_to_view_expired_never_exposes_result_or_error() -> None:
     public = _job_service().job_to_public_dict(view)
     assert public["result"] is None
     assert "errorCode" not in public or public.get("errorCode") is None
+    assert public["providerCapabilities"]["providerId"] == "vk"
 
 
 def test_to_view_inspected_returns_metadata_before_expiry() -> None:
@@ -385,6 +388,23 @@ def test_to_view_inspected_returns_metadata_before_expiry() -> None:
     assert view.result.provider_id == "vk"
     public = _job_service().job_to_public_dict(view)
     assert public["result"]["providerId"] == "vk"
+    assert "providerCapabilities" not in public["result"]
+    assert public["providerCapabilities"]["providerId"] == "vk"
+    assert public["providerCapabilities"]["operations"]["downloadVideo"] == "enabled"
+
+
+def test_job_to_public_dict_unknown_provider_capabilities_null() -> None:
+    token = generate_access_token()
+    job = _service_job(
+        token=token,
+        public_state="queued",
+        result_metadata=None,
+    )
+    job.provider_id = "unknown_provider"
+    view = _job_service()._to_view(job, created=False, include_result=True)
+    public = _job_service().job_to_public_dict(view)
+    assert "providerCapabilities" in public
+    assert public["providerCapabilities"] is None
 
 
 @pytest.mark.asyncio
