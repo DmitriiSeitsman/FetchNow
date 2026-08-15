@@ -94,7 +94,7 @@ parent Bearer token in the URL and without buffering the file in JavaScript.
 
 ## Why not Blob?
 
-Artifacts may approach 512 MiB. `blob()` / `arrayBuffer()` would buffer the file in JS memory.
+Artifacts may approach `MEDIA_DOWNLOAD_MAX_BYTES` (default 3 GiB). `blob()` / `arrayBuffer()` would buffer the file in JS memory.
 
 ## Browser support
 

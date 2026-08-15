@@ -29,6 +29,7 @@ def settings(**overrides: object) -> Settings:
         "MEDIA_INSPECTION_MAX_TITLE_LENGTH": 80,
         "MAX_SOURCE_DURATION_SECONDS": 3600,
         "MAX_SOURCE_FILE_BYTES": 536870912,
+        "MEDIA_DOWNLOAD_MAX_BYTES": 536870912,
         "TEMP_STORAGE_PATH": "/tmp/fetchnow-test-tmp-unused",
     }
     base.update(overrides)

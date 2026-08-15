@@ -64,7 +64,9 @@ class BrowserGrantRepository:
         self, grants: list[MediaDeliveryGrant], *, now: datetime
     ) -> None:
         for grant in grants:
-            grant.revoked_at = now
+            # Never write revoked_at < created_at: a stale caller clock must not
+            # trip ck_media_delivery_grants_revoked_after_created.
+            grant.revoked_at = now if now >= grant.created_at else grant.created_at
         if grants:
             await self._session.flush()
 

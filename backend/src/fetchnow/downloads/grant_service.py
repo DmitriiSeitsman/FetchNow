@@ -98,14 +98,17 @@ class BrowserGrantService:
 
         grants = BrowserGrantRepository(session)
         download_repo = MediaDownloadJobRepository(session)
-        now = await grants.database_now()
 
+        # Capture the clock only after the job lock so concurrent issuers that
+        # waited cannot revoke an already-committed grant with a stale ``now``
+        # (CHECK ck_media_delivery_grants_revoked_after_created).
         job = await grants.lock_download_job(download_job_id)
         if job is None:
             raise_download_error(
                 DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND,
                 internal_reason="MISSING",
             )
+        now = await grants.database_now()
 
         parent_repo = MediaJobRepository(session)
         parent = await parent_repo.get_by_id(job.media_job_id)

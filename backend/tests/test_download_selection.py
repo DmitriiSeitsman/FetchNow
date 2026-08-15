@@ -25,6 +25,7 @@ def _settings() -> Settings:
         APP_ENV="test",
         DATABASE_URL=_DB,
         MAX_SOURCE_FILE_BYTES=10**9,
+        MEDIA_DOWNLOAD_MAX_BYTES=10**9,
         MEDIA_INSPECTION_MAX_HEIGHT=2160,
         MEDIA_INSPECTION_MAX_WIDTH=3840,
     )

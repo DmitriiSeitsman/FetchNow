@@ -81,6 +81,24 @@ Cross-worker global disk reservation is **not** implemented.
 `MEDIA_MUXING_ENABLED` defaults false. ffmpeg/ffprobe timeouts and
 stdout/stderr ceilings are worker-only Settings.
 
+`MAX_SOURCE_DURATION_SECONDS` defaults to `7200`. Duration does not enter the
+disk math: peak reservation is derived from `MEDIA_DOWNLOAD_MAX_BYTES` /
+`MAX_SOURCE_FILE_BYTES` (both default `3221225472`), so a longer ceiling admits
+more sources without raising worst-case bytes. Those byte caps do set the disk
+requirement, and a muxed attempt reserves `video + audio + output`: when
+inspection reports no size estimate every stage fails closed to the full cap, so
+the worst case is three times `MEDIA_DOWNLOAD_MAX_BYTES` plus
+`MEDIA_DOWNLOAD_MIN_FREE_BYTES`. Raising the byte caps therefore requires
+checking free space on the target host, not just the queue.
+What duration does affect is wall-clock occupancy, because
+`MEDIA_DOWNLOAD_CONCURRENCY=1` serializes jobs. Per-stage
+`MEDIA_DOWNLOAD_TIMEOUT_SECONDS` defaults to `300` (ceiling `600`) so a
+byte-capped stage is not killed on a slow provider, and
+`MEDIA_MUXING_TIMEOUT_SECONDS` defaults to `90` (ceiling `120`) to stream-copy
+byte-capped inputs. A muxed attempt therefore occupies the single download slot
+for up to two download stages plus one mux; size the queue expectations from
+those timeouts, not from source duration.
+
 ## TTL interaction
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention. Media-job absolute TTL (`MEDIA_JOB_ABSOLUTE_TTL_SECONDS`) expires inspection rows independently of download artifacts and clears persisted inspection metadata and public error codes so expired rows remain a privacy/capacity boundary (CHECK `ck_media_jobs_result_state`). The job row is retained; payloads are not.
