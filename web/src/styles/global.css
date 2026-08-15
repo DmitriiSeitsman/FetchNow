@@ -452,6 +452,23 @@ body {
   color: var(--ink-subtle);
 }
 
+/* Cancel sits with the active job: end-aligned on desktop, full-width on mobile. */
+.progress-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.55rem;
+  padding-top: 0.15rem;
+  border-top: 1px solid var(--mist);
+  margin-top: 0.15rem;
+}
+
+.progress-actions .btn {
+  min-width: 0;
+  padding: 0.45rem 0.85rem;
+  font-weight: 600;
+}
+
 .loader {
   display: flex;
   align-items: center;
@@ -462,6 +479,7 @@ body {
 /* The hidden attribute must win over the layout display above. */
 .loader[hidden],
 .progress-card[hidden],
+.progress-actions[hidden],
 .quality-card[hidden],
 .quality-list[hidden],
 .flow[hidden],
@@ -501,6 +519,14 @@ body {
 
   .flow-submit-row .btn {
     width: auto;
+  }
+
+  .progress-actions {
+    justify-content: stretch;
+  }
+
+  .progress-actions .btn {
+    width: 100%;
   }
 
   .format {

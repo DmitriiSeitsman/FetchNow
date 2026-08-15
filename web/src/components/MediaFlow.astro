@@ -75,11 +75,6 @@ const enabled = isMediaFlowEnabled();
         Start over
       </button>
     </div>
-    <div class="flow-actions" data-flow-secondary-actions hidden>
-      <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
-        Cancel task
-      </button>
-    </div>
   </form>
   <p class="hint" id="flow-hint">
     Public VK, Rutube, and Yandex Preview links. No account required.
@@ -127,6 +122,11 @@ const enabled = isMediaFlowEnabled();
     <p class="hint progress-note">
       Progress follows preparation stages. Download percentages appear when an estimated size is available.
     </p>
+    <div class="progress-actions" data-flow-progress-actions hidden>
+      <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
+        Cancel task
+      </button>
+    </div>
   </section>
   <p class="hint" data-flow-mux hidden>
     This media is not available in the current free download mode. A combined video and

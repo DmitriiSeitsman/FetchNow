@@ -75,8 +75,10 @@ describe("PR10 loader, format, and contrast UX", () => {
         </span>
         <p data-flow-progress-label></p>
         <div data-flow-progress-bar><span data-flow-progress-fill></span></div>
+        <div data-flow-progress-actions hidden>
+          <button data-flow-cancel hidden>Cancel task</button>
+        </div>
       </section>
-      <button data-flow-cancel hidden>Cancel task</button>
       <button data-flow-reset hidden>Start over</button>
       <p data-flow-restored hidden>Restored an existing download task.</p>
     `;
@@ -100,6 +102,9 @@ describe("PR10 loader, format, and contrast UX", () => {
     const cancel = document.querySelector<HTMLButtonElement>("[data-flow-cancel]");
     expect(cancel?.hidden).toBe(false);
     expect(cancel?.textContent).toMatch(/Cancel task/);
+    const actions = document.querySelector<HTMLElement>("[data-flow-progress-actions]");
+    expect(actions?.hidden).toBe(false);
+    expect(document.querySelector("[data-flow-progress]")?.contains(cancel)).toBe(true);
     const startOver = document.querySelector<HTMLButtonElement>("[data-flow-reset]");
     expect(startOver?.hidden).toBe(false);
     expect(startOver?.textContent).toMatch(/Start over/);
