@@ -157,11 +157,11 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     cancel.hidden = !snapshot.canCancelTask;
     cancel.disabled = !snapshot.canCancelTask;
   }
-  const secondaryActions = root.querySelector<HTMLElement>(
-    "[data-flow-secondary-actions]",
+  const progressActions = root.querySelector<HTMLElement>(
+    "[data-flow-progress-actions]",
   );
-  if (secondaryActions) {
-    secondaryActions.hidden = !snapshot.canCancelTask;
+  if (progressActions) {
+    progressActions.hidden = !snapshot.canCancelTask;
   }
 
   const restored = root.querySelector("[data-flow-restored]");

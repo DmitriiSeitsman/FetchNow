@@ -113,6 +113,11 @@ function mountFlow(): void {
         <p class="hint progress-note">
           Progress follows preparation stages. Download percentages appear when an estimated size is available.
         </p>
+        <div class="progress-actions" data-flow-progress-actions hidden>
+          <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
+            Cancel task
+          </button>
+        </div>
       </section>
       <p class="hint" data-flow-mux hidden></p>
       <p class="hint" data-flow-browser hidden></p>
@@ -120,7 +125,6 @@ function mountFlow(): void {
       <a data-flow-native-download hidden download>Download file</a>
       <button data-flow-save-as hidden>Save as…</button>
       <button data-flow-reset hidden>Start over</button>
-      <button data-flow-cancel hidden>Cancel task</button>
     </section>
   `;
 }
@@ -158,9 +162,41 @@ describe("PR11 loader, quality and stage progress UI", () => {
     renderFlow(document, snapshot());
     expect(el("[data-flow-loader]").hidden).toBe(true);
     expect(el("[data-flow-progress]").hidden).toBe(true);
+    expect(el("[data-flow-progress-actions]").hidden).toBe(true);
     expect(el("[data-flow-quality]").hidden).toBe(true);
     expect(el("[data-flow-progress-label]").textContent).toBe("");
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("0");
+  });
+
+  it("keeps Cancel task inside the progress card footer", () => {
+    const progressIdx = astroSource.indexOf('data-flow-progress');
+    const cancelIdx = astroSource.indexOf("data-flow-cancel");
+    const progressEnd = astroSource.indexOf("</section>", progressIdx);
+    expect(progressIdx).toBeGreaterThan(-1);
+    expect(cancelIdx).toBeGreaterThan(progressIdx);
+    expect(cancelIdx).toBeLessThan(progressEnd);
+    expect(astroSource).toMatch(
+      /data-flow-progress-actions hidden>[\s\S]*data-flow-cancel/,
+    );
+    expect(cssSource).toContain(".progress-actions[hidden]");
+    expect(cssSource).toContain(".progress-actions");
+
+    mountFlow();
+    renderFlow(
+      document,
+      snapshot({
+        phase: "downloading",
+        progressStage: "downloading_video",
+        canCancelTask: true,
+        canStartOver: true,
+        canSubmit: false,
+        busy: true,
+      }),
+    );
+    expect(el("[data-flow-progress]").hidden).toBe(false);
+    expect(el("[data-flow-progress-actions]").hidden).toBe(false);
+    expect(el("[data-flow-cancel]").hidden).toBe(false);
+    expect(el("[data-flow-progress]").contains(el("[data-flow-cancel]"))).toBe(true);
   });
 
   it("declares the loader hidden in markup and lets [hidden] win over the layout CSS", () => {
