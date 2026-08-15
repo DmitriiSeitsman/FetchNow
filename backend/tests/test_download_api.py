@@ -226,6 +226,35 @@ async def test_format_ineligible_maps_422(
 
 
 @pytest.mark.asyncio
+async def test_provider_capability_disabled_maps_422(
+    enabled_client: AsyncClient,
+) -> None:
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    token = generate_access_token()
+
+    service = MagicMock()
+    service.create = AsyncMock(
+        side_effect=DownloadError(
+            DownloadErrorCode.PROVIDER_CAPABILITY_DISABLED,
+            internal_reason="CAPABILITY_OPERATION_DISABLED",
+        )
+    )
+    app.state.download_job_service = service
+
+    response = await enabled_client.post(
+        f"/api/v1/media/jobs/{uuid.uuid4()}/downloads",
+        json={"formatOptionId": "fmt_abc123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROVIDER_CAPABILITY_DISABLED"
+    assert response.headers.get("cache-control") == "no-store"
+    assert token not in response.text
+
+
+@pytest.mark.asyncio
 async def test_muxing_unavailable_maps_422(
     enabled_client: AsyncClient,
 ) -> None:

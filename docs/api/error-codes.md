@@ -38,6 +38,7 @@ Envelope shape (already used by the API foundation):
 | `CAPACITY_UNAVAILABLE` | 503 | Temporary capacity limit | yes | yes | Disk paths, free-byte counts |
 | `FILE_TOO_LARGE` | 413 | File exceeds limit | no | no | Exact configured byte caps (optional high-level OK) |
 | `DURATION_TOO_LONG` | 422 | Media longer than the configured maximum (public text names the hour count) | no | no | Internal probe traces |
+| `PROVIDER_CAPABILITY_DISABLED` | 422 | This action is not available for this source | no | no | Provider policy details, extractor configuration |
 | `JOB_NOT_FOUND` | 404 | Job not found | no | no | Whether ID existed then deleted |
 | `JOB_EXPIRED` | 410 | Job or file expired | no | no | Storage keys |
 | `IDEMPOTENCY_CONFLICT` | 409 | Access token already used for a different request | no | no | Fingerprints, prior job fields |

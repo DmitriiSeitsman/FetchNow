@@ -14,6 +14,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fetchnow.capabilities.models import MediaOperation
+from fetchnow.capabilities.registry import (
+    ProviderCapabilityRegistry,
+    assert_operation_allowed,
+)
 from fetchnow.core.config import Settings
 from fetchnow.downloads.artifacts import ArtifactStore, AttemptWorkspace
 from fetchnow.downloads.byte_progress import ProgressPersistGate
@@ -131,6 +136,7 @@ class DownloadExecutor:
         session_factory: async_sessionmaker[AsyncSession],
         inspection_service: MediaInspectionService,
         inspection_registry: InspectionExtractorRegistry,
+        capability_registry: ProviderCapabilityRegistry | None = None,
         provider_registry: ProviderRegistry | None = None,
         validator: URLValidator | None = None,
         artifact_store: ArtifactStore | None = None,
@@ -141,6 +147,7 @@ class DownloadExecutor:
         self._session_factory = session_factory
         self._inspection = inspection_service
         self._inspection_registry = inspection_registry
+        self._capabilities = capability_registry or ProviderCapabilityRegistry.default()
         self._providers = provider_registry
         self._validator = validator
         self._runner = process_runner or DownloadProcessRunner()
@@ -413,6 +420,11 @@ class DownloadExecutor:
             inspection_registry=self._inspection_registry,
             provider_registry=self._providers,
             validator=self._validator,
+        )
+        assert_operation_allowed(
+            self._capabilities,
+            provider_id=resolution.provider_id,
+            operation=MediaOperation.DOWNLOAD_VIDEO,
         )
         draft = await self._inspection.inspect_draft(resolution)
         if (

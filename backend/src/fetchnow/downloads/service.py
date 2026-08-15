@@ -9,6 +9,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fetchnow.capabilities.models import MediaOperation
+from fetchnow.capabilities.registry import (
+    ProviderCapabilityRegistry,
+    assert_operation_allowed,
+)
 from fetchnow.core.config import Settings
 from fetchnow.downloads.byte_progress import DOWNLOAD_PERCENT_STAGES
 from fetchnow.downloads.errors import (
@@ -113,10 +118,16 @@ def _assert_format_eligible(fmt: MediaFormat, *, muxing_required: bool) -> None:
 class DownloadJobService:
     """Create and read durable download jobs authorized via parent MediaJob."""
 
-    __slots__ = ("_settings",)
+    __slots__ = ("_capabilities", "_settings")
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        capability_registry: ProviderCapabilityRegistry | None = None,
+    ) -> None:
         self._settings = settings
+        self._capabilities = capability_registry or ProviderCapabilityRegistry.default()
 
     async def create(
         self,
@@ -169,6 +180,11 @@ class DownloadJobService:
         )
         fmt = _find_format(metadata.formats, format_option_id)
         _assert_format_eligible(fmt, muxing_required=metadata.muxing_required)
+        assert_operation_allowed(
+            self._capabilities,
+            provider_id=parent.provider_id,
+            operation=MediaOperation.DOWNLOAD_VIDEO,
+        )
         snapshot = format_snapshot_from_media_format(fmt)
         job_id = uuid.uuid4()
         filename = suggested_filename_for(
