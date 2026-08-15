@@ -29,6 +29,15 @@ const astroSource = readFileSync(
 );
 const cssSource = readFileSync(join(here, "../../styles/global.css"), "utf8");
 
+const alternateFormat: MediaFormat = {
+  ...progressiveFormat,
+  formatOptionId: "fmt_bbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  height: 480,
+  width: 854,
+  qualityLabel: "p480",
+  approxBytes: 6_000_000,
+};
+
 const RESULT: FlowSnapshot["result"] = {
   providerId: "vk",
   canonicalProviderUrl: "https://vk.com/video-1_2",
@@ -138,6 +147,8 @@ function duplicateFormats(): MediaFormat[] {
       container: "mp4",
       fps: 25,
     },
+    // Second displayable quality so the selector stays visible after grouping.
+    alternateFormat,
   ];
 }
 
@@ -178,6 +189,28 @@ describe("PR11 loader, quality and stage progress UI", () => {
 
   it("keeps the standalone loader hidden while a quality is being chosen", () => {
     mountFlow();
+    const formats = [progressiveFormat, alternateFormat];
+    renderFlow(
+      document,
+      snapshot({
+        phase: "inspected",
+        statusText: "Choose a quality to download.",
+        result: { ...RESULT, formats },
+        formats,
+        selectedFormatId: OPTION_ID,
+        downloadEligible: true,
+        canStartOver: true,
+        canSubmit: false,
+      }),
+    );
+    expect(el("[data-flow-loader]").hidden).toBe(true);
+    expect(el("[data-flow-progress]").hidden).toBe(true);
+    expect(el("[data-flow-quality]").hidden).toBe(false);
+    expect(el("[data-flow-status]").textContent).toBe("Choose a quality to download.");
+  });
+
+  it("hides the quality selector when only one grouped option exists", () => {
+    mountFlow();
     renderFlow(
       document,
       snapshot({
@@ -191,10 +224,10 @@ describe("PR11 loader, quality and stage progress UI", () => {
         canSubmit: false,
       }),
     );
-    expect(el("[data-flow-loader]").hidden).toBe(true);
-    expect(el("[data-flow-progress]").hidden).toBe(true);
-    expect(el("[data-flow-quality]").hidden).toBe(false);
-    expect(el("[data-flow-status]").textContent).toBe("Choose a quality to download.");
+    expect(el("[data-flow-quality]").hidden).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled,
+    ).toBe(false);
   });
 
   it("shows the spinner only while an operation is running", () => {
@@ -232,13 +265,13 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const radios = [
       ...document.querySelectorAll<HTMLInputElement>("input[type=radio]"),
     ];
-    expect(radios).toHaveLength(1);
+    expect(radios).toHaveLength(2);
     expect(radios[0].value).toBe(formats[0].formatOptionId);
     expect(radios[0].checked).toBe(true);
     const labels = [...document.querySelectorAll(".format-label")].map(
       (node) => node.textContent,
     );
-    expect(labels).toEqual(["High (720p)"]);
+    expect(labels).toEqual(["High (720p)", "Medium (480p)"]);
     expect(el("[data-flow-formats]").textContent).toContain("MP4");
     expect(el("[data-flow-formats]").textContent).toContain("30 fps");
   });
@@ -261,7 +294,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const radios = [
       ...document.querySelectorAll<HTMLInputElement>("input[type=radio]"),
     ];
-    expect(radios).toHaveLength(1);
+    expect(radios).toHaveLength(2);
     expect(radios[0].value).toBe(restored);
     expect(radios[0].checked).toBe(true);
     expect(document.querySelector(".format-selected")).not.toBeNull();
@@ -275,12 +308,13 @@ describe("PR11 loader, quality and stage progress UI", () => {
       fps: null,
       approxBytes: null,
     };
+    const formats = [sparse, alternateFormat];
     renderFlow(
       document,
       snapshot({
         phase: "inspected",
-        result: { ...RESULT, formats: [sparse] },
-        formats: [sparse],
+        result: { ...RESULT, formats },
+        formats,
         selectedFormatId: sparse.formatOptionId,
         downloadEligible: true,
       }),

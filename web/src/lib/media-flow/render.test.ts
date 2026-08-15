@@ -6,6 +6,13 @@ import { renderFlow } from "./render";
 import type { FlowSnapshot } from "./controller";
 import { progressiveFormat } from "./fixtures";
 
+const alternateFormat = {
+  ...progressiveFormat,
+  formatOptionId: "fmt_bbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  height: 480,
+  qualityLabel: "p480",
+};
+
 function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
   return {
     phase: "inspected",
@@ -17,12 +24,13 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
       mediaId: "-1_2",
       title: "<img src=x onerror=alert(1)>",
       durationSeconds: 90,
-      formats: [progressiveFormat],
+      formats: [progressiveFormat, alternateFormat],
       muxingRequired: false,
     },
-    formats: [progressiveFormat],
+    formats: [progressiveFormat, alternateFormat],
     selectedFormatId: progressiveFormat.formatOptionId,
     downloadEligible: true,
+    canSelectQuality: true,
     muxingBlocked: false,
     httpsRequired: false,
     grantArming: false,
@@ -115,6 +123,70 @@ describe("render", () => {
     expect(radio?.disabled).toBe(false);
     const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
     expect(mux?.hidden).toBe(true);
+  });
+
+  it("shows quality choices only when policy allows and media has 2+ options", () => {
+    document.body.innerHTML = `
+      <fieldset data-flow-quality><div data-flow-formats></div></fieldset>
+      <button data-flow-download></button>
+    `;
+
+    renderFlow(
+      document,
+      snapshot({
+        canSelectQuality: true,
+        formats: [progressiveFormat],
+        result: {
+          providerId: "vk",
+          canonicalProviderUrl: "https://vk.com/video-1_2",
+          mediaId: "-1_2",
+          title: "Example",
+          durationSeconds: 90,
+          formats: [progressiveFormat],
+          muxingRequired: false,
+        },
+        selectedFormatId: progressiveFormat.formatOptionId,
+        downloadEligible: true,
+      }),
+    );
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled).toBe(
+      false,
+    );
+    expect(document.querySelector("input[type=radio]")).toBeNull();
+
+    renderFlow(document, snapshot({ canSelectQuality: true }));
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
+    expect(document.querySelectorAll("input[type=radio]")).toHaveLength(2);
+
+    renderFlow(document, snapshot({ canSelectQuality: false }));
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+
+    renderFlow(
+      document,
+      snapshot({
+        canSelectQuality: true,
+        formats: [],
+        result: {
+          providerId: "vk",
+          canonicalProviderUrl: "https://vk.com/video-1_2",
+          mediaId: "-1_2",
+          title: "Example",
+          durationSeconds: 90,
+          formats: [],
+          muxingRequired: false,
+        },
+        selectedFormatId: null,
+        downloadEligible: false,
+      }),
+    );
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+
+    // Legacy snapshots omit canSelectQuality; treat as allowed when 2+ options exist.
+    const legacySnapshot = snapshot({});
+    delete legacySnapshot.canSelectQuality;
+    renderFlow(document, legacySnapshot);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
   });
 
   it("shows the unavailable hint only when no executable option exists", () => {

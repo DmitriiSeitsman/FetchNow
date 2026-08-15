@@ -12,8 +12,30 @@ import {
   inspectedPayload,
   inspectionPayload,
   OPTION_ID,
+  progressiveFormat,
 } from "./fixtures";
 import { parseBrowserGrant, parseDownloadJob, parseInspectionJob } from "./contracts";
+
+const enabledCapabilities = {
+  providerId: "vk",
+  operations: {
+    downloadVideo: "enabled",
+    extractAudio: "disabled",
+    selectQuality: "enabled",
+    selectContainer: "disabled",
+  },
+  contentKinds: {
+    video: "enabled",
+    clip: "enabled",
+    live: "disabled",
+    playlist: "disabled",
+  },
+  metadata: {
+    title: "enabled",
+    duration: "enabled",
+    thumbnail: "planned",
+  },
+} as const;
 
 describe("browser flow integration", () => {
   it("submits, inspects, selects, downloads, arms a grant, and keeps session on native click", async () => {
@@ -232,6 +254,212 @@ describe("browser flow integration", () => {
     expect(controller.snapshot().muxingBlocked).toBe(true);
     controller.selectFormat(OPTION_ID);
     expect(controller.snapshot().downloadEligible).toBe(false);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).not.toHaveBeenCalled();
+  });
+
+  it("blocks disabled or planned download policy even with an eligible format", async () => {
+    for (const state of ["disabled", "planned"] as const) {
+      const token = generateAccessToken();
+      const payload = inspectedPayload();
+      payload.providerCapabilities = {
+        ...enabledCapabilities,
+        operations: { ...enabledCapabilities.operations, downloadVideo: state },
+      };
+      const api = {
+        createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+        getInspectionJob: vi.fn(async () => parseInspectionJob(payload)),
+        createDownloadJob: vi.fn(),
+        getDownloadJob: vi.fn(),
+        createBrowserGrant: vi.fn(),
+        cancelDownloadJob: vi.fn(),
+      };
+      const controller = new MediaFlowController({
+        api: api as unknown as MediaApi,
+        session: new FlowSession(),
+        generateToken: () => token,
+        pickerSupported: () => false,
+        secureContext: () => true,
+        documentHidden: () => false,
+      });
+
+      await controller.submit("https://vk.com/video-1_2");
+      expect(controller.snapshot().downloadEligible).toBe(false);
+      await controller.enqueueDownload();
+      expect(api.createDownloadJob).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps an internal default downloadable when quality selection is disabled", async () => {
+    const token = generateAccessToken();
+    const payload = inspectedPayload({
+      formats: [
+        {
+          ...progressiveFormat,
+          formatOptionId: OPTION_ID,
+        },
+        {
+          ...progressiveFormat,
+          formatOptionId: "fmt_bbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          height: 480,
+          qualityLabel: "p480",
+        },
+      ],
+    });
+    payload.providerCapabilities = {
+      ...enabledCapabilities,
+      operations: { ...enabledCapabilities.operations, selectQuality: "disabled" },
+    };
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(payload)),
+      createDownloadJob: vi.fn(async () =>
+        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
+      ),
+      getDownloadJob: vi.fn(async () =>
+        parseDownloadJob(
+          downloadPayload({
+            state: "failed",
+            completedAt: "2026-08-13T04:22:27Z",
+            errorCode: "DOWNLOAD_TOOL_FAILED",
+          }),
+        ),
+      ),
+      createBrowserGrant: vi.fn(),
+      cancelDownloadJob: vi.fn(),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+    });
+
+    await controller.submit("https://vk.com/video-1_2");
+    const defaultId = controller.snapshot().selectedFormatId;
+    expect(defaultId).toBe(OPTION_ID);
+    expect(controller.snapshot().canSelectQuality).toBe(false);
+    expect(controller.snapshot().downloadEligible).toBe(true);
+    controller.selectFormat("fmt_bbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(controller.snapshot().selectedFormatId).toBe(defaultId);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).toHaveBeenCalledWith(
+      expect.any(String),
+      OPTION_ID,
+      token,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("keeps download available with a single auto-selected quality when selection is enabled", async () => {
+    const token = generateAccessToken();
+    const payload = inspectedPayload();
+    payload.providerCapabilities = { ...enabledCapabilities };
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(payload)),
+      createDownloadJob: vi.fn(async () =>
+        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
+      ),
+      getDownloadJob: vi.fn(async () =>
+        parseDownloadJob(
+          downloadPayload({
+            state: "failed",
+            completedAt: "2026-08-13T04:22:27Z",
+            errorCode: "DOWNLOAD_TOOL_FAILED",
+          }),
+        ),
+      ),
+      createBrowserGrant: vi.fn(),
+      cancelDownloadJob: vi.fn(),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+    });
+
+    await controller.submit("https://vk.com/video-1_2");
+    expect(controller.snapshot().canSelectQuality).toBe(true);
+    expect(controller.snapshot().formats).toHaveLength(1);
+    expect(controller.snapshot().selectedFormatId).toBe(OPTION_ID);
+    expect(controller.snapshot().downloadEligible).toBe(true);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).toHaveBeenCalledWith(
+      expect.any(String),
+      OPTION_ID,
+      token,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("preserves legacy download behavior when providerCapabilities are absent", async () => {
+    const token = generateAccessToken();
+    const payload = inspectedPayload();
+    delete payload.providerCapabilities;
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(payload)),
+      createDownloadJob: vi.fn(async () =>
+        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
+      ),
+      getDownloadJob: vi.fn(async () =>
+        parseDownloadJob(
+          downloadPayload({
+            state: "failed",
+            completedAt: "2026-08-13T04:22:27Z",
+            errorCode: "DOWNLOAD_TOOL_FAILED",
+          }),
+        ),
+      ),
+      createBrowserGrant: vi.fn(),
+      cancelDownloadJob: vi.fn(),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+    });
+
+    await controller.submit("https://vk.com/video-1_2");
+    expect(controller.snapshot().canSelectQuality).toBe(true);
+    expect(controller.snapshot().downloadEligible).toBe(true);
+    await controller.enqueueDownload();
+    expect(api.createDownloadJob).toHaveBeenCalled();
+  });
+
+  it("fails closed for an explicit null provider capability profile", async () => {
+    const token = generateAccessToken();
+    const payload = inspectedPayload();
+    payload.providerCapabilities = null;
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(payload)),
+      createDownloadJob: vi.fn(),
+      getDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(),
+      cancelDownloadJob: vi.fn(),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+    });
+
+    await controller.submit("https://vk.com/video-1_2");
+    expect(controller.snapshot().downloadEligible).toBe(false);
+    expect(controller.snapshot().canSelectQuality).toBe(false);
     await controller.enqueueDownload();
     expect(api.createDownloadJob).not.toHaveBeenCalled();
   });
