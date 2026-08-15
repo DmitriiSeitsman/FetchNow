@@ -507,12 +507,19 @@ async def test_stuck_progress_callback_does_not_block_descendant_size_kill(
 async def test_stuck_progress_callback_does_not_block_disk_kill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A hung progress persist must not prevent the disk monitor from killing.
+
+    Progress samples can arrive before the child writes its pid. Arm the
+    disk-kill path only after that readiness marker exists, otherwise the
+    process group may die before ``sleep.pid`` is created.
+    """
     import shutil
     from types import SimpleNamespace
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     pid_file = tmp_path / "sleep.pid"
+    started = tmp_path / "started"
     entered = asyncio.Event()
     cancelled = asyncio.Event()
     original_disk = shutil.disk_usage
@@ -525,6 +532,11 @@ async def test_stuck_progress_callback_does_not_block_disk_kill(
     monkeypatch.setattr(shutil, "disk_usage", patched_disk)
 
     async def stuck(_observed: int) -> None:
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while not started.exists():
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.05)
         entered.set()
         blocker = asyncio.Event()
         try:
@@ -539,6 +551,7 @@ async def test_stuck_progress_callback_does_not_block_disk_kill(
             f"""\
             #!/bin/sh
             echo $$ > "{pid_file}"
+            touch "{started}"
             sleep 30
             """
         ),
@@ -562,6 +575,7 @@ async def test_stuck_progress_callback_does_not_block_disk_kill(
         )
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
+    assert pid_file.exists()
     with pytest.raises(DownloadError) as exc:
         await asyncio.wait_for(run_task, timeout=10)
     assert exc.value.code == DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
