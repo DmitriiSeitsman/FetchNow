@@ -175,6 +175,7 @@ function downloadAwareLabel(stage: ProgressStage, options: ProgressOptions): str
 }
 
 function withOptionalPercent(base: string, percent: number | null): string {
+  // null = indeterminate (unknown denominator). Never render as "(0%)".
   if (percent === null) {
     return `${base}…`;
   }

@@ -15,10 +15,17 @@ export type PollerOptions<T> = {
   deadlineMs?: number;
   maxTransientFailures?: number;
   retryAfterHeader?: (value: T) => string | null;
+  /** Semantic key for progress-aware backoff reset (state/stage/percent/…). */
+  semanticKey?: (value: T) => string;
+  /** When true, cap the next wait to activeMaxIntervalMs. */
+  isActiveProgress?: (value: T) => boolean;
+  /** Upper bound while isActiveProgress is true (default 1000). */
+  activeMaxIntervalMs?: number;
 };
 
 const MIN_INTERVAL_MS = 700;
 const MAX_INTERVAL_MS = 8_000;
+const ACTIVE_MAX_INTERVAL_MS = 1_000;
 const HIDDEN_INTERVAL_MS = 15_000;
 const DEADLINE_MS = 15 * 60_000;
 const MAX_TRANSIENT = 5;
@@ -50,6 +57,36 @@ export function parseRetryAfterMs(
   return delta;
 }
 
+/** Build a stable semantic key for download/inspection job progress. */
+export function jobProgressSemanticKey(job: {
+  state: string;
+  progressStage?: string | null;
+  progressPercent?: number | null;
+  attempt?: number | null;
+  updatedAt?: string | null;
+}): string {
+  return [
+    job.state,
+    job.progressStage ?? "",
+    job.progressPercent === null || job.progressPercent === undefined
+      ? ""
+      : String(job.progressPercent),
+    job.attempt === null || job.attempt === undefined ? "" : String(job.attempt),
+    job.updatedAt ?? "",
+  ].join("|");
+}
+
+export function isActiveDownloadProgress(job: {
+  state: string;
+  progressStage?: string | null;
+}): boolean {
+  return (
+    job.state === "downloading" &&
+    (job.progressStage === "downloading_video" ||
+      job.progressStage === "downloading_audio")
+  );
+}
+
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
@@ -77,6 +114,7 @@ function backoffMs(attempt: number, min: number, max: number): number {
 export async function pollUntilTerminal<T>(options: PollerOptions<T>): Promise<T> {
   const min = options.minIntervalMs ?? MIN_INTERVAL_MS;
   const max = options.maxIntervalMs ?? MAX_INTERVAL_MS;
+  const activeMax = options.activeMaxIntervalMs ?? ACTIVE_MAX_INTERVAL_MS;
   const hiddenInterval = options.hiddenIntervalMs ?? HIDDEN_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? DEADLINE_MS;
   const maxTransient = options.maxTransientFailures ?? MAX_TRANSIENT;
@@ -87,6 +125,7 @@ export async function pollUntilTerminal<T>(options: PollerOptions<T>): Promise<T
   let transient = 0;
   let inFlight = false;
   let last: T | undefined;
+  let lastKey: string | null = null;
 
   const waitVisible = async () => {
     if (!options.hidden?.()) {
@@ -180,8 +219,20 @@ export async function pollUntilTerminal<T>(options: PollerOptions<T>): Promise<T
     if (options.isTerminal(last)) {
       return last;
     }
+
+    const key = options.semanticKey?.(last) ?? null;
+    if (key !== null && key !== lastKey) {
+      // Meaningful job change: do not accumulate successful-poll backoff.
+      attempt = 0;
+      lastKey = key;
+    }
+
     let wait = backoffMs(attempt, min, max);
+    if (options.isActiveProgress?.(last)) {
+      wait = Math.min(wait, Math.max(min, activeMax));
+    }
     attempt += 1;
+
     const retryAfter = parseRetryAfterMs(
       options.retryAfterHeader?.(last) ?? null,
       now(),

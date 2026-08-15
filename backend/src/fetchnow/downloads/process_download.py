@@ -50,8 +50,10 @@ __all__ = [
 class CoalescingProgressWriter:
     """At most one persist task; new samples replace the pending observed value.
 
-    The size/disk monitor must never await this writer. Shutdown cancels and
-    awaits the in-flight task so it cannot outlive ``run()``.
+    The size/disk monitor must never await this writer. On success, callers must
+    ``observe`` a final sample and ``await flush()`` before ``aclose()`` so the
+    last observation is not cancelled. Shutdown ``aclose`` cancels any remaining
+    in-flight task so it cannot outlive ``run()``.
     """
 
     def __init__(self, persist: Callable[[int], Awaitable[None]]) -> None:
@@ -60,6 +62,7 @@ class CoalescingProgressWriter:
         self._task: asyncio.Task[None] | None = None
         self._closed = False
         self.spawn_count = 0
+        self.observe_count = 0
 
     def observe(self, observed_bytes: int) -> None:
         """Record the latest observed size without waiting for persistence."""
@@ -68,6 +71,7 @@ class CoalescingProgressWriter:
         if type(observed_bytes) is bool or not isinstance(observed_bytes, int):
             return
         value = max(0, observed_bytes)
+        self.observe_count += 1
         if self._latest is None:
             self._latest = value
         else:
@@ -81,6 +85,19 @@ class CoalescingProgressWriter:
     @property
     def task(self) -> asyncio.Task[None] | None:
         return self._task
+
+    async def flush(self) -> None:
+        """Await pending persist without closing. Safe to call after final observe."""
+        if self._closed:
+            return
+        if self._latest is not None and (self._task is None or self._task.done()):
+            self.spawn_count += 1
+            self._task = asyncio.create_task(
+                self._drain(), name="download-progress-writer"
+            )
+        task = self._task
+        if task is not None and not task.done():
+            await task
 
     async def aclose(self) -> None:
         self._closed = True
@@ -335,11 +352,12 @@ class DownloadProcessRunner:
                 raise
             else:
                 # Final budget check after the tool exits (monitor samples ~0.2s).
+                final_watched = _watched_bytes() if size_roots else 0
                 if (
                     size_roots
                     and max_output_bytes is not None
                     and max_output_bytes > 0
-                    and _watched_bytes() > max_output_bytes
+                    and final_watched > max_output_bytes
                 ):
                     limit_code = too_large_code
                 if (
@@ -358,6 +376,10 @@ class DownloadProcessRunner:
                     failure_path = True
                     await _cancel_aux()
                     await _terminate_download_group(proc, pgid=pgid)
+                elif progress_writer is not None and size_roots:
+                    # Final observation + drain before stage transition clears percent.
+                    progress_writer.observe(final_watched)
+                    await progress_writer.flush()
         finally:
             await _cancel_aux()
             if failure_path or proc.returncode is None:

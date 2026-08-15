@@ -69,7 +69,9 @@ Authenticated delivery (PR7) uses process-local
 `MEDIA_DELIVERY_ENABLED` defaults to false.
 
 PR8 does not add application-level rate limiting. The browser poller is
-client-bounded (backoff, hidden-tab slowdown, absolute deadline). Enabling
+client-bounded (adaptive backoff that resets on semantic progress changes,
+≤1s while actively downloading on a visible tab, hidden-tab slowdown,
+absolute deadline). Enabling
 `PUBLIC_MEDIA_FLOW_ENABLED` does not raise server concurrency.
 
 PR9 muxing peak reservation is `video input + audio input + muxed output`
