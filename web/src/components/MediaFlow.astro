@@ -6,23 +6,62 @@ const enabled = isMediaFlowEnabled();
 
 <section class="flow" data-media-flow>
   <form class="flow-form" data-flow-form>
-    <label class="field">
-      <span class="field-label">Media link</span>
-      <input
-        class="field-input field-input-live"
-        data-flow-url
-        type="url"
-        name="url"
-        inputmode="url"
-        autocomplete="url"
-        placeholder="https://examplelink.com/..."
-        required
-        disabled={!enabled}
-        aria-disabled={enabled ? "false" : "true"}
-        aria-describedby="flow-hint"
-      />
-    </label>
-    <div class="flow-actions">
+    <div class="field">
+      <label class="field-label" for="media-link">Media link</label>
+      <div class="field-control">
+        <input
+          class="field-input field-input-live field-input-with-action"
+          id="media-link"
+          data-flow-url
+          type="url"
+          name="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://examplelink.com/..."
+          required
+          disabled={!enabled}
+          aria-disabled={enabled ? "false" : "true"}
+          aria-describedby="flow-hint"
+        />
+        <button
+          class="btn-paste"
+          type="button"
+          data-flow-paste
+          disabled={!enabled}
+          aria-label="Paste link from clipboard"
+          title="Paste"
+        >
+          <svg
+            class="btn-paste-icon"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <rect
+              x="8"
+              y="2"
+              width="8"
+              height="4"
+              rx="1"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            ></rect>
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+            ></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="flow-submit-row">
       <button
         class="btn btn-primary"
         type="submit"
@@ -34,6 +73,8 @@ const enabled = isMediaFlowEnabled();
       <button class="btn btn-ghost" type="button" data-flow-reset hidden>
         Start over
       </button>
+    </div>
+    <div class="flow-actions" data-flow-secondary-actions hidden>
       <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
         Cancel task
       </button>

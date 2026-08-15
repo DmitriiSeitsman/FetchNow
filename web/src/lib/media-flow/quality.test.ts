@@ -3,6 +3,7 @@ import {
   groupQualityOptions,
   normalizeQualityLabel,
   pickHighestEligibleFormat,
+  qualityDisplayLabel,
   qualityGroupKey,
   reconcileSelectedFormatId,
 } from "./quality";
@@ -48,6 +49,17 @@ function representativeIds(formats: readonly MediaFormat[], selectedFormatId?: s
 }
 
 describe("quality grouping", () => {
+  it("uses human quality tiers while preserving technical resolution", () => {
+    expect(qualityDisplayLabel(format({ height: 1080 }))).toBe("High (1080p)");
+    expect(qualityDisplayLabel(format({ height: 720 }))).toBe("High (720p)");
+    expect(qualityDisplayLabel(format({ height: 576 }))).toBe("Medium (576p)");
+    expect(qualityDisplayLabel(format({ height: 480 }))).toBe("Medium (480p)");
+    expect(qualityDisplayLabel(format({ height: 360 }))).toBe("Low (360p)");
+    expect(
+      qualityDisplayLabel(format({ height: null, qualityLabel: "source" })),
+    ).toBe("Quality (source)");
+  });
+
   it("keeps one representative for two eligible 720p formats and prefers MP4", () => {
     const formats = [
       format({ formatOptionId: WEBM_720, container: "webm" }),
@@ -57,7 +69,7 @@ describe("quality grouping", () => {
     expect(options).toHaveLength(1);
     expect(options[0].representative.formatOptionId).toBe(MP4_720);
     expect(options[0].members).toHaveLength(2);
-    expect(options[0].label).toBe("720p");
+    expect(options[0].label).toBe("High (720p)");
     expect(options[0].eligible).toBe(true);
   });
 
@@ -115,7 +127,7 @@ describe("quality grouping", () => {
     const options = groupQualityOptions(formats);
     expect(options).toHaveLength(2);
     expect(options.map((option) => option.key)).toEqual(["l:hd ready", "l:source ??"]);
-    expect(options[1].label).toBe("source ??");
+    expect(options[1].label).toBe("Quality (source ??)");
     expect(normalizeQualityLabel(" HD  Ready ")).toBe("hd ready");
     expect(qualityGroupKey(format({ height: 720 }))).toBe("h:720");
   });
@@ -129,7 +141,7 @@ describe("quality grouping", () => {
     expect(options).toHaveLength(2);
     expect(options[0].key).toBe("h:720");
     expect(options[1].key).toBe("l:p720");
-    expect(options[1].label).toBe("720p");
+    expect(options[1].label).toBe("High (720p)");
   });
 
   it("orders several heights from highest to lowest with label groups last", () => {

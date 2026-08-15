@@ -146,7 +146,7 @@ describe("PR10 loader, format, and contrast UX", () => {
       /muxing is not offered/i,
     );
     const selectedLabel = document.querySelector(".format-selected .format-label");
-    expect(selectedLabel?.textContent).toBe("720p");
+    expect(selectedLabel?.textContent).toBe("High (720p)");
     const disabledReason = document.querySelector(".format-reason");
     expect(disabledReason?.textContent).toMatch(/720p limit/i);
   });

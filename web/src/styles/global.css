@@ -152,8 +152,58 @@ body {
   color: var(--ink-muted);
 }
 
+.field-control {
+  position: relative;
+}
+
+.field-input-with-action {
+  padding-right: 3.1rem;
+}
+
+.btn-paste {
+  position: absolute;
+  top: 50%;
+  right: 0.4rem;
+  z-index: 2;
+  display: inline-grid;
+  place-items: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  transform: translateY(-50%);
+  appearance: none;
+  border: 1px solid rgba(29, 78, 137, 0.28);
+  border-radius: 10px;
+  background: var(--blue-wash);
+  color: var(--navy-deep);
+  line-height: 0;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.btn-paste-icon {
+  display: block;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.btn-paste:hover:enabled {
+  border-color: var(--blue-accent);
+  background: #d9e6f5;
+  color: var(--navy);
+}
+
+.btn-paste:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .field-input-live:focus-visible,
 .btn:focus-visible,
+.btn-paste:focus-visible,
 .format:focus-within {
   outline: 3px solid var(--blue-accent);
   outline-offset: 2px;
@@ -168,6 +218,23 @@ body {
 .flow-form {
   display: grid;
   gap: 0.85rem;
+}
+
+.flow-submit-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.flow-submit-row .btn {
+  min-width: 8rem;
+}
+
+.flow-submit-row .btn-ghost {
+  min-width: 0;
+  padding: 0.45rem 0.85rem;
+  font-weight: 600;
 }
 
 .flow-actions {
@@ -422,6 +489,14 @@ body {
 
   .btn {
     width: 100%;
+  }
+
+  .btn-paste {
+    width: 2.35rem;
+  }
+
+  .flow-submit-row .btn {
+    width: auto;
   }
 
   .format {
