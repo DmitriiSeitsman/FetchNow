@@ -4,13 +4,21 @@ import { renderFlow } from "./render";
 
 type ClipboardReader = Pick<Clipboard, "readText">;
 
+export function manualPasteHint(
+  userAgent: string = globalThis.navigator?.userAgent ?? "",
+): string {
+  const apple = /Mac|iPhone|iPad|iPod/.test(userAgent);
+  return apple
+    ? "Clipboard access was not granted. Press ⌘V to paste the link."
+    : "Clipboard access was not granted. Press Ctrl+V to paste the link.";
+}
+
 export async function pasteClipboardIntoInput(
   input: HTMLInputElement,
   clipboard: ClipboardReader | undefined = globalThis.navigator?.clipboard,
   /** Optional pre-started read so callers can kick off readText in the gesture turn. */
   pendingRead?: Promise<string>,
 ): Promise<boolean> {
-  input.focus();
   try {
     const raw =
       pendingRead ??
@@ -29,7 +37,6 @@ export async function pasteClipboardIntoInput(
     input.focus();
     return true;
   } catch {
-    input.focus();
     return false;
   }
 }
@@ -55,27 +62,46 @@ export function mountMediaFlow(
     void controller.submit(url);
   });
   const paste = root.querySelector<HTMLButtonElement>("[data-flow-paste]");
+  const pasteHint = root.querySelector<HTMLElement>("[data-flow-paste-hint]");
+  const showPasteHint = (visible: boolean) => {
+    if (!pasteHint) {
+      return;
+    }
+    pasteHint.textContent = visible ? manualPasteHint() : "";
+    pasteHint.hidden = !visible;
+  };
   let pasteInFlight = false;
-  paste?.addEventListener("click", (event) => {
-    event.preventDefault();
+  paste?.addEventListener("click", () => {
     if (!input || paste.disabled || pasteInFlight) {
       return;
     }
-    // Start readText in the same turn as the user gesture (Safari/Firefox).
+    showPasteHint(false);
     const clipboard = globalThis.navigator?.clipboard;
-    const pendingRead =
-      clipboard && typeof clipboard.readText === "function"
-        ? clipboard.readText()
-        : undefined;
+    if (!clipboard || typeof clipboard.readText !== "function") {
+      // Insecure origin or unsupported browser: leave the caret ready for ⌘V.
+      input.focus();
+      input.select();
+      showPasteHint(true);
+      return;
+    }
+    // readText must start in the same task as the click to keep user activation.
+    // The click event is deliberately not cancelled: Safari anchors its native
+    // paste confirmation to this gesture.
+    const pendingRead = clipboard.readText();
     pasteInFlight = true;
-    void pasteClipboardIntoInput(input, clipboard, pendingRead).finally(() => {
-      pasteInFlight = false;
-      // Leave enabled/disabled to renderFlow; only clear our in-flight lock.
-      if (!input.disabled) {
-        paste.disabled = false;
-      }
-    });
+    void pasteClipboardIntoInput(input, clipboard, pendingRead)
+      .then((pasted) => {
+        if (!pasted) {
+          input.focus();
+          input.select();
+          showPasteHint(true);
+        }
+      })
+      .finally(() => {
+        pasteInFlight = false;
+      });
   });
+  input?.addEventListener("paste", () => showPasteHint(false));
   root.querySelector("[data-flow-formats]")?.addEventListener("change", (event) => {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.type === "radio") {

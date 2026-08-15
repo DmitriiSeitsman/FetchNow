@@ -219,12 +219,12 @@ class Settings(BaseSettings):
         le=512,
     )
     max_source_duration_seconds: int = Field(
-        default=3600,
+        default=7200,
         alias="MAX_SOURCE_DURATION_SECONDS",
         gt=0,
     )
     max_source_file_bytes: int = Field(
-        default=536_870_912,
+        default=3_221_225_472,
         alias="MAX_SOURCE_FILE_BYTES",
         gt=0,
     )
@@ -288,12 +288,12 @@ class Settings(BaseSettings):
         alias="MEDIA_DOWNLOADS_ENABLED",
     )
     media_download_max_bytes: int = Field(
-        default=536_870_912,
+        default=3_221_225_472,
         alias="MEDIA_DOWNLOAD_MAX_BYTES",
         gt=0,
     )
     media_download_timeout_seconds: float = Field(
-        default=120.0,
+        default=300.0,
         alias="MEDIA_DOWNLOAD_TIMEOUT_SECONDS",
         gt=0,
         le=600,
@@ -433,7 +433,7 @@ class Settings(BaseSettings):
         alias="MEDIA_MUXING_FFPROBE_PATH",
     )
     media_muxing_timeout_seconds: float = Field(
-        default=30.0,
+        default=90.0,
         alias="MEDIA_MUXING_TIMEOUT_SECONDS",
         gt=0,
         le=120,

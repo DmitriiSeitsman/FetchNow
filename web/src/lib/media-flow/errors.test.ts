@@ -14,4 +14,10 @@ describe("error copy", () => {
     expect(userMessageForCode("MUXING_FAILED").retryable).toBe(true);
     expect(userMessageForCode("MUXED_OUTPUT_INVALID").retryable).toBe(false);
   });
+
+  it("names the concrete duration maximum instead of an abstract limit", () => {
+    const duration = userMessageForCode("DURATION_TOO_LONG");
+    expect(duration.text).toContain("2-hour");
+    expect(duration.retryable).toBe(false);
+  });
 });

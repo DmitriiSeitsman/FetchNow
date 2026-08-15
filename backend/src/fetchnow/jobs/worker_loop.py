@@ -45,6 +45,20 @@ _RETRYABLE_KINDS = frozenset(
 )
 
 
+def _public_inspection_error_code(
+    kind: InspectionErrorKind,
+    *,
+    internal_reason: str | None,
+) -> JobErrorCode:
+    """Map inspection failures to stable public job error codes."""
+    if kind is InspectionErrorKind.INSPECTION_POLICY_REJECTED:
+        if internal_reason == "DURATION_TOO_LONG":
+            return JobErrorCode.DURATION_TOO_LONG
+        if internal_reason in {"SOURCE_TOO_LARGE", "FILE_TOO_LARGE", "BYTES_TOO_LARGE"}:
+            return JobErrorCode.FILE_TOO_LARGE
+    return JobErrorCode.MEDIA_INSPECTION_FAILED
+
+
 def _retry_backoff_seconds(settings: Settings, attempt_count: int) -> float:
     """Exponential backoff bounded by configured min/max."""
     base = settings.media_job_retry_base_seconds
@@ -479,6 +493,7 @@ class MediaJobWorkerRunner:
                 job_id=snap.job_id,
                 fence=snap.fence,
                 kind=exc.kind,
+                internal_reason=exc.internal_reason,
                 attempt_count=snap.attempt_count,
             )
         except JobError:
@@ -492,6 +507,7 @@ class MediaJobWorkerRunner:
                 job_id=snap.job_id,
                 fence=snap.fence,
                 kind=InspectionErrorKind.INTERNAL_INSPECTION_ERROR,
+                internal_reason=None,
                 attempt_count=snap.attempt_count,
             )
         finally:
@@ -639,8 +655,11 @@ class MediaJobWorkerRunner:
         fence: int,
         kind: InspectionErrorKind,
         attempt_count: int,
+        internal_reason: str | None = None,
     ) -> None:
-        public_code = JobErrorCode.MEDIA_INSPECTION_FAILED.value
+        public_code = _public_inspection_error_code(
+            kind, internal_reason=internal_reason
+        ).value
         retryable = kind in _RETRYABLE_KINDS
         async with self._session_factory() as session:
             repo = MediaJobRepository(session)

@@ -20,6 +20,8 @@ class JobErrorCode(StrEnum):
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     INVALID_ACCESS_TOKEN = "INVALID_ACCESS_TOKEN"
     MEDIA_INSPECTION_FAILED = "MEDIA_INSPECTION_FAILED"
+    DURATION_TOO_LONG = "DURATION_TOO_LONG"
+    FILE_TOO_LARGE = "FILE_TOO_LARGE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -32,6 +34,9 @@ _PUBLIC_MESSAGES: dict[JobErrorCode, str] = {
     ),
     JobErrorCode.INVALID_ACCESS_TOKEN: "The access token is invalid.",
     JobErrorCode.MEDIA_INSPECTION_FAILED: "Media inspection failed.",
+    # Keep the stated maximum in sync with MAX_SOURCE_DURATION_SECONDS.
+    JobErrorCode.DURATION_TOO_LONG: "Media is longer than the 2-hour maximum.",
+    JobErrorCode.FILE_TOO_LARGE: "File exceeds limit.",
     JobErrorCode.INTERNAL_ERROR: "An unexpected error occurred.",
 }
 
@@ -42,6 +47,8 @@ _HTTP_STATUS: dict[JobErrorCode, int] = {
     JobErrorCode.IDEMPOTENCY_CONFLICT: 409,
     JobErrorCode.INVALID_ACCESS_TOKEN: 400,
     JobErrorCode.MEDIA_INSPECTION_FAILED: 422,
+    JobErrorCode.DURATION_TOO_LONG: 422,
+    JobErrorCode.FILE_TOO_LARGE: 413,
     JobErrorCode.INTERNAL_ERROR: 500,
 }
 

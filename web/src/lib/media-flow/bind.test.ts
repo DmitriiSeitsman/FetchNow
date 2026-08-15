@@ -19,6 +19,9 @@ describe("bind", () => {
     document.body.replaceChildren(input);
     const onInput = vi.fn();
     input.addEventListener("input", onInput);
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
 
     await expect(
       pasteClipboardIntoInput(input, {
@@ -28,6 +31,25 @@ describe("bind", () => {
 
     expect(input.value).toBe("https://example.test/video");
     expect(onInput).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("does not focus the input before clipboard read settles", async () => {
+    const input = document.createElement("input");
+    document.body.replaceChildren(input);
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
+
+    let release!: (value: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const done = pasteClipboardIntoInput(input, undefined, pending);
+    expect(document.activeElement).toBe(other);
+    release("https://example.test/deferred");
+    await expect(done).resolves.toBe(true);
+    expect(input.value).toBe("https://example.test/deferred");
     expect(document.activeElement).toBe(input);
   });
 
@@ -44,7 +66,6 @@ describe("bind", () => {
     ).resolves.toBe(false);
 
     expect(input.value).toBe("keep me");
-    expect(document.activeElement).toBe(input);
   });
 
   it("uses a pre-started clipboard read without calling readText again", async () => {
@@ -72,6 +93,7 @@ describe("bind", () => {
         <form data-flow-form>
           <input data-flow-url type="url" value="" />
           <button type="button" data-flow-paste>Paste</button>
+          <p data-flow-paste-hint hidden></p>
           <button type="submit" data-flow-submit>Fetch</button>
         </form>
       </section>
@@ -84,6 +106,81 @@ describe("bind", () => {
       expect(input?.value).toBe("https://click-paste.test/video");
     });
     expect(readText).toHaveBeenCalledOnce();
+    expect(
+      document.querySelector<HTMLElement>("[data-flow-paste-hint]")?.hidden,
+    ).toBe(true);
+    controller?.disconnect();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not cancel the paste click so native paste UI can proceed", () => {
+    const readText = vi.fn().mockReturnValue(new Promise<string>(() => {}));
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { readText } });
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="button" data-flow-paste>Paste</button>
+        </form>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    const paste = document.querySelector<HTMLButtonElement>("[data-flow-paste]");
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    paste?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(readText).toHaveBeenCalledOnce();
+    controller?.disconnect();
+    vi.unstubAllGlobals();
+  });
+
+  it("offers a manual paste hint when the clipboard is unreadable", async () => {
+    const readText = vi.fn().mockRejectedValue(new DOMException("denied"));
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { readText } });
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="button" data-flow-paste>Paste</button>
+          <p data-flow-paste-hint hidden></p>
+        </form>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    const input = document.querySelector<HTMLInputElement>("[data-flow-url]");
+    const hint = document.querySelector<HTMLElement>("[data-flow-paste-hint]");
+    document.querySelector<HTMLButtonElement>("[data-flow-paste]")?.click();
+
+    await vi.waitFor(() => {
+      expect(hint?.hidden).toBe(false);
+    });
+    expect(hint?.textContent).toMatch(/V to paste/);
+    expect(document.activeElement).toBe(input);
+
+    input?.dispatchEvent(new Event("paste", { bubbles: true }));
+    expect(hint?.hidden).toBe(true);
+    controller?.disconnect();
+    vi.unstubAllGlobals();
+  });
+
+  it("hints immediately when the Clipboard API is missing", () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="button" data-flow-paste>Paste</button>
+          <p data-flow-paste-hint hidden></p>
+        </form>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    const hint = document.querySelector<HTMLElement>("[data-flow-paste-hint]");
+    document.querySelector<HTMLButtonElement>("[data-flow-paste]")?.click();
+    expect(hint?.hidden).toBe(false);
+    expect(document.activeElement).toBe(
+      document.querySelector("[data-flow-url]"),
+    );
     controller?.disconnect();
     vi.unstubAllGlobals();
   });

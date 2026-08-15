@@ -877,6 +877,7 @@ def test_download_reinspect_clip_input_selects_exact_format() -> None:
                 "postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow"
             ),
             MAX_SOURCE_FILE_BYTES=10**9,
+            MEDIA_DOWNLOAD_MAX_BYTES=10**9,
         ),
         option_id,
         persisted,

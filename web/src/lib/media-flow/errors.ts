@@ -162,8 +162,9 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "This file is larger than the free download limit.",
     retryable: false,
   },
+  // Keep the stated maximum in sync with MAX_SOURCE_DURATION_SECONDS.
   DURATION_TOO_LONG: {
-    text: "This media is longer than the allowed limit.",
+    text: "This video is longer than the 2-hour maximum. Please try a shorter video.",
     retryable: false,
   },
   INTERNAL_ERROR: { text: GENERIC, retryable: true },

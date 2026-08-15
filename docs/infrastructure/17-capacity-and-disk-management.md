@@ -36,9 +36,9 @@ Disk capacity измеряет bytes, inode — количество filesystem 
 | Worker/capacity | `WORKER_CONCURRENCY` | `2` | Settings/logged only; media jobs absent |
 | Worker/capacity | `API_CONCURRENCY_LIMIT` | `32` | Settings only; enforcement absent |
 | Worker/capacity | `METADATA_CONCURRENCY` | `4` | planned; Settings не читает |
-| Worker/capacity | `MAX_SOURCE_DURATION_SECONDS` | `3600` | planned media policy |
-| Worker/capacity | `MAX_SOURCE_FILE_BYTES` | `536870912` | planned media policy |
-| Worker/capacity | `MAX_OUTPUT_FILE_BYTES` | `536870912` | planned media policy |
+| Worker/capacity | `MAX_SOURCE_DURATION_SECONDS` | `7200` | planned media policy |
+| Worker/capacity | `MAX_SOURCE_FILE_BYTES` | `3221225472` | planned media policy |
+| Worker/capacity | `MAX_OUTPUT_FILE_BYTES` | `3221225472` | planned media policy |
 | Storage | `TEMP_STORAGE_PATH` | `/var/lib/fetchnow/tmp` | Settings/Compose mount; pipeline absent |
 | Storage | `TEMP_STORAGE_MAX_BYTES` | `10737418240` | Settings only; enforcement absent |
 | Storage | `TEMP_STORAGE_SOFT_LIMIT_BYTES` | `8589934592` | planned; Settings не читает |

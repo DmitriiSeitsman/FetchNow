@@ -37,7 +37,7 @@ Envelope shape (already used by the API foundation):
 | `RATE_LIMITED` | 429 | Too many requests | yes | yes (honor Retry-After) | Per-user internal quotas math |
 | `CAPACITY_UNAVAILABLE` | 503 | Temporary capacity limit | yes | yes | Disk paths, free-byte counts |
 | `FILE_TOO_LARGE` | 413 | File exceeds limit | no | no | Exact configured byte caps (optional high-level OK) |
-| `DURATION_TOO_LONG` | 422 | Media longer than allowed | no | no | Internal probe traces |
+| `DURATION_TOO_LONG` | 422 | Media longer than the configured maximum (public text names the hour count) | no | no | Internal probe traces |
 | `JOB_NOT_FOUND` | 404 | Job not found | no | no | Whether ID existed then deleted |
 | `JOB_EXPIRED` | 410 | Job or file expired | no | no | Storage keys |
 | `IDEMPOTENCY_CONFLICT` | 409 | Access token already used for a different request | no | no | Fingerprints, prior job fields |
@@ -90,8 +90,11 @@ When disabled, create returns `CAPACITY_UNAVAILABLE` (503).
 | `GET /api/v1/media/jobs/{id}` | Requires `Authorization: Bearer <accessToken>`. Missing/wrong credential → `JOB_NOT_FOUND` (indistinguishable). Expired → `JOB_EXPIRED`. |
 
 Ownership uses hashed credentials only (see [ADR 0009](../adr/0009-postgresql-media-job-orchestration.md)).
-Worker-side terminal inspection failures surface as `MEDIA_INSPECTION_FAILED` on
-the job record; they are not an inline API yt-dlp path.
+Worker-side terminal inspection failures usually surface as `MEDIA_INSPECTION_FAILED`
+on the job record. Policy rejects map to the existing catalog codes when known:
+`DURATION_TOO_LONG` (duration over `MAX_SOURCE_DURATION_SECONDS`) and
+`FILE_TOO_LARGE` when size policy rejects apply. They are not an inline API
+yt-dlp path.
 
 ## Media download jobs (PR6)
 
