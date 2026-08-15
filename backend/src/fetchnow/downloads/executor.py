@@ -485,11 +485,10 @@ class DownloadExecutor:
         ffprobe = validate_trusted_executable(
             settings.media_muxing_ffprobe_path, kind="ffprobe"
         )
-        video_cap, audio_cap, output_cap = _mux_stage_byte_caps(
-            selection, settings.media_download_max_bytes
-        )
-        video_tool_cap = _ytdlp_stage_cap(video_cap, settings.media_download_max_bytes)
-        audio_tool_cap = _ytdlp_stage_cap(audio_cap, settings.media_download_max_bytes)
+        # Enforce the product byte ceiling on each yt-dlp stage. Approximate
+        # per-stream sizes are only for reservation/progress — using them as
+        # max_output_bytes falsely fails long DASH audio/video as TOO_LARGE.
+        stage_write_cap = int(settings.media_download_max_bytes)
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
             if self._user_cancel:
                 raise _JobCancelledError()
@@ -500,8 +499,8 @@ class DownloadExecutor:
             workspace=workspace,
             output_template="video/stream.%(ext)s",
             output_dir=str(workspace.video),
-            max_bytes=video_tool_cap,
-            min_free_headroom=max(0, peak_bytes - video_tool_cap),
+            max_bytes=stage_write_cap,
+            min_free_headroom=max(0, peak_bytes - stage_write_cap),
             expected_bytes=selection.video_approx_bytes,
         )
         video_path = self._store.find_single_regular_file_in(
@@ -520,8 +519,8 @@ class DownloadExecutor:
             workspace=workspace,
             output_template="audio/stream.%(ext)s",
             output_dir=str(workspace.audio),
-            max_bytes=audio_tool_cap,
-            min_free_headroom=max(0, peak_bytes - consumed - audio_tool_cap),
+            max_bytes=stage_write_cap,
+            min_free_headroom=max(0, peak_bytes - consumed - stage_write_cap),
             expected_bytes=selection.audio_approx_bytes,
         )
         audio_path = self._store.find_single_regular_file_in(
@@ -1128,11 +1127,9 @@ def _ytdlp_stage(
     )
 
 
-# yt-dlp ``--max-filesize`` skips the download (exit 0, empty output) when the
-# provider-reported size is even 1 byte over the cap, and approx estimates are
-# not exact. Tool caps therefore need headroom over the reserved stage size.
-_TOOL_CAP_MIN_PAD_BYTES = 512_000
-_TOOL_CAP_PAD_RATIO = 0.25
+# Per-stream approximate sizes feed reservation/progress only. yt-dlp stage
+# write ceilings use MEDIA_DOWNLOAD_MAX_BYTES so underestimates cannot falsely
+# trip DOWNLOAD_TOO_LARGE mid-transfer.
 
 
 def _stage_cap(approx: int | None, max_bytes: int) -> int:
@@ -1140,13 +1137,6 @@ def _stage_cap(approx: int | None, max_bytes: int) -> int:
     if approx is None or type(approx) is bool or approx < 1:
         return int(max_bytes)
     return int(min(max_bytes, int(approx)))
-
-
-def _ytdlp_stage_cap(stage_cap: int, max_bytes: int) -> int:
-    """Stage cap plus headroom, for caps handed to yt-dlp as ``--max-filesize``."""
-    cap = int(stage_cap)
-    padded = cap + max(_TOOL_CAP_MIN_PAD_BYTES, int(cap * _TOOL_CAP_PAD_RATIO))
-    return int(min(int(max_bytes), padded))
 
 
 def _mux_stage_byte_caps(

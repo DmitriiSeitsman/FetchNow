@@ -1,13 +1,11 @@
-"""yt-dlp stage caps need headroom over the reserved approximate stage size."""
+"""Mux stage reservation caps stay on approximate sizes; writes use the global max."""
 
 from __future__ import annotations
 
 from fetchnow.downloads.executor import (
-    _TOOL_CAP_MIN_PAD_BYTES,
     _mux_stage_byte_caps,
     _peak_reservation_bytes,
     _stage_cap,
-    _ytdlp_stage_cap,
 )
 from fetchnow.downloads.selection import MuxedDownloadSelection
 from fetchnow.media_inspection.models import FormatCategory
@@ -50,22 +48,6 @@ def test_stage_cap_never_exceeds_max_bytes() -> None:
     assert _stage_cap(9_000_000, max_bytes=1_000_000) == 1_000_000
 
 
-def test_ytdlp_cap_pads_small_estimates_by_a_flat_floor() -> None:
-    approx = 274_912
-    cap = _ytdlp_stage_cap(_stage_cap(approx, _MAX_BYTES), _MAX_BYTES)
-    assert cap == approx + _TOOL_CAP_MIN_PAD_BYTES
-
-
-def test_ytdlp_cap_pads_large_estimates_proportionally() -> None:
-    approx = 40_000_000
-    cap = _ytdlp_stage_cap(_stage_cap(approx, _MAX_BYTES), _MAX_BYTES)
-    assert cap == 50_000_000
-
-
-def test_ytdlp_cap_never_exceeds_max_bytes() -> None:
-    assert _ytdlp_stage_cap(1_000_000, max_bytes=1_000_000) == 1_000_000
-
-
 def test_reservation_stays_on_unpadded_estimates() -> None:
     selection = _selection()
     video_cap, audio_cap, output_cap = _mux_stage_byte_caps(selection, _MAX_BYTES)
@@ -74,3 +56,25 @@ def test_reservation_stays_on_unpadded_estimates() -> None:
     assert _peak_reservation_bytes(selection, _MAX_BYTES) == (
         video_cap + audio_cap + output_cap
     )
+
+
+def test_unknown_stream_sizes_fail_closed_to_three_times_max() -> None:
+    selection = MuxedDownloadSelection(
+        format_option_id="fmt_unknown",
+        container="mp4",
+        width=360,
+        height=640,
+        fps=30.0,
+        has_video=True,
+        has_audio=True,
+        category=FormatCategory.PROGRESSIVE,
+        quality_label="p480",
+        free_tier_eligible=True,
+        approx_bytes=None,
+        video_approx_bytes=None,
+        audio_approx_bytes=None,
+        expected_duration_seconds=60.0,
+        video_format_token="dash_sep-3",
+        audio_format_token="dash_sep-8",
+    )
+    assert _peak_reservation_bytes(selection, _MAX_BYTES) == 3 * _MAX_BYTES

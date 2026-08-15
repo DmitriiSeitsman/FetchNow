@@ -95,7 +95,10 @@ What duration does affect is wall-clock occupancy, because
 `MEDIA_DOWNLOAD_TIMEOUT_SECONDS` defaults to `300` (ceiling `600`) so a
 byte-capped stage is not killed on a slow provider, and
 `MEDIA_MUXING_TIMEOUT_SECONDS` defaults to `90` (ceiling `120`) to stream-copy
-byte-capped inputs. A muxed attempt therefore occupies the single download slot
+byte-capped inputs. Muxed yt-dlp stages enforce `MEDIA_DOWNLOAD_MAX_BYTES` as
+the write/`--max-filesize` ceiling; approximate stream sizes are reservation and
+progress hints only, so an underestimated DASH audio bitrate cannot falsely
+surface as `DOWNLOAD_TOO_LARGE`. A muxed attempt therefore occupies the single download slot
 for up to two download stages plus one mux; size the queue expectations from
 those timeouts, not from source duration.
 
