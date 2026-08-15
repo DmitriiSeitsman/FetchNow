@@ -98,7 +98,13 @@ async def test_cancel_kills_process(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> None:
-    """Parent exits after spawning a pipe-holding descendant; timeout must kill it."""
+    """Parent exits after spawning a pipe-holding descendant; timeout must kill it.
+
+    Readiness is signaled by the descendant before the parent exits, matching
+    ``test_exited_parent_descendant_killed_on_output_budget``. A short timeout
+    alone raced with process spawn under load and sometimes killed the session
+    before the shell wrote its markers.
+    """
     pid_file = tmp_path / "descendant.pid"
     started = tmp_path / "started"
     script = tmp_path / "exited_parent.sh"
@@ -108,9 +114,17 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
             #!/bin/sh
             # Descendant inherits stdout/stderr and keeps them open so communicate
             # cannot finish after the direct child exits.
-            sleep 120 &
-            echo $! > "{pid_file}"
-            touch "{started}"
+            python3 -c '
+            import os, time
+            from pathlib import Path
+            Path("{pid_file}").write_text(str(os.getpid()), encoding="utf-8")
+            Path("{started}").touch()
+            time.sleep(120)
+            ' &
+            for _ in $(seq 1 50); do
+              if [ -f "{started}" ]; then break; fi
+              sleep 0.05
+            done
             exit 0
             """
         ),
@@ -122,7 +136,7 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
         [str(script)],
         env=build_sanitized_env(home_dir=str(tmp_path), tmp_dir=str(tmp_path)),
         cwd=str(tmp_path),
-        timeout_seconds=1.0,
+        timeout_seconds=5.0,
         stdout_limit_bytes=1024,
         stderr_limit_bytes=1024,
     )
