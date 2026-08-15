@@ -23,6 +23,27 @@ import {
   progressiveFormat,
 } from "./fixtures";
 
+const providerCapabilities = {
+  providerId: "vk",
+  operations: {
+    downloadVideo: "enabled",
+    extractAudio: "disabled",
+    selectQuality: "enabled",
+    selectContainer: "disabled",
+  },
+  contentKinds: {
+    video: "enabled",
+    clip: "enabled",
+    live: "disabled",
+    playlist: "disabled",
+  },
+  metadata: {
+    title: "enabled",
+    duration: "enabled",
+    thumbnail: "planned",
+  },
+} as const;
+
 describe("contracts", () => {
   it("accepts valid create/status inspection payloads", () => {
     const queued = parseInspectionJob(inspectionPayload());
@@ -41,6 +62,42 @@ describe("contracts", () => {
     );
     expect(job.id).toBe(DOWNLOAD_ID);
     expect(job.artifactReady).toBe(true);
+  });
+
+  it("accepts absent, null, and valid provider capabilities", () => {
+    expect(parseInspectionJob(inspectionPayload()).providerCapabilities).toBeUndefined();
+    expect(
+      parseDownloadJob(downloadPayload({ providerCapabilities: null })).providerCapabilities,
+    ).toBeNull();
+    expect(
+      parseInspectionJob(inspectionPayload({ providerCapabilities })).providerCapabilities,
+    ).toEqual(providerCapabilities);
+  });
+
+  it("rejects malformed provider capabilities while retaining strict top-level keys", () => {
+    expect(() =>
+      parseInspectionJob(
+        inspectionPayload({
+          providerCapabilities: {
+            ...providerCapabilities,
+            operations: { ...providerCapabilities.operations, downloadVideo: "unknown" },
+          },
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(
+        downloadPayload({
+          providerCapabilities: {
+            ...providerCapabilities,
+            metadata: { ...providerCapabilities.metadata, extra: "enabled" },
+          },
+        }),
+      ),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseDownloadJob(downloadPayload({ providerCapabilities, unexpected: true })),
+    ).toThrow(FlowError);
   });
 
   it("rejects missing and unknown fields", () => {

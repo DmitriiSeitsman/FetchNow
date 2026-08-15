@@ -63,6 +63,9 @@ export const DOWNLOAD_PERCENT_STAGES = [
   "downloading_audio",
 ] as const;
 
+export const CAPABILITY_STATES = ["enabled", "disabled", "planned"] as const;
+export type CapabilityState = (typeof CAPABILITY_STATES)[number];
+
 const FORBIDDEN_FILENAME_CHARS = new Set([
   "/",
   "\\",
@@ -154,6 +157,7 @@ const JOB_KEYS = new Set([
   "errorCode",
   "result",
   "statusPath",
+  "providerCapabilities",
 ]);
 
 const DOWNLOAD_KEYS = new Set([
@@ -176,7 +180,28 @@ const DOWNLOAD_KEYS = new Set([
   "progressPercent",
   "artifactBytes",
   "suggestedFilename",
+  "providerCapabilities",
 ]);
+
+const PROVIDER_CAPABILITIES_KEYS = new Set([
+  "providerId",
+  "operations",
+  "contentKinds",
+  "metadata",
+]);
+const PROVIDER_CAPABILITY_OPERATIONS_KEYS = new Set([
+  "downloadVideo",
+  "extractAudio",
+  "selectQuality",
+  "selectContainer",
+]);
+const PROVIDER_CAPABILITY_CONTENT_KINDS_KEYS = new Set([
+  "video",
+  "clip",
+  "live",
+  "playlist",
+]);
+const PROVIDER_CAPABILITY_METADATA_KEYS = new Set(["title", "duration", "thumbnail"]);
 
 export type MediaFormat = {
   formatOptionId: string;
@@ -204,6 +229,27 @@ export type InspectionResult = {
   muxingRequired: boolean;
 };
 
+export type ProviderCapabilities = {
+  providerId: string;
+  operations: {
+    downloadVideo: CapabilityState;
+    extractAudio: CapabilityState;
+    selectQuality: CapabilityState;
+    selectContainer: CapabilityState;
+  };
+  contentKinds: {
+    video: CapabilityState;
+    clip: CapabilityState;
+    live: CapabilityState;
+    playlist: CapabilityState;
+  };
+  metadata: {
+    title: CapabilityState;
+    duration: CapabilityState;
+    thumbnail: CapabilityState;
+  };
+};
+
 export type InspectionJob = {
   id: string;
   state: InspectionState;
@@ -214,6 +260,7 @@ export type InspectionJob = {
   errorCode: string | null;
   result: InspectionResult | null;
   statusPath: string;
+  providerCapabilities?: ProviderCapabilities | null;
 };
 
 export type DownloadJob = {
@@ -236,6 +283,7 @@ export type DownloadJob = {
   progressPercent: number | null;
   artifactBytes: number | null;
   suggestedFilename: string;
+  providerCapabilities?: ProviderCapabilities | null;
 };
 
 export type ApiErrorBody = {
@@ -483,6 +531,74 @@ function requireBoolean(value: unknown): boolean {
   return value;
 }
 
+function requireCapabilityState(value: unknown): CapabilityState {
+  if (
+    typeof value !== "string" ||
+    !(CAPABILITY_STATES as readonly string[]).includes(value)
+  ) {
+    fail();
+  }
+  return value as CapabilityState;
+}
+
+function parseCapabilityMap(
+  value: unknown,
+  keys: Set<string>,
+): Record<string, CapabilityState> {
+  if (!isRecord(value)) {
+    fail();
+  }
+  rejectForbidden(value);
+  rejectUnknown(value, keys);
+  const parsed: Record<string, CapabilityState> = {};
+  for (const key of keys) {
+    parsed[key] = requireCapabilityState(value[key]);
+  }
+  return parsed;
+}
+
+function parseProviderCapabilities(
+  value: unknown,
+): ProviderCapabilities | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isRecord(value)) {
+    fail();
+  }
+  rejectForbidden(value);
+  rejectUnknown(value, PROVIDER_CAPABILITIES_KEYS);
+  const operations = parseCapabilityMap(
+    value.operations,
+    PROVIDER_CAPABILITY_OPERATIONS_KEYS,
+  );
+  const contentKinds = parseCapabilityMap(
+    value.contentKinds,
+    PROVIDER_CAPABILITY_CONTENT_KINDS_KEYS,
+  );
+  const metadata = parseCapabilityMap(value.metadata, PROVIDER_CAPABILITY_METADATA_KEYS);
+  return {
+    providerId: requireSafeToken(value.providerId),
+    operations: {
+      downloadVideo: operations.downloadVideo,
+      extractAudio: operations.extractAudio,
+      selectQuality: operations.selectQuality,
+      selectContainer: operations.selectContainer,
+    },
+    contentKinds: {
+      video: contentKinds.video,
+      clip: contentKinds.clip,
+      live: contentKinds.live,
+      playlist: contentKinds.playlist,
+    },
+    metadata: {
+      title: metadata.title,
+      duration: metadata.duration,
+      thumbnail: metadata.thumbnail,
+    },
+  };
+}
+
 export function isSafeSuggestedFilename(name: unknown, container: string): name is string {
   if (typeof name !== "string" || !ALLOWED_CONTAINERS.has(container)) {
     return false;
@@ -721,6 +837,7 @@ export function parseInspectionJob(value: unknown): InspectionJob {
   const expiresAt = requireIso(value.expiresAt);
   const completedAt =
     value.completedAt === null ? null : requireIso(value.completedAt);
+  const providerCapabilities = parseProviderCapabilities(value.providerCapabilities);
   assertInspectionTimestamps(
     typedState,
     createdAt,
@@ -738,6 +855,7 @@ export function parseInspectionJob(value: unknown): InspectionJob {
     errorCode,
     result,
     statusPath,
+    providerCapabilities,
   };
 }
 
@@ -984,6 +1102,7 @@ export function parseDownloadJob(value: unknown): DownloadJob {
   const expiresAt = requireIso(value.expiresAt);
   const completedAt =
     value.completedAt === null ? null : requireIso(value.completedAt);
+  const providerCapabilities = parseProviderCapabilities(value.providerCapabilities);
   assertDownloadTimestamps(
     typedDownloadState,
     createdAt,
@@ -1011,6 +1130,7 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     progressPercent,
     artifactBytes,
     suggestedFilename,
+    providerCapabilities,
   };
 }
 
