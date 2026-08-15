@@ -30,6 +30,15 @@ const astroSource = readFileSync(
   "utf8",
 );
 
+const alternateFormat: MediaFormat = {
+  ...progressiveFormat,
+  formatOptionId: "fmt_bbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  height: 480,
+  width: 854,
+  qualityLabel: "p480",
+  approxBytes: 6_000_000,
+};
+
 const RESULT: FlowSnapshot["result"] = {
   providerId: "vk",
   canonicalProviderUrl: "https://vk.com/video-1_2",
@@ -126,24 +135,26 @@ describe("PR12 size, filename, percent, and placeholder", () => {
 
   it("shows approximate size or the unknown-size message in quality rows", () => {
     mountFlow();
+    const formats = [progressiveFormat, alternateFormat];
     renderFlow(
       document,
       snapshot({
         phase: "inspected",
-        result: RESULT,
-        formats: [progressiveFormat],
+        result: { ...RESULT, formats },
+        formats,
         selectedFormatId: progressiveFormat.formatOptionId,
         downloadEligible: true,
       }),
     );
     expect(el(".format-detail").textContent).toContain("≈ 11.4 MB");
     const unknown: MediaFormat = { ...progressiveFormat, approxBytes: null };
+    const unknownFormats = [unknown, alternateFormat];
     renderFlow(
       document,
       snapshot({
         phase: "inspected",
-        result: { ...RESULT, formats: [unknown] },
-        formats: [unknown],
+        result: { ...RESULT, formats: unknownFormats },
+        formats: unknownFormats,
         selectedFormatId: unknown.formatOptionId,
         downloadEligible: true,
       }),

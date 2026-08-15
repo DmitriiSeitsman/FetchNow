@@ -225,13 +225,15 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     muxingBlocked: snapshot.muxingBlocked,
     selectedFormatId: snapshot.selectedFormatId,
   });
-  const showQuality = options.length > 0 && snapshot.result !== null;
+  // Hide with 0–1 grouped options: a single auto-selected format still downloads.
+  const showQuality =
+    snapshot.canSelectQuality !== false && options.length > 1 && snapshot.result !== null;
   const list = root.querySelector("[data-flow-formats]");
   if (list instanceof HTMLElement) {
     list.replaceChildren();
     list.hidden = !showQuality;
     if (showQuality) {
-      const selectable = snapshot.phase === "inspected";
+      const selectable = snapshot.phase === "inspected" && snapshot.canSelectQuality !== false;
       for (const option of options) {
         list.append(qualityRow(option, snapshot, selectable));
       }

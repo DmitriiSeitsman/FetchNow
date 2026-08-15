@@ -7,6 +7,7 @@ import {
   type MediaFormat,
   type ProgressStage,
 } from "./contracts";
+import { projectCapabilityUi } from "./capabilities";
 import { flowStatusText, STAGE_LABEL } from "./progress";
 import { pickHighestEligibleFormat, reconcileSelectedFormatId } from "./quality";
 import { generateAccessToken } from "./credentials";
@@ -42,6 +43,7 @@ export type FlowSnapshot = {
   formats: MediaFormat[];
   selectedFormatId: string | null;
   downloadEligible: boolean;
+  canSelectQuality?: boolean;
   muxingBlocked: boolean;
   httpsRequired: boolean;
   grantArming: boolean;
@@ -121,9 +123,13 @@ export class MediaFlowController {
     const result = this.mediaJob?.state === "inspected" ? this.mediaJob.result : null;
     const formats = result?.formats ?? [];
     const muxingBlocked = result?.muxingRequired === true;
+    const capabilities = projectCapabilityUi(this.mediaJob?.providerCapabilities);
     const selected = formats.find((f) => f.formatOptionId === this.selectedFormatId);
     const downloadEligible =
-      !muxingBlocked && selected !== undefined && isDownloadEligible(selected);
+      capabilities.canDownloadVideo &&
+      !muxingBlocked &&
+      selected !== undefined &&
+      isDownloadEligible(selected);
     const phase = this.machine.current;
     const httpsRequired = phase === "ready" && !this.secureContext();
     const armed =
@@ -145,6 +151,7 @@ export class MediaFlowController {
       formats,
       selectedFormatId: this.selectedFormatId,
       downloadEligible,
+      canSelectQuality: capabilities.canSelectQuality,
       muxingBlocked,
       httpsRequired,
       grantArming: this.grantArming,
@@ -603,6 +610,9 @@ export class MediaFlowController {
     if (this.machine.current !== "inspected") {
       return;
     }
+    if (!projectCapabilityUi(this.mediaJob?.providerCapabilities).canSelectQuality) {
+      return;
+    }
     const format = this.mediaJob?.result?.formats.find(
       (item) => item.formatOptionId === formatOptionId,
     );
@@ -629,6 +639,7 @@ export class MediaFlowController {
     if (
       !this.token ||
       !this.mediaJob ||
+      !projectCapabilityUi(this.mediaJob.providerCapabilities).canDownloadVideo ||
       !format ||
       !isDownloadEligible(format) ||
       this.mediaJob.result?.muxingRequired
