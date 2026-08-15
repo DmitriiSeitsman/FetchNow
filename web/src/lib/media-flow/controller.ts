@@ -25,7 +25,7 @@ import {
   isAbortError,
   userMessageForCode,
 } from "./errors";
-import { pollUntilTerminal } from "./poller";
+import { pollUntilTerminal, jobProgressSemanticKey, isActiveDownloadProgress } from "./poller";
 import { FlowSession, type RecoveryRecord } from "./session";
 import {
   FlowMachine,
@@ -516,6 +516,14 @@ export class MediaFlowController {
       expiresAt: () => this.mediaJob?.expiresAt ?? valueExpires(),
       signal: this.abort!.signal,
       hidden: this.documentHidden,
+      semanticKey: (value) =>
+        jobProgressSemanticKey({
+          state: value.state,
+          progressStage: null,
+          progressPercent: null,
+          attempt: null,
+          updatedAt: value.updatedAt,
+        }),
       onTick: (value) => {
         if (!this.machine.isCurrentGeneration(generation)) {
           return;
@@ -686,6 +694,9 @@ export class MediaFlowController {
       signal: this.abort!.signal,
       hidden: this.documentHidden,
       deadlineMs: 20 * 60_000,
+      semanticKey: jobProgressSemanticKey,
+      isActiveProgress: isActiveDownloadProgress,
+      activeMaxIntervalMs: 1_000,
       onTick: (value) => {
         if (!this.machine.isCurrentGeneration(generation)) {
           return;

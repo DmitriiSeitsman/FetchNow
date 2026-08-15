@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FlowError } from "./errors";
-import { parseRetryAfterMs, pollUntilTerminal } from "./poller";
+import {
+  isActiveDownloadProgress,
+  jobProgressSemanticKey,
+  parseRetryAfterMs,
+  pollUntilTerminal,
+} from "./poller";
 
 describe("poller", () => {
   it("honors bounded Retry-After and ignores unbounded values", () => {
@@ -156,5 +161,197 @@ describe("poller", () => {
     });
     expect(value).toBe(2);
     expect(ticks).toEqual([2]);
+  });
+
+  it("backs off on unchanged queued responses", async () => {
+    const sleeps: number[] = [];
+    const ac = new AbortController();
+    let n = 0;
+    await pollUntilTerminal({
+      read: async () => {
+        n += 1;
+        return {
+          state: "queued",
+          progressStage: "queued",
+          progressPercent: null,
+          attempt: 1,
+          updatedAt: "2026-01-01T00:00:00Z",
+        };
+      },
+      isTerminal: () => n >= 5,
+      expiresAt: () => new Date(Date.now() + 60_000).toISOString(),
+      signal: ac.signal,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      minIntervalMs: 100,
+      maxIntervalMs: 8_000,
+      semanticKey: jobProgressSemanticKey,
+    });
+    expect(sleeps.length).toBeGreaterThanOrEqual(3);
+    // Unchanged key: attempt grows → later waits trend upward (bounded).
+    expect(sleeps[sleeps.length - 1]!).toBeGreaterThanOrEqual(sleeps[0]!);
+    expect(Math.max(...sleeps)).toBeLessThanOrEqual(8_000);
+  });
+
+  it("resets delay when progressPercent or state changes", async () => {
+    const sleeps: number[] = [];
+    const ac = new AbortController();
+    const sequence = [
+      {
+        state: "downloading",
+        progressStage: "downloading_video",
+        progressPercent: 10,
+        attempt: 1,
+        updatedAt: "t1",
+      },
+      {
+        state: "downloading",
+        progressStage: "downloading_video",
+        progressPercent: 10,
+        attempt: 1,
+        updatedAt: "t1",
+      },
+      {
+        state: "downloading",
+        progressStage: "downloading_video",
+        progressPercent: 40,
+        attempt: 1,
+        updatedAt: "t2",
+      },
+      {
+        state: "downloading",
+        progressStage: "downloading_audio",
+        progressPercent: 5,
+        attempt: 1,
+        updatedAt: "t3",
+      },
+      {
+        state: "ready",
+        progressStage: "ready",
+        progressPercent: null,
+        attempt: 1,
+        updatedAt: "t4",
+      },
+    ];
+    let i = 0;
+    await pollUntilTerminal({
+      read: async () => sequence[Math.min(i++, sequence.length - 1)]!,
+      isTerminal: (v) => v.state === "ready",
+      expiresAt: () => new Date(Date.now() + 60_000).toISOString(),
+      signal: ac.signal,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      minIntervalMs: 700,
+      maxIntervalMs: 8_000,
+      semanticKey: jobProgressSemanticKey,
+      isActiveProgress: isActiveDownloadProgress,
+      activeMaxIntervalMs: 1_000,
+    });
+    expect(sleeps.every((ms) => ms <= 1_000)).toBe(true);
+    expect(sleeps.every((ms) => ms >= 700)).toBe(true);
+  });
+
+  it("keeps active download polls at most 1000ms even after many ticks", async () => {
+    const sleeps: number[] = [];
+    const ac = new AbortController();
+    let percent = 0;
+    await pollUntilTerminal({
+      read: async () => {
+        percent += 5;
+        return {
+          state: "downloading",
+          progressStage: "downloading_video",
+          progressPercent: Math.min(90, percent),
+          attempt: 1,
+          updatedAt: `t${percent}`,
+        };
+      },
+      isTerminal: () => percent >= 50,
+      expiresAt: () => new Date(Date.now() + 60_000).toISOString(),
+      signal: ac.signal,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      minIntervalMs: 700,
+      maxIntervalMs: 8_000,
+      semanticKey: jobProgressSemanticKey,
+      isActiveProgress: isActiveDownloadProgress,
+      activeMaxIntervalMs: 1_000,
+    });
+    expect(sleeps.length).toBeGreaterThan(5);
+    expect(sleeps.every((ms) => ms <= 1_000)).toBe(true);
+  });
+
+  it("delivers several onTick samples across 5.5s video and 4.2s audio stages", async () => {
+    vi.useFakeTimers();
+    const ticks: Array<number | null> = [];
+    const ac = new AbortController();
+    let clock = 0;
+    const videoMs = 5_500;
+    const audioMs = 4_200;
+    try {
+      const run = pollUntilTerminal({
+        read: async () => {
+          if (clock < videoMs) {
+            const pct = Math.min(90, Math.floor((clock / videoMs) * 90));
+            return {
+              state: "downloading",
+              progressStage: "downloading_video",
+              progressPercent: pct,
+              attempt: 1,
+              updatedAt: `v${clock}`,
+            };
+          }
+          if (clock < videoMs + audioMs) {
+            const elapsed = clock - videoMs;
+            const pct = Math.min(90, Math.floor((elapsed / audioMs) * 90));
+            return {
+              state: "downloading",
+              progressStage: "downloading_audio",
+              progressPercent: pct,
+              attempt: 1,
+              updatedAt: `a${clock}`,
+            };
+          }
+          return {
+            state: "ready",
+            progressStage: "ready",
+            progressPercent: null,
+            attempt: 1,
+            updatedAt: "done",
+          };
+        },
+        isTerminal: (v) => v.state === "ready",
+        expiresAt: () => new Date(Date.now() + 120_000).toISOString(),
+        signal: ac.signal,
+        now: () => Date.now() + clock,
+        sleep: async (ms) => {
+          clock += ms;
+          await vi.advanceTimersByTimeAsync(ms);
+        },
+        minIntervalMs: 700,
+        maxIntervalMs: 8_000,
+        semanticKey: jobProgressSemanticKey,
+        isActiveProgress: isActiveDownloadProgress,
+        activeMaxIntervalMs: 1_000,
+        onTick: (v) => {
+          ticks.push(v.progressPercent);
+        },
+      });
+      const value = await run;
+      expect(value.state).toBe("ready");
+      const videoTicks = ticks.filter((p, idx) => {
+        // Rough: early ticks during video stage have non-null percents before audio.
+        return p !== null && idx < ticks.length - 1;
+      });
+      expect(videoTicks.length).toBeGreaterThanOrEqual(4);
+      expect(ticks.some((p) => typeof p === "number" && p > 0)).toBe(true);
+      // Ready is immediate — last tick is terminal and polling ends (no delay after).
+      expect(ticks[ticks.length - 1]).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

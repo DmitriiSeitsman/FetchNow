@@ -94,6 +94,8 @@ class ProgressPersistGate:
         self.last_persist_attempt_at: float | None = None
         self.last_successful_write_at: float | None = None
         self.ownership_lost = False
+        self.observed_sample_count = 0
+        self.persisted_update_count = 0
 
     def note_observed(self, candidate: int | None) -> int | None:
         """Update max observed percent. Return the value to persist, or None."""
@@ -113,6 +115,7 @@ class ProgressPersistGate:
         self.last_successful_write_at = now
         self.last_persist_attempt_at = now
         self._backoff = self._backoff_initial
+        self.persisted_update_count += 1
 
     def mark_attempt_failed(self) -> None:
         self.last_persist_attempt_at = self._clock()
@@ -122,29 +125,58 @@ class ProgressPersistGate:
     def mark_ownership_lost(self) -> None:
         self.ownership_lost = True
 
+    def diagnostic_snapshot(self, *, expected_size_known: bool) -> dict[str, object]:
+        """Safe aggregates for end-of-stage logging (no paths/URLs/tokens)."""
+        return {
+            "observed_sample_count": self.observed_sample_count,
+            "persisted_update_count": self.persisted_update_count,
+            "max_persisted_percent": self.last_persisted_percent,
+            "expected_size_known": bool(expected_size_known),
+        }
+
     async def ingest(
         self,
         *,
         observed_bytes: int,
         expected_bytes: int | None,
         persist: Callable[[int], Awaitable[bool]],
+        force: bool = False,
     ) -> None:
         """Observe workspace bytes and persist only when the gate allows it.
 
         ``persist`` must return True only after a confirmed fenced write.
         False (stale fence / cancel / expired lease) stops further percent
         writes. Exceptions are treated as transient failures with backoff.
+
+        ``force=True`` bypasses throttle/backoff once for an end-of-stage
+        final sample (still monotonic and ownership-checked).
         """
         if self.ownership_lost:
             return
+        self.observed_sample_count += 1
         candidate = progress_percent(
             observed_bytes=observed_bytes,
             expected_bytes=expected_bytes,
             previous=self.max_observed_percent,
         )
-        to_write = self.note_observed(candidate)
-        if to_write is None:
-            return
+        if force:
+            if candidate is None:
+                return
+            if self.max_observed_percent is None:
+                to_write = candidate
+            else:
+                to_write = max(self.max_observed_percent, candidate)
+            self.max_observed_percent = to_write
+            if (
+                self.last_persisted_percent is not None
+                and to_write <= self.last_persisted_percent
+            ):
+                return
+        else:
+            maybe_write = self.note_observed(candidate)
+            if maybe_write is None:
+                return
+            to_write = maybe_write
         try:
             applied = await persist(to_write)
         except Exception:

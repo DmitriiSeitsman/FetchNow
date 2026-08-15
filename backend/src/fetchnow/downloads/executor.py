@@ -9,6 +9,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -731,7 +732,9 @@ class DownloadExecutor:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("download_progress_percent_update_failed")
+                logger.info(
+                    "download_progress_percent_update_failed outcome=transient"
+                )
 
         result = await self._run_supervised(
             snap,
@@ -748,6 +751,35 @@ class DownloadExecutor:
             ),
             root_for_disk=str(self._store.root),
             on_observed_bytes=_on_observed,
+        )
+        # Force-persist final observed percent before stage transition clears it.
+        try:
+            final_bytes = ArtifactStore.output_tree_byte_size(Path(output_dir))
+            await gate.ingest(
+                observed_bytes=final_bytes,
+                expected_bytes=expected_bytes,
+                persist=_persist_percent,
+                force=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.info("download_progress_final_flush_failed outcome=transient")
+        known = (
+            expected_bytes is not None
+            and not isinstance(expected_bytes, bool)
+            and isinstance(expected_bytes, int)
+            and expected_bytes > 0
+        )
+        snap_diag = gate.diagnostic_snapshot(expected_size_known=known)
+        logger.info(
+            "download_progress_stage_summary outcome=ok "
+            "observed_sample_count=%s persisted_update_count=%s "
+            "max_persisted_percent=%s expected_size_known=%s",
+            snap_diag["observed_sample_count"],
+            snap_diag["persisted_update_count"],
+            snap_diag["max_persisted_percent"],
+            snap_diag["expected_size_known"],
         )
         self._finish_tool_stage(
             snap,

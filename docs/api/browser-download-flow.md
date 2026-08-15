@@ -60,6 +60,11 @@ The parent token is never placed in the URL, filename, DOM, or logs.
   may include a real `progressPercent` when a bounded size is known
   (`Downloading file (N%)` / `Downloading audio (N%)`). That `(N%)` is
   observed bytes over an approximate expected size, not remaining time.
+  Unknown denominators stay indeterminate (`…`), never a fake `0%`.
+  The browser poller resets backoff when state/stage/percent/attempt/`updatedAt`
+  change and caps active download polls at ≤1s on a visible tab; unchanged
+  queued responses may back off further. Ready is shown as soon as the
+  terminal poll arrives — progress is best-effort, not fake-smooth.
   Verifying, muxing, and publishing are not byte percentages. `ready`
   shows the exact prepared `artifactBytes` without an approximate sign.
   Pre-download quality rows show `≈` size or “Size available after

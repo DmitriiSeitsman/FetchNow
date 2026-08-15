@@ -49,6 +49,24 @@ could not show a real download percentage without a bounded denominator.
    updates without becoming a user catalog error. Percent persisted on a
    disallowed state/stage is `INTERNAL_ERROR`, not a silent null. Unknown
    denominators stay `null`; the UI must not invent a percentage.
+5. **Final observation (PR16).** Before leaving a download subprocess the
+   worker performs a final filesystem observation and drains the coalesced
+   writer, then force-persists the monotonic end-of-stage percent (still
+   `0..99`, still fenced). Stage transition continues to clear
+   `progress_percent`. Low-frequency stage-summary logs expose only aggregate
+   counts (`observed_sample_count`, `persisted_update_count`,
+   `max_persisted_percent`, `expected_size_known`) — never URLs, tokens,
+   paths, or raw tool output.
+6. **Adaptive browser polling (PR16).** The media-flow poller resets
+   successful-poll backoff when a semantic progress key changes (`state`,
+   `progressStage`, `progressPercent`, `attempt`, `updatedAt`). During
+   active download stages the visible-tab interval is capped at ≤1000 ms.
+   Unchanged queued/retrying responses may still back off (≤8 s). Hidden
+   tabs keep the existing ≥15 s floor. Stage-bar baselines and byte
+   percentages remain distinct concepts; `100%` means terminal readiness,
+   not a persisted byte value. Ready is never delayed to show progress.
+   Background tabs poll less often; there is no fake-smooth progress
+   guarantee.
 
 ## Consequences
 
