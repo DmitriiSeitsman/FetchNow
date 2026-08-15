@@ -1,7 +1,9 @@
 import {
   parseApiError,
+  parseBrowserGrant,
   parseDownloadJob,
   parseInspectionJob,
+  type BrowserGrant,
   type DownloadJob,
   type InspectionJob,
 } from "./contracts";
@@ -300,5 +302,24 @@ export class MediaApi {
       `/api/v1/media/download-jobs/${downloadJobId}/content`,
       this.origin,
     );
+  }
+
+  async createBrowserGrant(
+    downloadJobId: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserGrant> {
+    const { status, body, headers } = await this.requestJson(
+      `/api/v1/media/download-jobs/${downloadJobId}/browser-grants`,
+      {
+        method: "POST",
+        headers: bearerHeaders(token, { Accept: "application/json" }),
+        signal,
+      },
+    );
+    if (status !== 201) {
+      throwHttpError(status, body, headers);
+    }
+    return parseBrowserGrant(body);
   }
 }

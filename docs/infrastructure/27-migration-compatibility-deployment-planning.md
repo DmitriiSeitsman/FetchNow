@@ -221,3 +221,8 @@ value; both are normalized to NULL so PR11 lifecycle DML remains valid after a
 PR12 percent write. An explicit write of a different illegal percent still
 fails the CHECK. Downgrade drops the trigger, function, constraints, and
 columns and does not rewrite `public_state`.
+
+PR14 adds the `0005_download_file_details` → `0006_browser_delivery_grants`
+online-expand transition: new `media_delivery_grants` table only. Previous
+applications ignore the table; existing download/job CHECKs and enums are
+unchanged. Downgrade drops only the new grant objects.

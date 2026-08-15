@@ -31,7 +31,21 @@ export function mountMediaFlow(
   root.querySelector("[data-flow-download]")?.addEventListener("click", () => {
     void controller.enqueueDownload();
   });
-  root.querySelector("[data-flow-save]")?.addEventListener("click", () => {
+
+  const onNativeClick = (event: Event) => {
+    const allow = controller.onNativeDownloadClick();
+    if (!allow) {
+      event.preventDefault();
+    }
+  };
+  root
+    .querySelector("[data-flow-native-download]")
+    ?.addEventListener("click", onNativeClick);
+
+  root.querySelector("[data-flow-grant-retry]")?.addEventListener("click", () => {
+    controller.retryGrantAccess();
+  });
+  root.querySelector("[data-flow-save-as]")?.addEventListener("click", () => {
     void controller.saveFile();
   });
   root.querySelector("[data-flow-reset]")?.addEventListener("click", () => {
@@ -40,13 +54,37 @@ export function mountMediaFlow(
   root.querySelector("[data-flow-cancel]")?.addEventListener("click", () => {
     void controller.cancelTask();
   });
-  window.addEventListener("pagehide", () => {
+
+  const onPageHide = () => {
     controller.onPageHide();
-  });
-  window.addEventListener("pageshow", (event) => {
-    controller.onPageShow(event.persisted);
-  });
-  controller.restore();
+  };
+  const onPageShow = (event: PageTransitionEvent) => {
+    void controller.onPageShow(event.persisted);
+  };
+  const onVisibility = () => {
+    if (globalThis.document?.visibilityState === "visible") {
+      controller.onForegroundResume();
+    }
+  };
+  const onFocus = () => {
+    controller.onForegroundResume();
+  };
+
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("focus", onFocus);
+
+  const originalDisconnect = controller.disconnect.bind(controller);
+  controller.disconnect = () => {
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("focus", onFocus);
+    originalDisconnect();
+  };
+
+  void controller.restore();
   renderFlow(root, controller.snapshot());
   return controller;
 }

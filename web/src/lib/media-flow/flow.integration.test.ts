@@ -7,15 +7,16 @@ import { MediaApi } from "./api";
 import { FlowSession } from "./session";
 import { generateAccessToken } from "./credentials";
 import {
+  browserGrantPayload,
   downloadPayload,
   inspectedPayload,
   inspectionPayload,
   OPTION_ID,
 } from "./fixtures";
-import { parseDownloadJob, parseInspectionJob } from "./contracts";
+import { parseBrowserGrant, parseDownloadJob, parseInspectionJob } from "./contracts";
 
 describe("browser flow integration", () => {
-  it("submits, inspects, selects, downloads, and streams a save", async () => {
+  it("submits, inspects, selects, downloads, arms a grant, and keeps session on native click", async () => {
     const token = generateAccessToken();
     const api = {
       createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
@@ -32,6 +33,64 @@ describe("browser flow integration", () => {
           }),
         ),
       ),
+      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
+      cancelDownloadJob: vi.fn(),
+    };
+    const save = vi.fn(async () => undefined);
+    const store = new Map<string, string>();
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession({
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => {
+          store.set(k, v);
+        },
+        removeItem: (k) => {
+          store.delete(k);
+        },
+      }),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+      save,
+    });
+
+    await controller.submit("https://vk.com/video1");
+    expect(controller.snapshot().phase).toBe("inspected");
+    expect(api.createInspectionJob).toHaveBeenCalledTimes(1);
+    controller.selectFormat(OPTION_ID);
+    expect(controller.snapshot().downloadEligible).toBe(true);
+    await controller.enqueueDownload();
+    await vi.waitFor(() => {
+      expect(controller.snapshot().canNativeDownload).toBe(true);
+    });
+    expect(api.createBrowserGrant).toHaveBeenCalledTimes(1);
+    controller.onNativeDownloadClick();
+    expect(controller.snapshot().nativeDownloadHandoff).toBe(true);
+    expect(controller.snapshot().phase).toBe("ready");
+    expect([...store.keys()]).toHaveLength(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("still completes FSA save when the picker is supported", async () => {
+    const token = generateAccessToken();
+    const api = {
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(inspectedPayload())),
+      createDownloadJob: vi.fn(async () =>
+        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
+      ),
+      getDownloadJob: vi.fn(async () =>
+        parseDownloadJob(
+          downloadPayload({
+            state: "ready",
+            artifactReady: true,
+            completedAt: "2026-08-13T04:22:27Z",
+          }),
+        ),
+      ),
+      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
       cancelDownloadJob: vi.fn(),
     };
     const save = vi.fn(async () => undefined);
@@ -49,17 +108,16 @@ describe("browser flow integration", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
       save,
     });
-
     await controller.submit("https://vk.com/video1");
-    expect(controller.snapshot().phase).toBe("inspected");
-    expect(api.createInspectionJob).toHaveBeenCalledTimes(1);
     controller.selectFormat(OPTION_ID);
-    expect(controller.snapshot().downloadEligible).toBe(true);
     await controller.enqueueDownload();
-    expect(controller.snapshot().phase).toBe("ready");
+    await vi.waitFor(() => {
+      expect(controller.snapshot().canNativeDownload).toBe(true);
+    });
     await controller.saveFile();
     expect(save).toHaveBeenCalledTimes(1);
     expect(controller.snapshot().phase).toBe("completed");
@@ -75,6 +133,7 @@ describe("browser flow integration", () => {
       ),
       createDownloadJob: vi.fn(),
       getDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(),
       cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
@@ -91,6 +150,7 @@ describe("browser flow integration", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
     });
     await controller.submit("https://vk.com/video-1_2");
@@ -111,6 +171,7 @@ describe("browser flow integration", () => {
         parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
       ),
       getDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(),
       cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
@@ -127,6 +188,7 @@ describe("browser flow integration", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
     });
     await controller.submit("https://vk.com/video-1_2");
@@ -146,6 +208,7 @@ describe("browser flow integration", () => {
       ),
       createDownloadJob: vi.fn(),
       getDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(),
       cancelDownloadJob: vi.fn(),
     };
     const store = new Map<string, string>();
@@ -162,6 +225,7 @@ describe("browser flow integration", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
     });
     await controller.submit("https://vk.com/video-1_2");

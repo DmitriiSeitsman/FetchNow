@@ -220,6 +220,68 @@ export function parseContentDispositionFilename(
   return decoded;
 }
 
+/** True when native cookie-grant delivery is allowed on this origin. */
+export function isSecureDeliveryContext(origin?: string): boolean {
+  let resolved: string;
+  try {
+    resolved =
+      origin ??
+      (typeof globalThis.location?.origin === "string"
+        ? globalThis.location.origin
+        : "http://localhost");
+    const url = new URL(resolved);
+    if (url.protocol === "https:") {
+      return true;
+    }
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+/** Re-arm browser grants this many milliseconds before they expire. */
+export const GRANT_REISSUE_BUFFER_MS = 30_000;
+
+/** Bounded positive minimum delay for success-path refresh timers. */
+export const MIN_GRANT_REFRESH_DELAY_MS = 5_000;
+
+/** Click / resume safety margin: treat grants this close to expiry as stale. */
+export const GRANT_HANDOFF_SAFETY_MS = 2_000;
+
+/** setTimeout delay cap (32-bit signed integer limit in many runtimes). */
+export const MAX_GRANT_TIMER_MS = 2_147_483_647;
+
+/**
+ * Deterministic delay until the next grant refresh attempt.
+ *
+ * Returns null when the grant is already expired (caller must re-arm via
+ * resume/click, never via setTimeout(0)). Never returns 0 on a still-valid
+ * grant, including when remaining lifetime equals the reissue buffer (30s).
+ */
+export function computeGrantRefreshDelayMs(
+  expiresAtMs: number,
+  nowMs: number,
+  bufferMs: number = GRANT_REISSUE_BUFFER_MS,
+  minDelayMs: number = MIN_GRANT_REFRESH_DELAY_MS,
+): number | null {
+  if (!Number.isFinite(expiresAtMs) || !Number.isFinite(nowMs)) {
+    return null;
+  }
+  const remaining = expiresAtMs - nowMs;
+  if (remaining <= 0) {
+    return null;
+  }
+  const ideal = remaining - bufferMs;
+  if (ideal >= minDelayMs) {
+    return Math.min(ideal, MAX_GRANT_TIMER_MS);
+  }
+  // remaining <= buffer: fall back to a positive fraction of remaining life.
+  const fallback = Math.max(minDelayMs, Math.floor(remaining / 2));
+  const delay = Math.min(remaining - 1, fallback);
+  return Math.max(1, Math.min(delay, MAX_GRANT_TIMER_MS));
+}
+
 export function fileSystemAccessSupported(
   io: Pick<DownloadDeps, "hasSavePicker" | "showSaveFilePicker"> = {},
 ): boolean {

@@ -72,7 +72,12 @@ Download jobs (PR6) additionally forbid logging or publicizing:
 
 `DownloadError` str/repr omit `internal_reason` and never include tokens or paths.
 Download create/status reuse the parent MediaJob Bearer and return
-`Cache-Control: no-store`.
+`Cache-Control: no-store`. Browser grant issuance (PR14) returns only
+`downloadPath` + `expiresAt` and sets an HttpOnly delivery cookie — never log
+the cookie value, token hash, or grant path as a credential. Allowed sanitized
+events: `browser_delivery_grant_issued`, `browser_delivery_grant_rejected`,
+`browser_delivery_started`, `browser_delivery_failed` (catalog codes / coarse
+reasons only).
 
 Bounded muxing (PR9) additionally forbids logging or publicizing:
 

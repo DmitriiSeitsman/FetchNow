@@ -220,6 +220,7 @@ class MediaJobWorkerRunner:
 
         if self._settings.media_downloads_enabled:
             await self._hygiene_download_jobs()
+            await self._hygiene_browser_grants()
 
         if (
             self._settings.media_jobs_enabled
@@ -268,6 +269,20 @@ class MediaJobWorkerRunner:
                 logger.info("download_orphan_sweep_removed count=%s", removed)
         except Exception:
             logger.exception("download_orphan_sweep_failed")
+
+    async def _hygiene_browser_grants(self) -> None:
+        """Delete expired/revoked browser grants in a bounded batch."""
+        if not self._settings.media_browser_delivery_enabled:
+            return
+        from fetchnow.downloads.grant_repository import BrowserGrantRepository
+
+        async with self._session_factory() as session:
+            grants = BrowserGrantRepository(session)
+            now = await grants.database_now()
+            removed = await grants.delete_expired_batch(now=now, limit=64)
+            await session.commit()
+        if removed:
+            logger.info("browser_delivery_grant_cleanup count=%s", removed)
 
     async def _claim_inspection_jobs(self) -> None:
         free_slots = self._settings.worker_concurrency - len(self._active_inspection)

@@ -24,10 +24,16 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     selectedFormatId: progressiveFormat.formatOptionId,
     downloadEligible: true,
     muxingBlocked: false,
+    httpsRequired: false,
+    grantArming: false,
+    canNativeDownload: false,
+    canRetryGrant: false,
+    canSaveAs: false,
+    downloadHref: null,
+    nativeDownloadHandoff: false,
     browserUnsupported: false,
     busy: false,
     canSubmit: false,
-    canSave: false,
     canStartOver: true,
     canCancelTask: false,
     restored: false,
@@ -46,10 +52,14 @@ describe("render", () => {
       <div data-flow-formats></div>
       <button data-flow-submit></button>
       <button data-flow-download></button>
-      <button data-flow-save></button>
+      <a data-flow-native-download hidden download></a>
+      <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
       <p data-flow-browser></p>
+      <p data-flow-https hidden></p>
+      <p data-flow-grant-pending hidden></p>
+      <p data-flow-handoff hidden></p>
     `;
     renderFlow(document, snapshot({}));
     const title = document.querySelector("[data-flow-title]");
@@ -67,10 +77,14 @@ describe("render", () => {
       <div data-flow-formats></div>
       <button data-flow-submit></button>
       <button data-flow-download></button>
-      <button data-flow-save></button>
+      <a data-flow-native-download hidden download></a>
+      <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
       <p data-flow-browser></p>
+      <p data-flow-https hidden></p>
+      <p data-flow-grant-pending hidden></p>
+      <p data-flow-handoff hidden></p>
     `;
     renderFlow(
       document,
@@ -114,5 +128,31 @@ describe("render", () => {
     const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
     expect(mux?.hidden).toBe(false);
     expect(mux?.textContent ?? "").not.toMatch(/muxing is not offered/i);
+  });
+
+  it("renders a native download anchor with a same-origin href", () => {
+    document.body.innerHTML = `
+      <p data-flow-status></p>
+      <a data-flow-native-download hidden download></a>
+      <p data-flow-grant-pending hidden></p>
+      <p data-flow-handoff hidden></p>
+      <p data-flow-https hidden></p>
+      <p data-flow-browser hidden></p>
+      <section data-flow-progress hidden><p data-flow-progress-label></p><span data-flow-loader hidden></span></section>
+    `;
+    renderFlow(
+      document,
+      snapshot({
+        phase: "ready",
+        canNativeDownload: true,
+        downloadHref: "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
+      }),
+    );
+    const link = document.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
+    expect(link?.tagName).toBe("A");
+    expect(link?.getAttribute("href")).toBe(
+      "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
+    );
+    expect(link?.hidden).toBe(false);
   });
 });

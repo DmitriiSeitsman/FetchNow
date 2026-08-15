@@ -1,23 +1,34 @@
-# Browser support (PR8)
+# Browser support (PR8, PR14)
 
-The landing page works in current evergreen browsers. **Saving a prepared
-artifact** currently requires the File System Access API:
+The landing page works in current evergreen browsers. **Downloading a prepared
+artifact** uses a same-origin anchor after the server issues a short-lived
+HttpOnly delivery cookie (PR14). That path works in any browser that supports
+normal same-origin navigation with cookies, including Safari and Firefox.
+
+**Save as…** (optional) uses the File System Access API:
 
 `window.showSaveFilePicker`
 
 That API is available in Chromium-based desktop browsers (Chrome, Edge, recent
-Opera). It is not used on Safari or Firefox in this PR.
+Opera). Its absence is not an error: the primary **Download file** link still
+works when browser delivery is enabled and the page is served over HTTPS (or on
+`localhost` / `127.0.0.1`).
 
-Unsupported browsers:
+Unsupported or unavailable contexts:
 
-- can still submit a URL and wait for inspection/download to become ready if
-  server flags are on;
-- see a clear message instead of a broken save;
-- do **not** trigger the content fetch;
-- may finish saving later in a supported browser/tab until `expiresAt`.
+- **Insecure remote HTTP** — the UI shows an HTTPS-required message and never
+  claims download works;
+- **No File System Access API** — Save as… is hidden or unavailable; Download
+  file remains the primary action;
+- users can still submit a URL and wait for inspection/download to become ready
+  if server flags are on;
+- may finish downloading later in another tab until `expiresAt`.
 
 There is no Blob fallback, no query-token download, and no service-worker
-credential proxy in PR8. Save uses `showSaveFilePicker({ suggestedName })`
-with the server `suggestedFilename`. Unicode names rely on RFC 8187
-`filename*` in `Content-Disposition`; the ASCII `filename=` parameter is a
-safe fallback and must not weaken the browser check.
+credential proxy. Save as… uses `showSaveFilePicker({ suggestedName })` with the
+server `suggestedFilename`. Unicode names rely on RFC 8187 `filename*` in
+`Content-Disposition`; the ASCII `filename=` parameter is a safe fallback and
+must not weaken the browser check.
+
+Native download never puts the parent Bearer token in the href, query, or
+fragment.

@@ -117,6 +117,13 @@ status exposes `artifactReady` only.
 | `DOWNLOAD_STORAGE_UNAVAILABLE` | 503 | Storage temporarily unavailable | yes | yes | Disk paths, free-byte counts |
 | `DOWNLOAD_EXPIRED` | 410 | Download job or artifact expired | no | no | Storage keys |
 | `DELIVERY_DISABLED` | 503 | Artifact delivery is not available | yes | later | Feature flags, roots |
+
+Browser-native grants (PR14): `POST …/browser-grants` and
+`GET|HEAD …/browser-grants/{id}/content` reuse the same catalog. Unknown grant,
+missing/wrong/duplicate cookie, and unauthorized shapes map to
+`DOWNLOAD_JOB_NOT_FOUND` or `DOWNLOAD_EXPIRED` without revealing whether the
+grant UUID exists. When `MEDIA_BROWSER_DELIVERY_ENABLED=false`, issuance and
+native content return `DELIVERY_DISABLED`.
 | `DOWNLOAD_NOT_READY` | 409 | Download artifact is not ready for delivery | soft | yes (poll status) | Internal job state details beyond catalog |
 | `MUXING_UNAVAILABLE` | 422 | Combined video and audio file is not available | no | no | Tokens, pairing math, feature flags |
 | `MUXING_FAILED` | 422 | Combining video and audio failed | soft | yes (limited) | argv, stderr, paths |

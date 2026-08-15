@@ -90,17 +90,36 @@ const enabled = isMediaFlowEnabled();
     This media is not available in the current free download mode. A combined video and
     audio file is required.
   </p>
+  <p class="hint" data-flow-https hidden>
+    Open this page over HTTPS to download the prepared file.
+  </p>
+  <p class="hint" data-flow-grant-pending hidden>
+    Preparing secure download…
+  </p>
+  <p class="hint" data-flow-handoff hidden>
+    Sent to your browser
+  </p>
   <p class="hint" data-flow-browser hidden>
-    Saving requires a Chromium desktop browser with the File System Access API. The
-    prepared file stays available until it expires — open this page in a supported
-    browser to finish saving.
+    Save as… requires a Chromium desktop browser with the File System Access API. Use
+    Download file above, or open this page in a supported browser to pick a save location.
   </p>
   <div class="flow-actions">
     <button class="btn btn-primary" type="button" data-flow-download hidden>
       Prepare download
     </button>
-    <button class="btn btn-primary" type="button" data-flow-save hidden>
-      Save file
+    <a
+      class="btn btn-primary"
+      data-flow-native-download
+      hidden
+      download
+    >
+      Download file
+    </a>
+    <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>
+      Retry download access
+    </button>
+    <button class="btn btn-ghost" type="button" data-flow-save-as hidden>
+      Save as…
     </button>
   </div>
 </section>

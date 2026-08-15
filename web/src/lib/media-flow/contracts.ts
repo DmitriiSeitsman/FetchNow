@@ -242,6 +242,32 @@ export type ApiErrorBody = {
   error: { code: string; message: string; request_id?: string };
 };
 
+export const BROWSER_GRANT_PATH_RE =
+  /^\/api\/v1\/media\/browser-grants\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/content$/;
+
+const BROWSER_GRANT_KEYS = new Set(["downloadPath", "expiresAt"]);
+
+export type BrowserGrant = {
+  downloadPath: string;
+  expiresAt: string;
+};
+
+export function parseBrowserGrant(value: unknown): BrowserGrant {
+  if (!isRecord(value)) {
+    fail();
+  }
+  rejectForbidden(value);
+  rejectUnknown(value, BROWSER_GRANT_KEYS);
+  const downloadPath = value.downloadPath;
+  if (typeof downloadPath !== "string" || !BROWSER_GRANT_PATH_RE.test(downloadPath)) {
+    fail();
+  }
+  return {
+    downloadPath,
+    expiresAt: requireIso(value.expiresAt),
+  };
+}
+
 function fail(code = "CONTRACT"): never {
   throw flowErrorFromCode(code);
 }

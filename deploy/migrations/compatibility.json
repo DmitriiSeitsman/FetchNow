@@ -68,6 +68,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Add nullable suggested_filename and progress_percent. Previous PR11 applications omit both columns on INSERT/UPDATE. A BEFORE UPDATE trigger clears progress_percent when progress_stage changes and NEW.progress_percent IS NOT DISTINCT FROM OLD.progress_percent. PostgreSQL cannot distinguish an omitted column from an explicit assignment of the same value; both are normalized to NULL so a rolled-back PR11 application remains CHECK-compatible after a PR12 percent write. An explicit write of a different illegal percent still fails the CHECK. Same-stage percent updates are preserved. Downgrade drops the trigger, function, constraints, and columns without rewriting public_state."
+    },
+    {
+      "from_heads": [
+        "0005_download_file_details"
+      ],
+      "to_heads": [
+        "0006_browser_delivery_grants"
+      ],
+      "included_revisions": [
+        "0006_browser_delivery_grants"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the new media_delivery_grants table and indexes only. Existing media_download_jobs / media_jobs schema, enums, and CHECKs are unchanged, so a previous application that ignores the new table remains compatible during online expand and application rollback. Downgrade drops only the new grant objects."
     }
   ]
 }

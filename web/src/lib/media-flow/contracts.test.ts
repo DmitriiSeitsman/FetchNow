@@ -4,6 +4,7 @@ import {
   RUTUBE_CANONICAL_HOSTS,
   VK_CANONICAL_HOSTS,
   isDownloadEligible,
+  parseBrowserGrant,
   parseDownloadJob,
   parseInspectionJob,
   parseMediaFormat,
@@ -14,6 +15,8 @@ import {
   EXPIRES,
   OPTION_ID,
   STAMP,
+  BROWSER_GRANT_PATH,
+  browserGrantPayload,
   downloadPayload,
   inspectedPayload,
   inspectionPayload,
@@ -615,5 +618,70 @@ describe("contracts", () => {
     const missing = downloadPayload({ state: "queued" });
     delete missing.suggestedFilename;
     expect(() => parseDownloadJob(missing)).toThrow(FlowError);
+  });
+
+  it("accepts valid browser grant payloads with an exact content path", () => {
+    const grant = parseBrowserGrant(browserGrantPayload());
+    expect(grant.downloadPath).toBe(BROWSER_GRANT_PATH);
+    expect(grant.expiresAt).toBe(EXPIRES);
+  });
+
+  it("rejects browser grant payloads with extra fields or bad paths", () => {
+    expect(() => parseBrowserGrant({ ...browserGrantPayload(), token: "nope" })).toThrow(
+      FlowError,
+    );
+    expect(() =>
+      parseBrowserGrant({
+        ...browserGrantPayload(),
+        downloadPath: "/api/v1/media/download-jobs/x/content",
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath: "/api/v1/media/browser-grants/not-a-uuid/content",
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath:
+          "/api/v1/media/browser-grants/BBBBBBBB-BBBB-4CCC-8DDD-EEEEEEEEEEEE/content",
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath:
+          "/api/v1/media/browser-grants/bbbbbbbb-bbbb-5ccc-8ddd-eeeeeeeeeeee/content",
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath:
+          "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-cddd-eeeeeeeeeeee/content",
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath: `${BROWSER_GRANT_PATH}?x=1`,
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath: `${BROWSER_GRANT_PATH}?token=secret`,
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
+    // Fragments are not sent to the server on navigation, but must still be
+    // rejected if a grant payload ever included one in downloadPath.
+    expect(() =>
+      parseBrowserGrant({
+        downloadPath: `${BROWSER_GRANT_PATH}#frag`,
+        expiresAt: EXPIRES,
+      }),
+    ).toThrow(FlowError);
   });
 });

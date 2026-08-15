@@ -1,8 +1,10 @@
 import type { DownloadJob, InspectionJob, MediaFormat } from "./contracts";
 
 export const OPTION_ID = "fmt_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-export const JOB_ID = "11111111-2222-3333-4444-555555555555";
-export const DOWNLOAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+export const JOB_ID = "11111111-2222-4333-8444-555555555555";
+export const DOWNLOAD_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+export const GRANT_ID = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+export const BROWSER_GRANT_PATH = `/api/v1/media/browser-grants/${GRANT_ID}/content`;
 export const STAMP = "2026-08-13T04:22:27Z";
 export const EXPIRES = "2099-01-01T00:00:00Z";
 
@@ -116,6 +118,16 @@ export function downloadPayload(
     merged.progressStage = "inspecting";
   }
   return merged;
+}
+
+export function browserGrantPayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    downloadPath: BROWSER_GRANT_PATH,
+    expiresAt: EXPIRES,
+    ...overrides,
+  };
 }
 
 export function asInspection(payload: Record<string, unknown>): InspectionJob {

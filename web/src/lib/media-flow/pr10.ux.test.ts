@@ -33,10 +33,16 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     selectedFormatId: null,
     downloadEligible: false,
     muxingBlocked: false,
+    httpsRequired: false,
+    grantArming: false,
+    canNativeDownload: false,
+    canRetryGrant: false,
+    canSaveAs: false,
+    downloadHref: null,
+    nativeDownloadHandoff: false,
     browserUnsupported: false,
     busy: true,
     canSubmit: false,
-    canSave: false,
     canStartOver: true,
     canCancelTask: true,
     restored: false,
@@ -177,6 +183,7 @@ describe("PR10 loader, format, and contrast UX", () => {
         hangUntilAbort(signal),
       ),
       cancelDownloadJob,
+      createBrowserGrant: vi.fn(),
     };
     const store = new Map<string, string>();
     const controller = new MediaFlowController({
@@ -192,6 +199,7 @@ describe("PR10 loader, format, and contrast UX", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
     });
     await controller.submit("https://vk.com/video-1_2");
@@ -238,6 +246,7 @@ describe("PR10 loader, format, and contrast UX", () => {
         hangUntilAbort(signal),
       ),
       cancelDownloadJob,
+      createBrowserGrant: vi.fn(),
     };
     const controller = new MediaFlowController({
       api: api as unknown as MediaApi,
@@ -248,6 +257,7 @@ describe("PR10 loader, format, and contrast UX", () => {
       }),
       generateToken: () => token,
       pickerSupported: () => true,
+      secureContext: () => true,
       documentHidden: () => false,
     });
     await controller.submit("https://vk.com/video-1_2");

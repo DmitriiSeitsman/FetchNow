@@ -5,7 +5,11 @@ import {
   saveArtifactStream,
   suggestedFilename,
   fileSystemAccessSupported,
+  isSecureDeliveryContext,
   contentDispositionHeader,
+  computeGrantRefreshDelayMs,
+  GRANT_REISSUE_BUFFER_MS,
+  MIN_GRANT_REFRESH_DELAY_MS,
 } from "./download";
 import { DOWNLOAD_ID } from "./fixtures";
 
@@ -117,7 +121,7 @@ describe("download streaming", () => {
     expect(abort).toHaveBeenCalled();
   });
 
-  it("does not fetch when the File System Access API is missing", async () => {
+  it("does not fetch when the File System Access API is missing (Save as optional)", async () => {
     const fetchImpl = vi.fn();
     await expect(
       saveArtifactStream({
@@ -175,6 +179,13 @@ describe("download streaming", () => {
     const name = suggestedFilename(DOWNLOAD_ID, "mp4");
     expect(name).toBe(`fetchnow-${DOWNLOAD_ID}.mp4`);
     expect(name).not.toContain("Bearer");
+  });
+
+  it("detects secure delivery contexts for native download", () => {
+    expect(isSecureDeliveryContext("https://example.com")).toBe(true);
+    expect(isSecureDeliveryContext("http://localhost")).toBe(true);
+    expect(isSecureDeliveryContext("http://127.0.0.1")).toBe(true);
+    expect(isSecureDeliveryContext("http://example.com")).toBe(false);
   });
 });
 
@@ -725,5 +736,39 @@ describe("pre-stream header rejection cancels the body", () => {
     expect(thrown).toMatchObject({ code: "CONTRACT" });
     expect(tracked.cancel).toHaveBeenCalledOnce();
     expect(tracked.releaseLock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("computeGrantRefreshDelayMs", () => {
+  it("never returns zero for a still-valid 30s grant equal to the buffer", () => {
+    const now = 1_000_000;
+    const delay = computeGrantRefreshDelayMs(now + 30_000, now);
+    expect(delay).not.toBeNull();
+    expect(delay!).toBeGreaterThanOrEqual(MIN_GRANT_REFRESH_DELAY_MS);
+    expect(delay!).toBeLessThan(30_000);
+    expect(delay!).toBe(15_000);
+  });
+
+  it("keeps a positive bounded delay for a 31s grant", () => {
+    const now = 1_000_000;
+    const delay = computeGrantRefreshDelayMs(now + 31_000, now);
+    expect(delay).not.toBeNull();
+    expect(delay!).toBeGreaterThanOrEqual(1);
+    expect(delay!).toBeLessThan(31_000);
+  });
+
+  it("refreshes before expiry for a normal 300s grant", () => {
+    const now = 1_000_000;
+    const delay = computeGrantRefreshDelayMs(now + 300_000, now);
+    expect(delay).toBe(300_000 - GRANT_REISSUE_BUFFER_MS);
+  });
+
+  it("returns null after expiry and never schedules past remaining life", () => {
+    const now = 1_000_000;
+    expect(computeGrantRefreshDelayMs(now - 1, now)).toBeNull();
+    const short = computeGrantRefreshDelayMs(now + 3_000, now);
+    expect(short).not.toBeNull();
+    expect(short!).toBeLessThan(3_000);
+    expect(short!).toBeGreaterThanOrEqual(1);
   });
 });

@@ -1,8 +1,9 @@
-# Browser download flow (PR8)
+# Browser download flow (PR8, PR14)
 
-The static Astro page can orchestrate inspection → download → authenticated
-save when `PUBLIC_MEDIA_FLOW_ENABLED=true` **and** the server flags for jobs,
-inspection, downloads, and delivery are also enabled by an operator.
+The static Astro page can orchestrate inspection → download → browser-native
+delivery when `PUBLIC_MEDIA_FLOW_ENABLED=true` **and** the server flags for jobs,
+inspection, downloads, delivery, and browser delivery are also enabled by an
+operator.
 
 ## Sequence
 
@@ -22,12 +23,27 @@ inspection, downloads, and delivery are also enabled by an operator.
    estimate. Verifying, muxing, and publishing are not byte percentages.
 7. `Cancel task` calls `POST …/download-jobs/{id}/cancel`. `Start over` is a
    local reset and does **not** cancel the server job.
-8. User gesture opens `showSaveFilePicker`, then `GET …/content` with the same Bearer.
-9. `response.body` is streamed to disk. Credentials are cleared only after a clean close.
+8. When the job is `ready`, the UI calls
+   `POST /api/v1/media/download-jobs/{id}/browser-grants` with the parent Bearer
+   token and `credentials: "same-origin"`. The response is `{ downloadPath,
+   expiresAt }` only; the server also sets `Set-Cookie:
+   __Secure-fetchnow_delivery=…` (HttpOnly). While this request is in flight
+   the UI shows “Preparing secure download…”.
+9. The primary action is a real same-origin anchor:
+   `<a href="/api/v1/media/browser-grants/{uuid}/content" download>Download
+   file</a>`. Navigation uses the cookie; the parent token is never placed in
+   the URL. After the user clicks, the UI shows “Sent to your browser” and keeps
+   a “Download again” link. The session is not cleared merely because the link
+   was clicked, and the UI does not fake byte progress after browser handoff.
+   Grants are reissued near expiry; stale grant responses are ignored when a
+   newer generation is active.
+10. Optional **Save as…** (Chromium desktop with File System Access API) still
+    streams `GET …/download-jobs/{id}/content` with the same Bearer token into
+    `showSaveFilePicker`. Credentials are cleared only after a clean FSA close.
 
-The token is never placed in the URL, filename, DOM, or logs.
+The parent token is never placed in the URL, filename, DOM, or logs.
 
-## UI presentation (PR11)
+## UI presentation (PR11, PR14)
 
 - Quality selection is a dedicated `Choose quality` card with one row per
   normalized quality. Rows are native radios, so grouping and keyboard
@@ -47,22 +63,29 @@ The token is never placed in the URL, filename, DOM, or logs.
   Verifying, muxing, and publishing are not byte percentages. `ready`
   shows the exact prepared `artifactBytes` without an approximate sign.
   Pre-download quality rows show `≈` size or “Size available after
-  preparation”. `ready` and `completed` reach 100 when server-side
-  preparation is complete; `saving` remains at 100 with an active spinner
-  while the browser writes that prepared artifact to the user's file. A retry
-  starts a new preparation attempt and may reset the stage completion value.
-  Idle, error, cancelled, and expired states never render as active progress,
-  and a direct progressive job may go from `downloading_video` straight to
-  `publishing`.
-- Save uses `suggestedFilename` (sanitized title + validated container). The
-  browser parses `Content-Disposition` `filename*` (RFC 8187) and fail-closes
-  on mismatch. This is not a trusted original provider filename.
+  preparation”. `ready` reaches 100 when server-side preparation is complete;
+  `saving` remains at 100 with an active spinner while the browser writes via
+  File System Access. A retry starts a new preparation attempt and may reset the
+  stage completion value. Idle, error, cancelled, and expired states never render
+  as active progress, and a direct progressive job may go from
+  `downloading_video` straight to `publishing`.
+- Native download uses the grant `downloadPath` exactly as returned (no query,
+  fragment, or extra path). The gateway and delivery reject non-empty query
+  strings on the grant content route. Browser fragments are not sent on the
+  wire. Save as…
+  uses `suggestedFilename` (sanitized title + validated container). The FSA path
+  parses `Content-Disposition` `filename*` (RFC 8187) and fail-closes on
+  mismatch. This is not a trusted original provider filename.
 - The spinner lives inside the progress card and is only rendered while an
   operation is in flight. `prefers-reduced-motion` disables its animation.
+- On insecure remote origins (HTTP that is not `localhost` / `127.0.0.1`), the
+  UI shows an HTTPS-required message and never claims native download works.
 
-## Why not `<a href>`?
+## Why anchor navigation (PR14)
 
-PR7 requires a Bearer header. Anchor navigation cannot set it. Query tokens are forbidden.
+PR14 issues a short-lived HttpOnly cookie scoped to the grant content path.
+Same-origin `<a href>` navigation can deliver the artifact without putting the
+parent Bearer token in the URL and without buffering the file in JavaScript.
 
 ## Why not Blob?
 
@@ -77,8 +100,9 @@ See [browser support](../product/browser-support.md).
 - No Range/resume UI (PR7 Range behavior is unchanged).
 - No cross-replica rate limiting.
 - Server flags `MEDIA_JOBS_ENABLED`, `MEDIA_INSPECTION_ENABLED`,
-  `MEDIA_DOWNLOADS_ENABLED`, and `MEDIA_DELIVERY_ENABLED` stay off until an
-  operator enables them independently of `PUBLIC_MEDIA_FLOW_ENABLED`.
+  `MEDIA_DOWNLOADS_ENABLED`, `MEDIA_DELIVERY_ENABLED`, and
+  `MEDIA_BROWSER_DELIVERY_ENABLED` stay off until an operator enables them
+  independently of `PUBLIC_MEDIA_FLOW_ENABLED`.
 - Muxing (`MEDIA_MUXING_ENABLED`) is independently off. When it is off, or no
   compatible pair exists, the UI shows a neutral “combined file required”
   hint instead of selectable qualities. Source video/audio tokens are never

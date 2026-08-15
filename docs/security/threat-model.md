@@ -196,6 +196,16 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Unauthorized byte exfiltration; resource exhaustion |
 | Mitigation | Dedicated `delivery` service; parent Bearer required; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; FD-relative `O_NOFOLLOW` opens; single bounded Range; API/gateway do not mount artifact root; delivery mount read-only; feature default off; process-local concurrency only |
 | Residual risk | Stolen Bearer until TTL; no cross-replica download rate limit; full-file digest not recomputed per GET; shared image still contains yt-dlp (delivery never invokes / no configured path); shared `DATABASE_URL` is not an enforced read-only DB role |
+
+### Browser-native delivery grant abuse (PR14)
+
+| Field | Detail |
+|---|---|
+| Attack | Steal grant cookie; guess grant UUID; forge cookie; flood grant issuance; use grant after artifact replace |
+| Impact | Unauthorized artifact bytes; DoS via grant rows |
+| Mitigation | Raw token only in Secure/HttpOnly/SameSite=Strict exact-path cookie; only hash persisted; UUID alone → identical not-found; duplicate cookie rejected; grant bound to artifact_id+fence; TTL `min(config, artifact expiry)`; bounded active grants per job; feature default off; HTTPS required for remote |
+| Residual risk | Stolen cookie until grant TTL; embedded webviews that block downloads |
+| Planned PR | **PR14** (implemented) |
 | Planned PR | Optional offline integrity scans / abuse quotas |
 
 ### Media inspection SSRF / extractor escape (PR4)

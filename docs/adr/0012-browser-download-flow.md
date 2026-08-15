@@ -23,13 +23,13 @@ buffer the whole file in JavaScript memory.
 2. The browser generates the 32-byte access token with Web Crypto and sends it
    as `Authorization: Bearer`. Lost-202 recovery remains a server property of
    that token; the client does not invent a second credential.
-3. Saving uses the File System Access API (`showSaveFilePicker`) from a user
-   gesture, then streams `response.body` into `FileSystemWritableFileStream`.
-   Chunks are written and dropped. Exact `Content-Length` is required. Early
-   EOF and excess bytes fail closed. `writable.abort()` runs on failure.
-4. Browsers without File System Access API see an honest unsupported message.
-   The prepared artifact is left to expire; the client does **not** fetch it
-   and does **not** fall back to Blob.
+3. **PR14 primary path:** when the job is ready, the UI requests a short-lived
+   browser delivery grant and renders a real same-origin `<a href>` so the
+   browser download manager fetches bytes with an HttpOnly cookie (see
+   [ADR 0016](0016-browser-native-delivery-grants.md)). Absence of File System
+   Access is not an error for this path.
+4. **Optional Save as…:** Chromium may still use `showSaveFilePicker` and stream
+   `response.body` with the parent Bearer. Chunks are written and dropped.
 5. A tab-scoped `sessionStorage` recovery record may hold only bounded fields
    (token, job ids, selected option, phase, `expiresAt`) under
    `fetchnow.media-flow.v2`. Schema v1 keys are discarded. Submitted URLs,
