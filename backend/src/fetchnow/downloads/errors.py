@@ -20,6 +20,7 @@ class DownloadErrorCode(StrEnum):
     FORMAT_NOT_FOUND = "FORMAT_NOT_FOUND"
     FORMAT_NOT_ELIGIBLE = "FORMAT_NOT_ELIGIBLE"
     FORMAT_UNAVAILABLE = "FORMAT_UNAVAILABLE"
+    PROVIDER_CAPABILITY_DISABLED = "PROVIDER_CAPABILITY_DISABLED"
     DOWNLOAD_TIMEOUT = "DOWNLOAD_TIMEOUT"
     DOWNLOAD_TOO_LARGE = "DOWNLOAD_TOO_LARGE"
     DOWNLOAD_TOOL_FAILED = "DOWNLOAD_TOOL_FAILED"
@@ -43,6 +44,9 @@ _PUBLIC_MESSAGES: dict[DownloadErrorCode, str] = {
     DownloadErrorCode.FORMAT_NOT_ELIGIBLE: "The requested format is not eligible.",
     DownloadErrorCode.FORMAT_UNAVAILABLE: (
         "The requested format is no longer available."
+    ),
+    DownloadErrorCode.PROVIDER_CAPABILITY_DISABLED: (
+        "This action is not available for this source."
     ),
     DownloadErrorCode.DOWNLOAD_TIMEOUT: "The download timed out.",
     DownloadErrorCode.DOWNLOAD_TOO_LARGE: "The download exceeds the allowed size.",
@@ -74,6 +78,7 @@ _HTTP_STATUS: dict[DownloadErrorCode, int] = {
     DownloadErrorCode.FORMAT_NOT_FOUND: 404,
     DownloadErrorCode.FORMAT_NOT_ELIGIBLE: 422,
     DownloadErrorCode.FORMAT_UNAVAILABLE: 422,
+    DownloadErrorCode.PROVIDER_CAPABILITY_DISABLED: 422,
     DownloadErrorCode.DOWNLOAD_TIMEOUT: 504,
     DownloadErrorCode.DOWNLOAD_TOO_LARGE: 413,
     DownloadErrorCode.DOWNLOAD_TOOL_FAILED: 422,

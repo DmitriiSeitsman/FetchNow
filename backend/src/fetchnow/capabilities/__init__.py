@@ -1,0 +1,1 @@
+"""Canonical provider capability policy."""
