@@ -2,6 +2,38 @@ import { isMediaFlowEnabled } from "./flag";
 import { MediaFlowController } from "./controller";
 import { renderFlow } from "./render";
 
+type ClipboardReader = Pick<Clipboard, "readText">;
+
+export async function pasteClipboardIntoInput(
+  input: HTMLInputElement,
+  clipboard: ClipboardReader | undefined = globalThis.navigator?.clipboard,
+  /** Optional pre-started read so callers can kick off readText in the gesture turn. */
+  pendingRead?: Promise<string>,
+): Promise<boolean> {
+  input.focus();
+  try {
+    const raw =
+      pendingRead ??
+      (clipboard && typeof clipboard.readText === "function"
+        ? clipboard.readText()
+        : null);
+    if (!raw) {
+      return false;
+    }
+    const value = (await raw).trim();
+    if (!value) {
+      return false;
+    }
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+    return true;
+  } catch {
+    input.focus();
+    return false;
+  }
+}
+
 export function mountMediaFlow(
   root: ParentNode,
   enabled = isMediaFlowEnabled(),
@@ -13,14 +45,36 @@ export function mountMediaFlow(
     onChange: (snapshot) => renderFlow(root, snapshot),
   });
   const form = root.querySelector<HTMLFormElement>("[data-flow-form]");
+  const input = root.querySelector<HTMLInputElement>("[data-flow-url]");
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const input = root.querySelector<HTMLInputElement>("[data-flow-url]");
     const url = input?.value.trim() ?? "";
     if (!url) {
       return;
     }
     void controller.submit(url);
+  });
+  const paste = root.querySelector<HTMLButtonElement>("[data-flow-paste]");
+  let pasteInFlight = false;
+  paste?.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (!input || paste.disabled || pasteInFlight) {
+      return;
+    }
+    // Start readText in the same turn as the user gesture (Safari/Firefox).
+    const clipboard = globalThis.navigator?.clipboard;
+    const pendingRead =
+      clipboard && typeof clipboard.readText === "function"
+        ? clipboard.readText()
+        : undefined;
+    pasteInFlight = true;
+    void pasteClipboardIntoInput(input, clipboard, pendingRead).finally(() => {
+      pasteInFlight = false;
+      // Leave enabled/disabled to renderFlow; only clear our in-flight lock.
+      if (!input.disabled) {
+        paste.disabled = false;
+      }
+    });
   });
   root.querySelector("[data-flow-formats]")?.addEventListener("change", (event) => {
     const target = event.target;
@@ -49,6 +103,11 @@ export function mountMediaFlow(
     void controller.saveFile();
   });
   root.querySelector("[data-flow-reset]")?.addEventListener("click", () => {
+    const urlInput = root.querySelector<HTMLInputElement>("[data-flow-url]");
+    if (urlInput) {
+      urlInput.value = "";
+      urlInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     controller.startOver();
   });
   root.querySelector("[data-flow-cancel]")?.addEventListener("click", () => {

@@ -16,7 +16,7 @@ export type QualityOption = {
   representative: MediaFormat;
   /** All grouped formats, ordered by the representative ranking. */
   members: readonly MediaFormat[];
-  /** Primary row text, for example `720p`. */
+  /** Human-first row text, for example `High (720p)`. */
   label: string;
   /** True when the representative can actually be enqueued. */
   eligible: boolean;
@@ -58,17 +58,44 @@ export function qualityGroupKey(format: MediaFormat): string {
   return `l:${normalizeQualityLabel(format.qualityLabel)}`;
 }
 
-export function qualityDisplayLabel(format: MediaFormat): string {
+function shorthandHeight(label: string): number | null {
+  const shorthand = /^p(\d+)$/i.exec(label.trim());
+  if (!shorthand) {
+    return null;
+  }
+  const parsed = Number.parseInt(shorthand[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function qualityTierLabel(format: MediaFormat): string {
+  const height = finiteHeight(format) ?? shorthandHeight(format.qualityLabel);
+  if (height === null) {
+    return "Quality";
+  }
+  if (height >= 720) {
+    return "High";
+  }
+  if (height >= 480) {
+    return "Medium";
+  }
+  return "Low";
+}
+
+function qualityTechnicalLabel(format: MediaFormat): string {
   const height = finiteHeight(format);
   if (height !== null) {
     return `${height}p`;
   }
   const label = format.qualityLabel.trim();
-  const shorthand = /^p(\d+)$/i.exec(label);
-  if (shorthand) {
-    return `${shorthand[1]}p`;
+  const inferredHeight = shorthandHeight(label);
+  if (inferredHeight !== null) {
+    return `${inferredHeight}p`;
   }
   return label.length > 0 ? label : "Unknown quality";
+}
+
+export function qualityDisplayLabel(format: MediaFormat): string {
+  return `${qualityTierLabel(format)} (${qualityTechnicalLabel(format)})`;
 }
 
 export function isDisplayableFormat(format: MediaFormat): boolean {

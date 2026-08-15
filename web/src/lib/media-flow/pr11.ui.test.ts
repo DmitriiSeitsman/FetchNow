@@ -238,7 +238,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const labels = [...document.querySelectorAll(".format-label")].map(
       (node) => node.textContent,
     );
-    expect(labels).toEqual(["720p"]);
+    expect(labels).toEqual(["High (720p)"]);
     expect(el("[data-flow-formats]").textContent).toContain("MP4");
     expect(el("[data-flow-formats]").textContent).toContain("30 fps");
   });

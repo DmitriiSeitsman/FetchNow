@@ -92,6 +92,10 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (input) {
     input.disabled = !snapshot.canSubmit;
   }
+  const paste = root.querySelector<HTMLButtonElement>("[data-flow-paste]");
+  if (paste) {
+    paste.disabled = !snapshot.canSubmit || snapshot.busy;
+  }
 
   const nativeDownload = root.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
   if (nativeDownload) {
@@ -152,6 +156,12 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (cancel) {
     cancel.hidden = !snapshot.canCancelTask;
     cancel.disabled = !snapshot.canCancelTask;
+  }
+  const secondaryActions = root.querySelector<HTMLElement>(
+    "[data-flow-secondary-actions]",
+  );
+  if (secondaryActions) {
+    secondaryActions.hidden = !snapshot.canCancelTask;
   }
 
   const restored = root.querySelector("[data-flow-restored]");
