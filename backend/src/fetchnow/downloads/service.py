@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.capabilities.models import MediaOperation
+from fetchnow.capabilities.public import project_provider_capabilities
 from fetchnow.capabilities.registry import (
     ProviderCapabilityRegistry,
     assert_operation_allowed,
@@ -52,6 +53,7 @@ class DownloadJobView:
     id: uuid.UUID
     media_job_id: uuid.UUID
     public_state: str
+    provider_id: str
     format_option_id: str
     selected_format: dict[str, Any]
     created_at: datetime
@@ -73,7 +75,7 @@ class DownloadJobView:
     def __repr__(self) -> str:
         return (
             f"DownloadJobView(id={self.id!r}, media_job_id={self.media_job_id!r}, "
-            f"public_state={self.public_state!r}, "
+            f"public_state={self.public_state!r}, provider_id={self.provider_id!r}, "
             f"format_option_id={self.format_option_id!r}, "
             f"artifact_ready={self.artifact_ready!r}, "
             f"error_code={self.error_code!r})"
@@ -371,6 +373,7 @@ class DownloadJobService:
             id=job.id,
             media_job_id=job.media_job_id,
             public_state=state.value,
+            provider_id=str(job.provider_id),
             format_option_id=job.format_option_id,
             selected_format=selected,
             created_at=job.created_at,
@@ -485,4 +488,8 @@ class DownloadJobService:
             "progressPercent": view.progress_percent,
             "artifactBytes": view.artifact_bytes,
             "suggestedFilename": view.suggested_filename,
+            "providerCapabilities": project_provider_capabilities(
+                self._capabilities,
+                view.provider_id,
+            ),
         }

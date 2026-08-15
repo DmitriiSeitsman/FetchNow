@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fetchnow.capabilities.public import project_provider_capabilities
+from fetchnow.capabilities.registry import ProviderCapabilityRegistry
 from fetchnow.core.config import Settings
 from fetchnow.jobs.credentials import (
     hash_access_token,
@@ -46,6 +48,7 @@ class JobView:
 
     id: uuid.UUID
     public_state: str
+    provider_id: str
     created_at: datetime
     updated_at: datetime
     expires_at: datetime
@@ -57,7 +60,8 @@ class JobView:
     def __repr__(self) -> str:
         return (
             f"JobView(id={self.id!r}, public_state={self.public_state!r}, "
-            f"created={self.created!r}, error_code={self.error_code!r})"
+            f"provider_id={self.provider_id!r}, created={self.created!r}, "
+            f"error_code={self.error_code!r})"
         )
 
 
@@ -102,10 +106,16 @@ def _provider_inspectable(
 class MediaJobService:
     """Create and read durable media-inspection jobs for the public API."""
 
-    __slots__ = ("_settings",)
+    __slots__ = ("_capabilities", "_settings")
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        capability_registry: ProviderCapabilityRegistry | None = None,
+    ) -> None:
         self._settings = settings
+        self._capabilities = capability_registry or ProviderCapabilityRegistry.default()
 
     async def create_job(
         self,
@@ -275,6 +285,7 @@ class MediaJobService:
         return JobView(
             id=job.id,
             public_state=state.value,
+            provider_id=str(job.provider_id),
             created_at=job.created_at,
             updated_at=job.updated_at,
             expires_at=job.expires_at,
@@ -296,6 +307,10 @@ class MediaJobService:
                 view.completed_at.isoformat() if view.completed_at else None
             ),
             "errorCode": view.error_code,
+            "providerCapabilities": project_provider_capabilities(
+                self._capabilities,
+                view.provider_id,
+            ),
         }
         if view.result is not None:
             from fetchnow.jobs.metadata_codec import media_metadata_to_jsonable
