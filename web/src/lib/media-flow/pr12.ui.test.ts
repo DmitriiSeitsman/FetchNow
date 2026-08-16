@@ -111,7 +111,6 @@ function mountFlow(): void {
         </div>
       </section>
       <p class="hint" data-flow-mux hidden></p>
-      <p class="hint" data-flow-browser hidden></p>
       <button data-flow-download hidden>Prepare download</button>
       <a data-flow-native-download hidden download>Download file</a>
       <button data-flow-save-as hidden>Save as…</button>

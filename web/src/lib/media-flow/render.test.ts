@@ -64,7 +64,6 @@ describe("render", () => {
       <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
-      <p data-flow-browser></p>
       <p data-flow-https hidden></p>
       <p data-flow-grant-pending hidden></p>
       <p data-flow-handoff hidden></p>
@@ -89,7 +88,6 @@ describe("render", () => {
       <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
-      <p data-flow-browser></p>
       <p data-flow-https hidden></p>
       <p data-flow-grant-pending hidden></p>
       <p data-flow-handoff hidden></p>
@@ -209,7 +207,6 @@ describe("render", () => {
       <p data-flow-grant-pending hidden></p>
       <p data-flow-handoff hidden></p>
       <p data-flow-https hidden></p>
-      <p data-flow-browser hidden></p>
       <section data-flow-progress hidden><p data-flow-progress-label></p><span data-flow-loader hidden></span></section>
     `;
     renderFlow(

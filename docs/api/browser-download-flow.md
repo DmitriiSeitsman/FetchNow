@@ -33,7 +33,7 @@ operator.
    expiresAt }` only; the server also sets `Set-Cookie:
    __Secure-fetchnow_delivery=…` (HttpOnly). While this request is in flight
    the UI shows “Preparing secure download…”.
-9. The primary action is a real same-origin anchor:
+9. The always-available action is a real same-origin anchor:
    `<a href="/api/v1/media/browser-grants/{uuid}/content" download>Download
    file</a>`. Navigation uses the cookie; the parent token is never placed in
    the URL. After the user clicks, the UI shows “Sent to your browser” and keeps
@@ -44,6 +44,8 @@ operator.
 10. Optional **Save as…** (Chromium desktop with File System Access API) still
     streams `GET …/download-jobs/{id}/content` with the same Bearer token into
     `showSaveFilePicker`. Credentials are cleared only after a clean FSA close.
+    Where that API exists the UI leads with Save as… and keeps the anchor as a
+    secondary action; where it does not, the anchor is the only action shown.
 
 The parent token is never placed in the URL, filename, DOM, or logs.
 
@@ -85,6 +87,11 @@ The parent token is never placed in the URL, filename, DOM, or logs.
   uses `suggestedFilename` (sanitized title + validated container). The FSA path
   parses `Content-Disposition` `filename*` (RFC 8187) and fail-closes on
   mismatch. This is not a trusted original provider filename.
+- The ready actions follow browser capability rather than showing every path at
+  once. With `showSaveFilePicker`, `Save as…` is the primary button and
+  `Download file` stays mounted as a secondary one; without it, `Save as…` is
+  not rendered and `Download file` is the only action. `Save as…` stays mounted
+  and disabled while a save is in flight.
 - The spinner lives inside the progress card and is only rendered while an
   operation is in flight. `prefers-reduced-motion` disables its animation.
 - On insecure remote origins (HTTP that is not `localhost` / `127.0.0.1`), the

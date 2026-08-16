@@ -52,6 +52,7 @@ export type FlowSnapshot = {
   canSaveAs: boolean;
   downloadHref: string | null;
   nativeDownloadHandoff: boolean;
+  /** The browser cannot pick a save location; a capability, not a phase. */
   browserUnsupported: boolean;
   busy: boolean;
   canSubmit: boolean;
@@ -160,7 +161,7 @@ export class MediaFlowController {
       canSaveAs: phase === "ready" && this.pickerSupported(),
       downloadHref: armed ? this.downloadPath : null,
       nativeDownloadHandoff: this.nativeDownloadHandoff,
-      browserUnsupported: phase === "ready" && !this.pickerSupported(),
+      browserUnsupported: !this.pickerSupported(),
       busy:
         this.machine.isBusy() ||
         this.grantArming ||

@@ -97,12 +97,17 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     paste.disabled = !snapshot.canSubmit || snapshot.busy;
   }
 
+  // Save as… is the lead action wherever the picker exists, so the anchor steps
+  // back to a secondary style there and stays primary everywhere else.
+  const canPickLocation = !snapshot.browserUnsupported;
   const nativeDownload = root.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
   if (nativeDownload) {
     const showPrimary =
       snapshot.canNativeDownload ||
       (snapshot.nativeDownloadHandoff && snapshot.downloadHref !== null);
     nativeDownload.hidden = !showPrimary;
+    nativeDownload.classList.toggle("btn-primary", !canPickLocation);
+    nativeDownload.classList.toggle("btn-ghost", canPickLocation);
     nativeDownload.textContent = snapshot.nativeDownloadHandoff
       ? "Download again"
       : "Download file";
@@ -138,7 +143,9 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const saveAs = root.querySelector<HTMLButtonElement>("[data-flow-save-as]");
   if (saveAs) {
     saveAs.disabled = !snapshot.canSaveAs || snapshot.busy;
-    saveAs.hidden = snapshot.phase !== "ready" && snapshot.phase !== "saving";
+    saveAs.hidden =
+      !canPickLocation ||
+      (snapshot.phase !== "ready" && snapshot.phase !== "saving");
   }
 
   const enqueue = root.querySelector<HTMLButtonElement>("[data-flow-download]");
@@ -249,10 +256,5 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     const onlyIncomplete =
       snapshot.result !== null && options.every((option) => !option.eligible);
     mux.hidden = !onlyIncomplete || snapshot.phase === "idle";
-  }
-
-  const unsupported = root.querySelector("[data-flow-browser]");
-  if (unsupported instanceof HTMLElement) {
-    unsupported.hidden = !snapshot.browserUnsupported || snapshot.phase !== "ready";
   }
 }
