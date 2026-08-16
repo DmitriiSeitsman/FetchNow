@@ -174,17 +174,22 @@ async def test_resolve_direct_vk_ru_clip_returns_video_canonical(
     [
         (
             "https://rutube.ru/video/abc123",
-            "/video/abc123",
-            "https://rutube.ru/video/abc123",
+            "/video/abc123/",
+            "https://rutube.ru/video/abc123/",
         ),
         (
             "https://rutube.ru/video/abc123/",
             "/video/abc123/",
             "https://rutube.ru/video/abc123/",
         ),
+        (
+            "https://rutube.ru/shorts/3eac3b4561676c17df9132a9a1e62e3e/",
+            "/video/3eac3b4561676c17df9132a9a1e62e3e/",
+            "https://rutube.ru/video/3eac3b4561676c17df9132a9a1e62e3e/",
+        ),
     ],
 )
-async def test_resolve_direct_rutube_preserves_path_form(
+async def test_resolve_direct_rutube_canonicalizes_video_and_shorts(
     client: AsyncClient,
     raw: str,
     path: str,
@@ -200,6 +205,7 @@ async def test_resolve_direct_rutube_preserves_path_form(
     assert body["url"]["path"] == path
     assert body["url"]["canonical"] == canonical
     assert "?" not in body["url"]["canonical"]
+    assert "/shorts/" not in body["url"]["canonical"]
     assert not any("yandex.ru" in c for c in calls)
 
 

@@ -329,13 +329,16 @@ class ResolutionService:
         self,
         validated: URLValidationResult,
     ) -> URLValidationResult:
-        """Rewrite VK /clip|/video aliases into a coherent trusted snapshot.
+        """Rewrite stable provider path aliases into a coherent trusted snapshot.
 
-        PR13 scopes this rewrite to VK only so public Rutube ``/media/resolve``
-        path forms stay as validated. Non-stable VK paths keep the prior
-        snapshot. No extra DNS or HTTP I/O.
+        VK ``/clip…`` and Rutube ``/shorts/…`` become their ``/video…``
+        canonical forms. Non-stable paths keep the prior snapshot. No extra
+        DNS or HTTP I/O.
         """
-        if validated.provider_id != ProviderID.VK.value:
+        if validated.provider_id not in {
+            ProviderID.VK.value,
+            ProviderID.RUTUBE.value,
+        }:
             return validated
         provider = self._providers.find(validated.url.hostname)
         if provider is None:

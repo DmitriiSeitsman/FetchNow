@@ -18,7 +18,13 @@ from fetchnow.url.models import ProviderID
 # Reject double-minus, signed video IDs, /clips…, and extra segments.
 # Canonical path is always /video{owner}_{id} (never /clip).
 _VK_STABLE_PATH = re.compile(r"^/(?:video|clip)(-?\d+)_(\d+)/?$")
-_RUTUBE_STABLE_PATH = re.compile(r"^/video/([A-Za-z0-9_-]{1,64})/?$")
+# Ordinary Rutube videos and Shorts share the same opaque media id. Shorts are
+# an input alias only: canonical path is always /video/{id}/ so yt-dlp hits the
+# Rutube extractor directly (generic extractor is forbidden in FetchNow).
+# Embed/private/live/playlist paths stay out of this grammar.
+_RUTUBE_STABLE_PATH = re.compile(
+    r"^/(?:video|shorts)/([A-Za-z0-9_-]{1,64})/?$"
+)
 _SAFE_HOST = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 _FORBIDDEN_PATH_MARKERS = (
     "/video_ext.php",

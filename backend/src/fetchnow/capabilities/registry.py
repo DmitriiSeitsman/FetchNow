@@ -16,6 +16,10 @@ from fetchnow.url.models import ProviderID
 
 
 def _capabilities(provider_id: ProviderID) -> ProviderCapabilities:
+    # VK and Rutube share this product policy. Rutube Shorts are an URL alias of
+    # ordinary videos; they do not get a separate matrix row. Live metadata
+    # probing confirmed progressive download + quality selection remain valid
+    # defaults; extract-audio / select-container stay disabled.
     return ProviderCapabilities(
         provider_id=provider_id,
         operations={

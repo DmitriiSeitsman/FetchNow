@@ -59,9 +59,11 @@ VK allowlist is exact-host only:
 lookalike remain unsupported. Same-provider redirects among the nine aliases
 are allowed; arbitrary VK subdomains are not trusted.
 
-Stable path identity (`fetchnow.url.provider_identity`) accepts `/video…` and
+Stable path identity (`fetchnow.url.provider_identity`) accepts VK `/video…` and
 `/clip…` aliases with the same owner/id and always emits trusted canonical path
-`/video{owner}_{id}`. `ResolutionService` rewrites the validated snapshot
-(path + public canonical) to that form **for VK only** (direct and
-wrapper-terminal results) so `/media/resolve` never publishes `/clip…` as the
-terminal URL. Rutube validated path forms are left unchanged.
+`/video{owner}_{id}`. For Rutube it accepts `/video/<id>/` and `/shorts/<id>/`
+and always emits `/video/<id>/`. `ResolutionService` rewrites the validated
+snapshot (path + public canonical) to that form for both providers (direct and
+wrapper-terminal results) so `/media/resolve` never publishes `/clip…` or
+`/shorts/…` as the terminal URL. Legacy `yappy.media` hosts and
+`rutube.ru/yappy/…` paths are not registered as stable media identity.

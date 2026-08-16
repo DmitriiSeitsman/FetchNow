@@ -226,7 +226,7 @@ def test_yandex_authoritative_vk_ru_clip_rewrites_to_video() -> None:
     [
         (
             "https://rutube.ru/video/abcdef0123456789",
-            "https://rutube.ru/video/abcdef0123456789",
+            "https://rutube.ru/video/abcdef0123456789/",
         ),
         (
             "https://rutube.ru/video/abcdef0123456789/",
@@ -234,11 +234,19 @@ def test_yandex_authoritative_vk_ru_clip_rewrites_to_video() -> None:
         ),
         (
             "http://rutube.ru/video/abcdef0123456789",
-            "https://rutube.ru/video/abcdef0123456789",
+            "https://rutube.ru/video/abcdef0123456789/",
+        ),
+        (
+            "https://rutube.ru/shorts/3eac3b4561676c17df9132a9a1e62e3e",
+            "https://rutube.ru/video/3eac3b4561676c17df9132a9a1e62e3e/",
+        ),
+        (
+            "https://rutube.ru/shorts/3eac3b4561676c17df9132a9a1e62e3e/",
+            "https://rutube.ru/video/3eac3b4561676c17df9132a9a1e62e3e/",
         ),
     ],
 )
-def test_yandex_rutube_preserves_accepted_path_form(raw: str, expected: str) -> None:
+def test_yandex_rutube_canonicalizes_video_and_shorts(raw: str, expected: str) -> None:
     url, _upgraded = _normalize_stable_provider_url(
         raw,
         supported_hosts=HOSTS,
@@ -254,6 +262,8 @@ def test_yandex_rutube_preserves_accepted_path_form(raw: str, expected: str) -> 
         "https://rutube.ru/video/abcdef0123456789.m3u8",
         "https://rutube.ru/video/",
         "https://rutube.ru/videos/abcdef0123456789/",
+        "https://rutube.ru/yappy/abcdef0123456789/",
+        "https://rutube.ru/shorts/",
     ],
 )
 def test_yandex_rutube_malformed_and_embed_rejected(raw: str) -> None:
