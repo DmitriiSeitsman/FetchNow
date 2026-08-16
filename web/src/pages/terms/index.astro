@@ -1,0 +1,13 @@
+---
+import LegalDocument from "../../components/LegalDocument.astro";
+import { legalPageById } from "../../lib/seo/pages";
+
+const page = legalPageById("terms");
+---
+
+<LegalDocument page={page}>
+  <h1>{page.h1}</h1>
+  <p class="legal-status"><strong>Раздел готовится</strong></p>
+  <p>Мы готовим условия использования FetchNow.</p>
+  <p>Актуальная версия документа будет опубликована на этой странице.</p>
+</LegalDocument>

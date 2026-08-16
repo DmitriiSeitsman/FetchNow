@@ -11,7 +11,7 @@ const nginxConf = readFileSync(
 
 describe("web nginx SEO routing", () => {
   it("canonicalizes provider directories with 308 and never soft-200s unknowns", () => {
-    for (const slug of ["vk", "rutube", "ok", "dzen"]) {
+    for (const slug of ["vk", "rutube", "ok", "dzen", "privacy", "terms", "copyright"]) {
       expect(nginxConf).toContain(`location = /${slug} { return 308 /${slug}/; }`);
     }
     expect(nginxConf).toContain("try_files $uri $uri/ =404;");

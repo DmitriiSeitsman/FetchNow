@@ -1,0 +1,16 @@
+---
+import LegalDocument from "../../components/LegalDocument.astro";
+import { legalPageById } from "../../lib/seo/pages";
+
+const page = legalPageById("copyright");
+---
+
+<LegalDocument page={page}>
+  <h1>{page.h1}</h1>
+  <p class="legal-status"><strong>Раздел готовится</strong></p>
+  <p>Мы готовим порядок взаимодействия FetchNow с правообладателями.</p>
+  <p>По вопросам, связанным с использованием материалов и защитой авторских прав, можно обратиться:</p>
+  <p>
+    <a href="mailto:copyright@fetchnow.online">copyright@fetchnow.online</a>
+  </p>
+</LegalDocument>

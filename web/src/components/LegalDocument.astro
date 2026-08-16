@@ -1,0 +1,28 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import type { LegalPage } from "../lib/seo/pages";
+import { robotsContentForLegalPage } from "../lib/seo/pages";
+
+interface Props {
+  page: LegalPage;
+}
+
+const { page } = Astro.props;
+---
+
+<BaseLayout
+  title={page.title}
+  description={page.description}
+  canonicalPath={page.path}
+  robots={robotsContentForLegalPage(page)}
+>
+  <main class="shell shell-document">
+    <div class="atmosphere" aria-hidden="true"></div>
+    <article class="legal-doc">
+      <p class="legal-brand">
+        <a href="/">FetchNow</a>
+      </p>
+      <slot />
+    </article>
+  </main>
+</BaseLayout>
