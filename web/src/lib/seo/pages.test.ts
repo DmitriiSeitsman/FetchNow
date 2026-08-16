@@ -207,5 +207,21 @@ describe("provider landing wiring", () => {
     expect(copyright).toContain('href="/privacy/"');
     expect(copyright).toContain('href="/terms/"');
     expect(copyright).not.toMatch(/DMCA/i);
+    expect(copyright).toContain("Временная техническая обработка медиаданных");
+    expect(copyright).toContain("статьями 1317 и 1324 ГК РФ");
+    expect(terms).toContain("временный технический медиафайл");
+    expect(terms).toContain("постоянного общедоступного URL");
+    expect(privacy).toContain("во внутреннем закрытом");
+    expect(privacy).toContain("серверной авторизации");
+    expect(privacy).toContain("Обращения правообладателей");
+    expect(robotsContentForLegalPage(legalPageById("copyright"))).toBe(
+      "noindex,follow",
+    );
+    expect(robotsContentForLegalPage(legalPageById("privacy"))).toBe(
+      "noindex,follow",
+    );
+    expect(robotsContentForLegalPage(legalPageById("terms"))).toBe(
+      "noindex,follow",
+    );
   });
 });
