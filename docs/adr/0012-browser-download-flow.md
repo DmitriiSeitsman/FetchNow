@@ -29,7 +29,11 @@ buffer the whole file in JavaScript memory.
    [ADR 0016](0016-browser-native-delivery-grants.md)). Absence of File System
    Access is not an error for this path.
 4. **Optional Save as…:** Chromium may still use `showSaveFilePicker` and stream
-   `response.body` with the parent Bearer. Chunks are written and dropped.
+   `response.body` with the parent Bearer. Chunks are written and dropped. The
+   ready screen picks the actions by capability: with a save picker, “Save as…”
+   is the lead button and the grant anchor remains as a secondary action;
+   without one, only the grant anchor is rendered (no disabled button, no
+   browser-support note).
 5. A tab-scoped `sessionStorage` recovery record may hold only bounded fields
    (token, job ids, selected option, phase, `expiresAt`) under
    `fetchnow.media-flow.v2`. Schema v1 keys are discarded. Submitted URLs,

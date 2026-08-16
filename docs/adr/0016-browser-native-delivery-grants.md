@@ -1,6 +1,6 @@
 # ADR 0016 — Browser-native delivery grants
 
-Status: Accepted (PR14)
+Status: Accepted (PR14) · Amended for capability-led action prominence
 Date: 2026-08-14
 
 ## Context
@@ -37,7 +37,16 @@ Introduce a short-lived **browser delivery grant**:
    replay boundary.
 
 Optional “Save as…” may still use File System Access on Chromium. Absence of
-FSA is not an error. Primary “Download file” never depends on it.
+FSA is not an error, and the grant anchor never depends on it.
+
+**Amendment (UI prominence only, no transport change).** The ready screen used
+to render both actions side by side and, on browsers without FSA, a disabled
+“Save as…” plus an explanatory note. The buttons are now chosen by capability:
+where `showSaveFilePicker` exists, “Save as…” leads and the grant anchor stays
+mounted as a secondary action; where it does not, “Save as…” and its note are
+not rendered at all and the anchor is the single primary action. The grant
+protocol, the anchor path, and the guarantee that the anchor works without FSA
+are unchanged.
 
 ## Consequences
 
