@@ -132,7 +132,7 @@ export const legalPages: ReadonlyArray<LegalPage> = Object.freeze([
     path: "/copyright/",
     title: "Правообладателям — FetchNow",
     description:
-      "Информация для правообладателей FetchNow. Порядок взаимодействия готовится к публикации.",
+      "Порядок обращений правообладателей к FetchNow: рассмотрение заявлений, меры по прекращению нарушений и контакт copyright@fetchnow.online.",
     h1: "Правообладателям",
     indexable: false,
     robotsFollow: true,
