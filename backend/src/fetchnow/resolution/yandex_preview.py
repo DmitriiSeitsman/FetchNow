@@ -1147,8 +1147,7 @@ def _normalize_stable_provider_url(
 def _canonical_stable_provider_path(host: str, path: str) -> str | None:
     """Return trusted path form, or None when the path is not stable.
 
-    VK aliases rewrite to ``/video…``. Rutube keeps the accepted submitted path
-    form (with or without trailing slash) after shared-grammar validation.
+    VK ``/clip…`` and Rutube ``/shorts/…`` aliases rewrite to ``/video…``.
     """
     if host in _VK_HOSTS:
         provider_id = ProviderID.VK.value
@@ -1167,8 +1166,6 @@ def _canonical_stable_provider_path(host: str, path: str) -> str | None:
         )
     except ProviderIdentityError:
         return None
-    if provider_id == ProviderID.RUTUBE.value:
-        return path
     return identity.canonical_path
 
 

@@ -99,6 +99,38 @@ def test_provider_identity_is_shared_neutral_grammar() -> None:
     assert video.canonical_path == clip.canonical_path == "/video-1_2"
 
 
+def test_rutube_shorts_alias_shares_video_canonical() -> None:
+    from fetchnow.url.provider_identity import (
+        ProviderIdentityError,
+        parse_stable_provider_identity,
+    )
+
+    hosts = frozenset({"rutube.ru", "www.rutube.ru"})
+    media_id = "3eac3b4561676c17df9132a9a1e62e3e"
+    video = parse_stable_provider_identity(
+        provider_id="rutube",
+        hostname="rutube.ru",
+        path=f"/video/{media_id}/",
+        allowed_hostnames=hosts,
+    )
+    shorts = parse_stable_provider_identity(
+        provider_id="rutube",
+        hostname="rutube.ru",
+        path=f"/shorts/{media_id}",
+        allowed_hostnames=hosts,
+    )
+    assert video.media_id == shorts.media_id == media_id
+    assert video.canonical_path == shorts.canonical_path == f"/video/{media_id}/"
+    with pytest.raises(ProviderIdentityError) as exc_info:
+        parse_stable_provider_identity(
+            provider_id="rutube",
+            hostname="rutube.ru",
+            path=f"/yappy/{media_id}/",
+            allowed_hostnames=hosts,
+        )
+    assert exc_info.value.reason == "RUTUBE_PATH_INVALID"
+
+
 def test_provider_registry_accepts_nine_exact_vk_hosts() -> None:
     providers = build_default_providers(_settings())
     vk = next(p for p in providers if p.id == ProviderID.VK.value)
@@ -658,8 +690,8 @@ def test_parse_identity_from_url_cross_alias_clip() -> None:
     [
         (
             "https://rutube.ru/video/abc123",
-            "/video/abc123",
-            "https://rutube.ru/video/abc123",
+            "/video/abc123/",
+            "https://rutube.ru/video/abc123/",
         ),
         (
             "https://rutube.ru/video/abc123/",
@@ -668,12 +700,22 @@ def test_parse_identity_from_url_cross_alias_clip() -> None:
         ),
         (
             "https://rutube.ru/video/abc123?list=x",
-            "/video/abc123",
-            "https://rutube.ru/video/abc123",
+            "/video/abc123/",
+            "https://rutube.ru/video/abc123/",
+        ),
+        (
+            "https://rutube.ru/shorts/3eac3b4561676c17df9132a9a1e62e3e",
+            "/video/3eac3b4561676c17df9132a9a1e62e3e/",
+            "https://rutube.ru/video/3eac3b4561676c17df9132a9a1e62e3e/",
+        ),
+        (
+            "https://www.rutube.ru/shorts/3eac3b4561676c17df9132a9a1e62e3e/",
+            "/video/3eac3b4561676c17df9132a9a1e62e3e/",
+            "https://www.rutube.ru/video/3eac3b4561676c17df9132a9a1e62e3e/",
         ),
     ],
 )
-async def test_rutube_resolution_preserves_path_form(
+async def test_rutube_resolution_canonicalizes_video_and_shorts(
     raw: str,
     path: str,
     canonical: str,
@@ -709,10 +751,9 @@ async def test_rutube_resolution_preserves_path_form(
     assert dns_calls == after_validate
     assert rewritten.url.path == path
     assert rewritten.url.canonical == canonical
-    assert rewritten is validated or (
-        rewritten.url.path == validated.url.path
-        and rewritten.url.canonical == validated.url.canonical
-    )
+    assert "?" not in rewritten.url.canonical
+    assert "/shorts/" not in rewritten.url.path
+    assert "/shorts/" not in rewritten.url.canonical
 
     result = await service.resolve(raw)
     assert result.provider_id == ProviderID.RUTUBE.value
@@ -720,7 +761,60 @@ async def test_rutube_resolution_preserves_path_form(
     assert result.canonical_provider_url == canonical
     assert result.canonical_provider_url == result.validated.url.canonical
     assert "?" not in result.canonical_provider_url
+    assert "/shorts/" not in result.canonical_provider_url
     http.fetch_document.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://rutube.ru/yappy/3eac3b4561676c17df9132a9a1e62e3e/",
+        "https://rutube.ru/shorts/",
+        "https://rutube.ru/shorts/not valid/",
+        "https://rutube.ru/play/embed/3eac3b4561676c17df9132a9a1e62e3e/",
+        "https://rutube.ru/video/private/3eac3b4561676c17df9132a9a1e62e3e/",
+        "https://rutube.ru/live/video/3eac3b4561676c17df9132a9a1e62e3e/",
+    ],
+)
+async def test_rutube_non_stable_paths_are_not_rewritten(raw: str) -> None:
+    cfg = _settings()
+    providers = ProviderRegistry.from_settings(cfg)
+    dns = FakeDnsResolver(default_addresses=("8.8.8.8",))
+    validator = URLValidator(cfg, registry=providers, resolver=dns)
+    http = MagicMock()
+    http.aclose = AsyncMock()
+    http.fetch_document = AsyncMock(
+        side_effect=AssertionError("non-stable rutube must not HTTP fetch")
+    )
+    wrappers = build_wrapper_registry(cfg, providers)
+    service = ResolutionService(
+        cfg,
+        provider_registry=providers,
+        wrapper_registry=wrappers,
+        validator=validator,
+        http_client=http,
+        dns_resolver=dns,
+    )
+    validated = await validator.validate(raw)
+    rewritten = service._with_stable_provider_identity(validated)
+    assert rewritten is validated
+    assert rewritten.url.path == validated.url.path
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    ["yappy.media", "www.yappy.media", "yappy.ru"],
+)
+async def test_legacy_yappy_hosts_are_unsupported_providers(hostname: str) -> None:
+    cfg = _settings()
+    validator = URLValidator(
+        cfg,
+        registry=ProviderRegistry.from_settings(cfg),
+        resolver=FakeDnsResolver(default_addresses=("8.8.8.8",)),
+    )
+    with pytest.raises(URLValidationError) as exc_info:
+        await validator.validate(f"https://{hostname}/video/abcdef0123456789/")
+    assert exc_info.value.code == "UNSUPPORTED_PROVIDER"
 
 
 @pytest.mark.parametrize(

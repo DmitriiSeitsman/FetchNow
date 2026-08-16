@@ -69,6 +69,10 @@ Media-inspection and download job responses expose a top-level
   relying on the public media flow against a PR-B backend.
 - Per-media formats and resolutions remain `MediaMetadata.formats`; the static
   matrix never promises a resolution or container for a particular item.
-- Rutube has the same initial matrix as VK to preserve current behavior. Its
-  live download reliability remains unverified and must be evaluated separately
-  before any provider-specific product claim.
+- Rutube keeps the same matrix as VK after a live metadata probe of a public
+  video (progressive MP4 present; no audio-only/container choice observed;
+  title/duration present; thumbnails still unused by FetchNow). Shorts URLs are
+  an identity alias of `/video/{id}/`. Legacy `yappy.media` / `rutube.ru/yappy/…`
+  are unsupported (broken or non-media), not a third provider.
+- Live end-to-end download reliability on staging remains an operator smoke
+  concern and is not claimed by this ADR alone.
