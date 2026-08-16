@@ -1,45 +1,82 @@
 ---
 import "../styles/global.css";
+import {
+  isSearchIndexingEnabled,
+  robotsMetaContent,
+} from "../lib/seo/indexing";
+import { resolveSiteUrl } from "../lib/seo/site-url";
 
 interface Props {
   title?: string;
   description?: string;
+  canonicalPath?: string;
+  /** Optional page-level robots override (e.g. noindex while global indexing is on). */
+  robots?: string;
+  ogImageAlt?: string;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
 }
 
-const siteUrl = (import.meta.env.PUBLIC_SITE_URL ?? "http://localhost").replace(
-  /\/$/,
-  "",
-);
-const { title = "FetchNow", description = "Paste a link. Fetch the media. Done." } =
-  Astro.props;
-const canonical = `${siteUrl}/`;
-const ogImage = `${siteUrl}/og.svg`;
+const indexingEnabled = isSearchIndexingEnabled();
+const siteUrl = resolveSiteUrl({ indexingEnabled });
+const {
+  title = "FetchNow — скачать видео по ссылке",
+  description = "Честный сервис для скачивания видео по ссылке. Без рекламы. Вообще.",
+  canonicalPath = "/",
+  robots,
+  ogImageAlt = "FetchNow",
+  jsonLd,
+} = Astro.props;
+
+const normalizedPath = canonicalPath.startsWith("/")
+  ? canonicalPath
+  : `/${canonicalPath}`;
+const withTrailingSlash =
+  normalizedPath === "/" ? "/" : normalizedPath.replace(/\/?$/, "/");
+const canonical = `${siteUrl}${withTrailingSlash}`;
+const ogImage = `${siteUrl}/og.png`;
+const robotsContent = robots ?? robotsMetaContent(indexingEnabled);
+const jsonLdItems = jsonLd
+  ? Array.isArray(jsonLd)
+    ? jsonLd
+    : [jsonLd]
+  : [];
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="robots" content="index,follow" />
+    <meta name="robots" content={robotsContent} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 
     <meta property="og:type" content="website" />
+    <meta property="og:locale" content="ru_RU" />
     <meta property="og:site_name" content="FetchNow" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={ogImage} />
-    <meta property="og:image:type" content="image/svg+xml" />
-    <meta property="og:image:alt" content="FetchNow" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:alt" content={ogImageAlt} />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
+
+    {
+      jsonLdItems.map((item) => (
+        <script
+          type="application/ld+json"
+          is:inline
+          set:html={JSON.stringify(item)}
+        />
+      ))
+    }
   </head>
   <body>
     <slot />

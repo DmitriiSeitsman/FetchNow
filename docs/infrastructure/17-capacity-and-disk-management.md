@@ -50,6 +50,7 @@ Disk capacity измеряет bytes, inode — количество filesystem 
 | Application | `ABUSE_CONTACT_EMAIL` | пусто | planned; Settings не читает |
 | Compose | `GATEWAY_PORT` | `80` | Compose interpolation; staging target `127.0.0.1:8091` |
 | Web build | `PUBLIC_SITE_URL` | local example | Astro build argument, не backend runtime |
+| Web build | `PUBLIC_SEARCH_INDEXING_ENABLED` | `false` | Fail-closed robots meta + web nginx `X-Robots-Tag`; staging hard-coded `false` |
 
 ## Диагностика ресурсов
 

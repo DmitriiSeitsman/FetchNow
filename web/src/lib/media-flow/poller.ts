@@ -1,4 +1,4 @@
-import { FlowError, flowErrorFromCode } from "./errors";
+import { FlowError, flowErrorFromCode, GENERIC_USER_MESSAGE } from "./errors";
 
 export type PollerOptions<T> = {
   read: (signal: AbortSignal) => Promise<T>;
@@ -189,7 +189,7 @@ export async function pollUntilTerminal<T>(options: PollerOptions<T>): Promise<T
     if (inFlight) {
       throw new FlowError(
         "INTERNAL_ERROR",
-        "Something went wrong. Please try again in a moment, or start over.",
+        GENERIC_USER_MESSAGE,
       );
     }
     inFlight = true;

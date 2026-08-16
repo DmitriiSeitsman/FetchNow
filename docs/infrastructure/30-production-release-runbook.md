@@ -53,6 +53,7 @@ also forbidden.
 | Gateway publish | loopback only (`127.0.0.1:<port>`) | `127.0.0.1:8091` |
 | `APP_ENV` | `production` | `staging` |
 | `PUBLIC_SITE_URL` | `https://fetchnow.online` | `https://staging.fetchnow.online` |
+| `PUBLIC_SEARCH_INDEXING_ENABLED` | `true` only at official launch | hard-coded `false` in `compose.staging.yaml` |
 
 On a dedicated production host the loopback gateway port may reuse
 `8091` (nothing else on that host claims it). If production later shares
@@ -212,6 +213,7 @@ and the operator intentionally publishes the domain.
 | Release pin | `FETCHNOW_RELEASE_REVISION=<full-40-char-sha>` matching the staged/accepted release |
 | Media flags | Explicit operator choice; do not inherit staging enablement blindly |
 | UI flag | `PUBLIC_MEDIA_FLOW_ENABLED` independent of staging |
+| Search indexing | `PUBLIC_SEARCH_INDEXING_ENABLED=true` only at official launch; staging Compose hard-codes `false` |
 
 ### Secrets handling
 

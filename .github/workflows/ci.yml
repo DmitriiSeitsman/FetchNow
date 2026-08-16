@@ -357,11 +357,36 @@ jobs:
         env:
           PUBLIC_SITE_URL: http://localhost
           PUBLIC_MEDIA_FLOW_ENABLED: "false"
+          PUBLIC_SEARCH_INDEXING_ENABLED: "false"
       - name: Build with media flow enabled
         run: npm run build
         env:
           PUBLIC_SITE_URL: http://localhost
           PUBLIC_MEDIA_FLOW_ENABLED: "true"
+          PUBLIC_SEARCH_INDEXING_ENABLED: "false"
+      - name: Build with search indexing enabled
+        run: npm run build
+        env:
+          PUBLIC_SITE_URL: http://localhost
+          PUBLIC_MEDIA_FLOW_ENABLED: "false"
+          PUBLIC_SEARCH_INDEXING_ENABLED: "true"
+      - name: Assert fail-closed robots meta
+        run: |
+          PUBLIC_SITE_URL=http://localhost PUBLIC_SEARCH_INDEXING_ENABLED=false npm run build
+          grep -q 'name="robots" content="noindex,nofollow"' dist/index.html
+          grep -q 'lang="ru"' dist/index.html
+          grep -q 'Allow: /' dist/robots.txt
+          ! grep -q 'Disallow: /' dist/robots.txt
+          ! grep -q 'Sitemap:' dist/robots.txt
+          grep -q '<urlset' dist/sitemap.xml
+          ! grep -q '<loc>' dist/sitemap.xml
+          PUBLIC_SITE_URL=https://fetchnow.online PUBLIC_SEARCH_INDEXING_ENABLED=true npm run build
+          grep -q 'name="robots" content="index,follow"' dist/index.html
+          grep -q 'Sitemap: https://fetchnow.online/sitemap.xml' dist/robots.txt
+          grep -q 'https://fetchnow.online/vk/' dist/sitemap.xml
+          if PUBLIC_SEARCH_INDEXING_ENABLED=yes npm run build; then echo "expected invalid indexing flag to fail"; exit 1; fi
+          if PUBLIC_SITE_URL=https://fetchnow.online/foo PUBLIC_SEARCH_INDEXING_ENABLED=true npm run build; then echo "expected invalid site url to fail"; exit 1; fi
+          if env -u PUBLIC_SITE_URL PUBLIC_SEARCH_INDEXING_ENABLED=true npm run build; then echo "expected missing site url with indexing to fail"; exit 1; fi
 
   docker:
     name: Docker images
@@ -390,6 +415,7 @@ jobs:
           tags: fetchnow-web:ci
           build-args: |
             PUBLIC_SITE_URL=http://localhost
+            PUBLIC_SEARCH_INDEXING_ENABLED=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build gateway image

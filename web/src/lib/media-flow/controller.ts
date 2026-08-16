@@ -193,17 +193,17 @@ export class MediaFlowController {
         return userMessageForCode("HTTPS_REQUIRED").text;
       }
       if (this.grantArming) {
-        return "Preparing secure download…";
+        return "Готовим безопасное скачивание…";
       }
       if (this.nativeDownloadHandoff && this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)) {
-        return "Sent to your browser";
+        return "Отправлено в браузер";
       }
       if (this.grantNeedsRetry || this.downloadPath === null) {
-        return "Download access needs to be refreshed.";
+        return "Нужно обновить доступ к скачиванию.";
       }
     }
     if (this.restored && this.machine.current === "inspected") {
-      return "Restored an existing download task. Choose a quality or continue.";
+      return "Восстановлена текущая задача. Выберите качество или продолжите.";
     }
     if (this.restored && this.machine.current === "downloading") {
       return (
@@ -215,7 +215,7 @@ export class MediaFlowController {
             artifactBytes: this.downloadJob?.artifactBytes ?? null,
             formats: this.mediaJob?.result?.formats ?? [],
           },
-        ) || "Restored an existing download task."
+        ) || "Восстановлена текущая задача."
       );
     }
     if (this.machine.current === "cancelled") {

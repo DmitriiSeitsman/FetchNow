@@ -16,7 +16,7 @@ const alternateFormat = {
 function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
   return {
     phase: "inspected",
-    statusText: "Choose a quality to download.",
+    statusText: "Выберите качество для скачивания.",
     errorText: null,
     result: {
       providerId: "vk",
@@ -107,7 +107,7 @@ describe("render", () => {
       }),
     );
     const duration = document.querySelector("[data-flow-duration]");
-    expect(duration?.textContent).toBe("Duration unavailable");
+    expect(duration?.textContent).toBe("Длительность неизвестна");
     expect(duration?.textContent).not.toMatch(/NaN/);
   });
 

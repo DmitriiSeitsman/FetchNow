@@ -106,7 +106,7 @@ function mountFlow(): void {
           aria-valuemin="0"
           aria-valuemax="100"
           aria-valuenow="0"
-          aria-valuetext="Waiting to start…"
+          aria-valuetext="Ожидание начала…"
         >
           <span class="progress-fill" data-flow-progress-fill></span>
         </div>
@@ -229,7 +229,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       document,
       snapshot({
         phase: "inspected",
-        statusText: "Choose a quality to download.",
+        statusText: "Выберите качество для скачивания.",
         result: { ...RESULT, formats },
         formats,
         selectedFormatId: OPTION_ID,
@@ -241,7 +241,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(el("[data-flow-loader]").hidden).toBe(true);
     expect(el("[data-flow-progress]").hidden).toBe(true);
     expect(el("[data-flow-quality]").hidden).toBe(false);
-    expect(el("[data-flow-status]").textContent).toBe("Choose a quality to download.");
+    expect(el("[data-flow-status]").textContent).toBe("Выберите качество для скачивания.");
   });
 
   it("hides the quality selector when only one grouped option exists", () => {
@@ -250,7 +250,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       document,
       snapshot({
         phase: "inspected",
-        statusText: "Choose a quality to download.",
+        statusText: "Выберите качество для скачивания.",
         result: RESULT,
         formats: [progressiveFormat],
         selectedFormatId: OPTION_ID,
@@ -306,7 +306,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const labels = [...document.querySelectorAll(".format-label")].map(
       (node) => node.textContent,
     );
-    expect(labels).toEqual(["High (720p)", "Medium (480p)"]);
+    expect(labels).toEqual(["Высокое (720p)", "Среднее (480p)"]);
     expect(el("[data-flow-formats]").textContent).toContain("MP4");
     expect(el("[data-flow-formats]").textContent).toContain("30 fps");
   });
@@ -355,7 +355,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       }),
     );
     expect(el(".format-detail").textContent).toBe(
-      "MP4 · Size available after preparation",
+      "MP4 · Размер станет известен после подготовки",
     );
   });
 
@@ -385,7 +385,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(radios).toHaveLength(2);
     expect(radios[0].disabled).toBe(true);
     expect(radios[1].disabled).toBe(false);
-    expect(el(".format-reason").textContent).toBe("Above the free 720p limit.");
+    expect(el(".format-reason").textContent).toBe("Выше лимита бесплатного режима 720p.");
     expect(el(".format-disabled")).not.toBeNull();
   });
 
@@ -393,13 +393,13 @@ describe("PR11 loader, quality and stage progress UI", () => {
     mountFlow();
     const seen: number[] = [];
     const cases: Array<[FlowSnapshot["progressStage"], string]> = [
-      ["queued", "Waiting to start…"],
-      ["inspecting", "Confirming the selected quality…"],
-      ["downloading_video", "Downloading file…"],
-      ["downloading_audio", "Downloading audio…"],
-      ["muxing", "Combining video and audio…"],
-      ["verifying", "Checking the prepared file…"],
-      ["publishing", "Placing the file in temporary storage…"],
+      ["queued", "Ожидание начала…"],
+      ["inspecting", "Проверяем выбранное качество…"],
+      ["downloading_video", "Скачиваем файл…"],
+      ["downloading_audio", "Скачиваем звук…"],
+      ["muxing", "Собираем видео и звук…"],
+      ["verifying", "Проверяем подготовленный файл…"],
+      ["publishing", "Размещаем файл во временном хранилище…"],
     ];
     for (const [stage, label] of cases) {
       renderFlow(document, snapshot({ phase: "downloading", progressStage: stage }));
@@ -427,7 +427,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const video = progressView("downloading", "downloading_video");
     const publishing = progressView("downloading", "publishing");
     expect(publishing.percent).toBeGreaterThan(video.percent);
-    expect(publishing.label).toBe("Placing the file in temporary storage…");
+    expect(publishing.label).toBe("Размещаем файл во временном хранилище…");
     expect(STAGE_COMPLETION.downloading_audio).toBeGreaterThan(
       STAGE_COMPLETION.downloading_video,
     );
@@ -440,32 +440,32 @@ describe("PR11 loader, quality and stage progress UI", () => {
     );
     expect(el("[data-flow-progress]").hidden).toBe(false);
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Placing the file in temporary storage…",
+      "Размещаем файл во временном хранилище…",
     );
   });
 
   it("shows retrying, ready, saving and completed states honestly", () => {
     mountFlow();
     renderFlow(document, snapshot({ phase: "downloading", progressStage: "retrying" }));
-    expect(el("[data-flow-progress-label]").textContent).toBe("Retrying preparation…");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Повторяем подготовку…");
 
     renderFlow(
       document,
-      snapshot({ phase: "ready", progressStage: "ready", statusText: "Ready to download" }),
+      snapshot({ phase: "ready", progressStage: "ready", statusText: "Готово к скачиванию" }),
     );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to download");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Готово к скачиванию");
     expect(el("[data-flow-progress]").dataset.tone).toBe("done");
     expect(el("[data-flow-loader]").hidden).toBe(true);
 
     renderFlow(document, snapshot({ phase: "saving" }));
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Saving to your computer…",
+      "Сохраняем на ваш компьютер…",
     );
     expect(el("[data-flow-loader]").hidden).toBe(false);
 
     renderFlow(document, snapshot({ phase: "completed" }));
-    expect(el("[data-flow-progress-label]").textContent).toBe("Saved to your computer");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Сохранено на ваш компьютер");
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
     expect(el("[data-flow-loader]").hidden).toBe(true);
   });
@@ -473,9 +473,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
   it("never renders error, cancel or expired states as active progress", () => {
     mountFlow();
     const terminals: Array<Partial<FlowSnapshot>> = [
-      { phase: "cancelled", statusText: "Download cancelled" },
-      { phase: "expired", errorText: "This download expired." },
-      { phase: "download_failed", errorText: "The file could not be prepared." },
+      { phase: "cancelled", statusText: "Скачивание отменено" },
+      { phase: "expired", errorText: "Это скачивание устарело." },
+      { phase: "download_failed", errorText: "Не удалось подготовить файл." },
       { phase: "network_error", errorText: "Connection lost." },
       { phase: "downloading", progressStage: "cancelled" },
       { phase: "downloading", progressStage: "failed" },
@@ -488,9 +488,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     }
     renderFlow(
       document,
-      snapshot({ phase: "expired", errorText: "This download expired." }),
+      snapshot({ phase: "expired", errorText: "Это скачивание устарело." }),
     );
-    expect(el("[data-flow-status]").textContent).toBe("This download expired.");
+    expect(el("[data-flow-status]").textContent).toBe("Это скачивание устарело.");
     expect(el("[data-flow-status]").dataset.tone).toBe("error");
   });
 
@@ -630,9 +630,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(reads).toBeGreaterThanOrEqual(2);
     expect(controller.snapshot().phase).toBe("ready");
     expect(controller.snapshot().errorText).toBeNull();
-    expect(labels).not.toContain("The file could not be prepared.");
+    expect(labels).not.toContain("Не удалось подготовить файл.");
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Ready to download · 11.4 MB",
+      "Готово к скачиванию · 11.4 МБ",
     );
   });
 
@@ -692,7 +692,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(el("[data-flow-restored]").hidden).toBe(false);
     expect(el("[data-flow-progress]").hidden).toBe(false);
     expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Ready to download · 11.4 MB",
+      "Готово к скачиванию · 11.4 МБ",
     );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
   });

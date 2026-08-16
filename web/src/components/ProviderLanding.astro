@@ -1,0 +1,58 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import MediaFlow from "./MediaFlow.astro";
+import { isMediaFlowEnabled } from "../lib/media-flow/flag";
+import type { ProviderPage } from "../lib/seo/pages";
+import { homePage, robotsContentForPage } from "../lib/seo/pages";
+
+interface Props {
+  page: ProviderPage;
+}
+
+const { page } = Astro.props;
+const enabled = isMediaFlowEnabled();
+---
+
+<BaseLayout
+  title={page.title}
+  description={page.description}
+  canonicalPath={page.path}
+  robots={robotsContentForPage(page.indexable)}
+>
+  <main class="shell">
+    <div class="atmosphere" aria-hidden="true"></div>
+    <section class="hero">
+      <p class="brand">FetchNow</p>
+      <p class="breadcrumb">
+        <a href="/">{homePage.h1}</a>
+        <span aria-hidden="true"> / </span>
+        <span>{page.navLabel}</span>
+      </p>
+      <h1 class="tagline">{page.h1}</h1>
+      <p class="lede">{page.lede}</p>
+      {
+        enabled ? (
+          <MediaFlow />
+        ) : (
+          <>
+            <label class="field">
+              <span class="field-label">Ссылка на видео</span>
+              <input
+                class="field-input"
+                type="url"
+                placeholder="https://…"
+                disabled
+                aria-disabled="true"
+                value=""
+              />
+            </label>
+            <p class="hint">
+              Скачивание появится в следующем релизе. Сейчас это страница площадки {page.brand}.
+            </p>
+          </>
+        )
+      }
+      <p class="trust-line">Без рекламы. Вообще.</p>
+    </section>
+  </main>
+</BaseLayout>

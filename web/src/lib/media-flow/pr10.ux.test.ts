@@ -85,12 +85,12 @@ describe("PR10 loader, format, and contrast UX", () => {
     renderFlow(
       document,
       snapshot({
-        statusText: "Downloading file…",
+        statusText: "Скачиваем файл…",
         progressStage: "downloading_video",
       }),
     );
     const stage = document.querySelector("[data-flow-progress-label]");
-    expect(stage?.textContent).toBe("Downloading file…");
+    expect(stage?.textContent).toBe("Скачиваем файл…");
     const status = document.querySelector("[data-flow-status]");
     expect(status?.textContent).toBe("");
     expect(status?.getAttribute("aria-live")).toBe("polite");
@@ -121,7 +121,7 @@ describe("PR10 loader, format, and contrast UX", () => {
       document,
       snapshot({
         phase: "inspected",
-        statusText: "Choose a quality to download.",
+        statusText: "Выберите качество для скачивания.",
         busy: false,
         canCancelTask: false,
         downloadEligible: true,
@@ -151,9 +151,9 @@ describe("PR10 loader, format, and contrast UX", () => {
       /muxing is not offered/i,
     );
     const selectedLabel = document.querySelector(".format-selected .format-label");
-    expect(selectedLabel?.textContent).toBe("High (720p)");
+    expect(selectedLabel?.textContent).toBe("Высокое (720p)");
     const disabledReason = document.querySelector(".format-reason");
-    expect(disabledReason?.textContent).toMatch(/720p limit/i);
+    expect(disabledReason?.textContent).toMatch(/лимита бесплатного режима 720p/i);
   });
 
   it("keeps Start over local and uses Cancel task for server jobs", async () => {
@@ -273,7 +273,7 @@ describe("PR10 loader, format, and contrast UX", () => {
     await pending;
     expect(cancelDownloadJob).toHaveBeenCalledOnce();
     expect(controller.snapshot().phase).toBe("cancelled");
-    expect(controller.snapshot().statusText).toBe("Download cancelled");
+    expect(controller.snapshot().statusText).toBe("Скачивание отменено");
   });
 
   it("uses dark navy tokens with AA contrast and non-color-only disabled styles", () => {

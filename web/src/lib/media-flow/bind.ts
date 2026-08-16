@@ -9,8 +9,8 @@ export function manualPasteHint(
 ): string {
   const apple = /Mac|iPhone|iPad|iPod/.test(userAgent);
   return apple
-    ? "Clipboard access was not granted. Press ⌘V to paste the link."
-    : "Clipboard access was not granted. Press Ctrl+V to paste the link.";
+    ? "Не удалось вставить автоматически. Нажмите ⌘V."
+    : "Не удалось вставить автоматически. Нажмите Ctrl+V.";
 }
 
 export async function pasteClipboardIntoInput(
