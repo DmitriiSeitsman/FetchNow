@@ -20,6 +20,7 @@ def settings(**overrides: object) -> Settings:
         "PROVIDER_VK_ENABLED": True,
         "PROVIDER_RUTUBE_ENABLED": True,
         "PROVIDER_OK_ENABLED": True,
+        "PROVIDER_DZEN_ENABLED": True,
         "MEDIA_INSPECTION_ENABLED": True,
         "MEDIA_INSPECTION_YTDLP_PATH": "/usr/bin/true",
         "MEDIA_INSPECTION_TIMEOUT_SECONDS": 5,

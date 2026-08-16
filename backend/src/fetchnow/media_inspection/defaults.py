@@ -20,7 +20,7 @@ def build_default_inspection_registry(
     *,
     runner: ProcessRunner | None = None,
 ) -> InspectionExtractorRegistry:
-    """Build an immutable VK/Rutube/OK inspection registry from provider ownership."""
+    """Build an immutable VK/Rutube/OK/Dzen inspection registry."""
     extractors = {
         ProviderID.VK.value: YtDlpMetadataExtractor(
             settings=settings,
@@ -37,6 +37,11 @@ def build_default_inspection_registry(
         ProviderID.OK.value: YtDlpMetadataExtractor(
             settings=settings,
             allowed_extractor_keys=DEFAULT_YTDLP_EXTRACTOR_KEYS[ProviderID.OK.value],
+            runner=runner,
+        ),
+        ProviderID.DZEN.value: YtDlpMetadataExtractor(
+            settings=settings,
+            allowed_extractor_keys=DEFAULT_YTDLP_EXTRACTOR_KEYS[ProviderID.DZEN.value],
             runner=runner,
         ),
     }

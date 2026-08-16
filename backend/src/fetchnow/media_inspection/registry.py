@@ -254,5 +254,8 @@ DEFAULT_YTDLP_EXTRACTOR_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
         ProviderID.RUTUBE.value: frozenset({"rutube"}),
         # Provider id is "ok"; yt-dlp IE_NAME / --use-extractors key is odnoklassniki.
         ProviderID.OK.value: frozenset({"odnoklassniki"}),
+        # Provider id is "dzen"; CLI --use-extractors token is IE_NAME dzen.ru.
+        # Payload also sets extractor_key=ZenYandex; parse resolves via allowlist.
+        ProviderID.DZEN.value: frozenset({"dzen.ru"}),
     }
 )

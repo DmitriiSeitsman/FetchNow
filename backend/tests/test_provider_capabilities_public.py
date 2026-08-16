@@ -76,6 +76,19 @@ def test_project_ok_matches_current_policy() -> None:
     _assert_plain_jsonable(projected)
 
 
+def test_project_dzen_matches_current_policy() -> None:
+    registry = ProviderCapabilityRegistry.default()
+    projected = project_provider_capabilities(registry, ProviderID.DZEN.value)
+    assert projected is not None
+    assert projected == {
+        "providerId": "dzen",
+        "operations": _EXPECTED_OPS,
+        "contentKinds": _EXPECTED_KINDS,
+        "metadata": _EXPECTED_META,
+    }
+    _assert_plain_jsonable(projected)
+
+
 def test_project_unknown_provider_returns_none() -> None:
     registry = ProviderCapabilityRegistry.default()
     assert project_provider_capabilities(registry, "unknown_provider") is None

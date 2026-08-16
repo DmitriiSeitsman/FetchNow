@@ -10,7 +10,7 @@ _FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 PR8_COMPOSE_PATH = _FIXTURE_DIR / "pr8_compose.yaml"
 PR8_PROVENANCE_PATH = _FIXTURE_DIR / "pr8_compose.provenance.json"
 PR8_REVISION = "b4a5c6174222a7b0ae711aed0dda1700ec799769"
-PR8_COMPOSE_SHA256 = "93ae24880635c9298e2fe304cafb04a8130091fc82e0575ba02f3ca6f241aefc"
+PR8_COMPOSE_SHA256 = "44a0c9b3c74982155ce12afcb6a31fafca4893aa4b998e60c9623bade429101e"
 
 
 def load_pr8_provenance() -> dict[str, str]:

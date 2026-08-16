@@ -68,12 +68,41 @@ def _ok_capabilities() -> ProviderCapabilities:
     )
 
 
+def _dzen_capabilities() -> ProviderCapabilities:
+    # Dzen /shorts/{id} is an input alias of /video/watch/{id} (same media id;
+    # ZenYandex IE). Public progressive options require muxing of DASH A/V
+    # (avc + aac) when MEDIA_MUXING_ENABLED is on — no muxed progressive rows
+    # from the extractor. Live probe confirmed multiple heights and quality
+    # selection; no extract-audio / container choice observed.
+    return ProviderCapabilities(
+        provider_id=ProviderID.DZEN,
+        operations={
+            MediaOperation.DOWNLOAD_VIDEO: CapabilityState.ENABLED,
+            MediaOperation.EXTRACT_AUDIO: CapabilityState.DISABLED,
+            MediaOperation.SELECT_QUALITY: CapabilityState.ENABLED,
+            MediaOperation.SELECT_CONTAINER: CapabilityState.DISABLED,
+        },
+        content_kinds={
+            ContentKind.VIDEO: CapabilityState.ENABLED,
+            ContentKind.CLIP: CapabilityState.ENABLED,
+            ContentKind.LIVE: CapabilityState.DISABLED,
+            ContentKind.PLAYLIST: CapabilityState.DISABLED,
+        },
+        metadata={
+            MetadataField.TITLE: CapabilityState.ENABLED,
+            MetadataField.DURATION: CapabilityState.ENABLED,
+            MetadataField.THUMBNAIL: CapabilityState.PLANNED,
+        },
+    )
+
+
 DEFAULT_PROVIDER_CAPABILITIES: Mapping[ProviderID, ProviderCapabilities] = (
     MappingProxyType(
         {
             ProviderID.VK: _capabilities(ProviderID.VK),
             ProviderID.RUTUBE: _capabilities(ProviderID.RUTUBE),
             ProviderID.OK: _ok_capabilities(),
+            ProviderID.DZEN: _dzen_capabilities(),
         }
     )
 )

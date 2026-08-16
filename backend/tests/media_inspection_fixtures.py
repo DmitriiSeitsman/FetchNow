@@ -155,6 +155,64 @@ OK_FIXTURE: dict[str, object] = {
     ],
 }
 
+# Live-shaped Dzen payload: extractor IE_NAME dzen.ru vs ie_key ZenYandex;
+# progressive public options come from DASH avc + aac mux pairing.
+DZEN_FIXTURE: dict[str, object] = {
+    "id": "6002240ff8b1af50bb2da5e3",
+    "title": "Sample Dzen video",
+    "duration": 243,
+    "extractor": "dzen.ru",
+    "extractor_key": "ZenYandex",
+    "webpage_url": "https://dzen.ru/video/watch/6002240ff8b1af50bb2da5e3",
+    "original_url": "https://dzen.ru/video/watch/6002240ff8b1af50bb2da5e3",
+    "formats": [
+        {
+            "format_id": "dash-audio",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a.40.2",
+            "abr": 128,
+            "protocol": "https",
+            "url": "https://dzen.example.invalid/a/PLACEHOLDER",
+        },
+        {
+            "format_id": "dash-360",
+            "ext": "mp4",
+            "width": 640,
+            "height": 360,
+            "fps": 25,
+            "vcodec": "avc1.4D401E",
+            "acodec": "none",
+            "tbr": 500,
+            "protocol": "https",
+            "url": "https://dzen.example.invalid/v360/PLACEHOLDER",
+        },
+        {
+            "format_id": "dash-720",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "fps": 25,
+            "vcodec": "avc1.4D401F",
+            "acodec": "none",
+            "tbr": 1500,
+            "protocol": "https",
+            "url": "https://dzen.example.invalid/v720/PLACEHOLDER",
+        },
+        {
+            "format_id": "hls-720",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "fps": 25,
+            "vcodec": "unknown",
+            "acodec": "none",
+            "protocol": "m3u8_native",
+            "url": "https://dzen.example.invalid/hls/PLACEHOLDER.m3u8",
+        },
+    ],
+}
+
 
 # Live-shaped Yandex Preview → VK inspection: no progressive file, split A/V.
 YANDEX_PREVIEW_VK_SPLIT_FIXTURE: dict[str, object] = {

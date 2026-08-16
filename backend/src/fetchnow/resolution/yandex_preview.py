@@ -112,6 +112,14 @@ _OK_HOSTS = frozenset(
         "mobile.odnoklassniki.ru",
     }
 )
+_DZEN_HOSTS = frozenset(
+    {
+        "dzen.ru",
+        "www.dzen.ru",
+        "zen.yandex.ru",
+        "www.zen.yandex.ru",
+    }
+)
 
 _SCRIPT_OPEN_RE = re.compile(r"<script\b[^>]*>", re.IGNORECASE)
 _SCRIPT_CLOSE_RE = re.compile(r"</script\s*>", re.IGNORECASE)
@@ -1146,18 +1154,19 @@ def _normalize_stable_provider_url(
     path_lower = path.lower()
     if any(marker in path_lower for marker in _FORBIDDEN_PATH_MARKERS):
         return None, False
-    canonical_path = _canonical_stable_provider_path(host, path)
-    if canonical_path is None:
+    canonical = _canonical_stable_provider_url(host, path)
+    if canonical is None:
         return None, False
+    canon_host, canonical_path = canonical
+    return f"https://{canon_host}{canonical_path}", upgraded
 
-    return f"https://{host}{canonical_path}", upgraded
 
+def _canonical_stable_provider_url(host: str, path: str) -> tuple[str, str] | None:
+    """Return trusted (hostname, path), or None when the path is not stable.
 
-def _canonical_stable_provider_path(host: str, path: str) -> str | None:
-    """Return trusted path form, or None when the path is not stable.
-
-    VK ``/clip…``, Rutube ``/shorts/…``, and OK ``/videoembed/…`` aliases
-    rewrite to ``/video…``.
+    VK ``/clip…``, Rutube ``/shorts/…``, OK ``/videoembed/…``, and Dzen
+    ``/shorts/…`` / ``/media/…`` aliases rewrite to ``/video…``. Dzen www
+    hosts rewrite to apex hosts required by ZenYandex.
     """
     if host in _VK_HOSTS:
         provider_id = ProviderID.VK.value
@@ -1168,6 +1177,9 @@ def _canonical_stable_provider_path(host: str, path: str) -> str | None:
     elif host in _OK_HOSTS:
         provider_id = ProviderID.OK.value
         allowed = _OK_HOSTS
+    elif host in _DZEN_HOSTS:
+        provider_id = ProviderID.DZEN.value
+        allowed = _DZEN_HOSTS
     else:
         return None
     try:
@@ -1179,11 +1191,11 @@ def _canonical_stable_provider_path(host: str, path: str) -> str | None:
         )
     except ProviderIdentityError:
         return None
-    return identity.canonical_path
+    return identity.hostname, identity.canonical_path
 
 
 def _is_stable_provider_path(host: str, path: str) -> bool:
-    return _canonical_stable_provider_path(host, path) is not None
+    return _canonical_stable_provider_url(host, path) is not None
 
 
 def _decode_string_value(raw: str) -> str | None:

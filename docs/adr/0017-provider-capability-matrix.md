@@ -28,13 +28,16 @@ may support quality selection without each media item having every resolution.
 
 Only `CapabilityState.ENABLED` permits execution. `DISABLED` and `PLANNED`
 both fail closed in runtime paths. The initial matrix preserves the existing
-download-video and quality-selection behavior for VK, Rutube, and OK.ru. Audio
-extraction, container selection, live streams, and playlists are disabled;
+download-video and quality-selection behavior for VK, Rutube, OK.ru, and Dzen.
+Audio extraction, container selection, live streams, and playlists are disabled;
 OK.ru has no separate clip family so `clip` is disabled for that provider;
-thumbnails are planned because the current extraction contract does not expose
-them. OK.ru progressive public options currently depend on bounded muxing of
-DASH webm A/V (`MEDIA_MUXING_ENABLED`) because named progressive MP4 rows from
-the odnoklassniki extractor lack codecs/dimensions.
+Dzen `/shorts/{id}` is an input alias of `/video/watch/{id}` so `clip` stays
+enabled like VK/Rutube; thumbnails are planned because the current extraction
+contract does not expose them. OK.ru progressive public options currently
+depend on bounded muxing of DASH webm A/V (`MEDIA_MUXING_ENABLED`) because
+named progressive MP4 rows from the odnoklassniki extractor lack
+codecs/dimensions. Dzen likewise exposes split DASH avc/aac (plus HLS) and
+requires the same mux path for progressive public options.
 
 `DownloadJobService.create` validates `DOWNLOAD_VIDEO` before enqueueing.
 `DownloadExecutor._resolve_selection` validates it again after rebuilding the
@@ -77,5 +80,11 @@ Media-inspection and download job responses expose a top-level
   title/duration present; thumbnails still unused by FetchNow). Shorts URLs are
   an identity alias of `/video/{id}/`. Legacy `yappy.media` / `rutube.ru/yappy/…`
   are unsupported (broken or non-media), not a third provider.
+- Dzen uses yt-dlp IE_NAME `dzen.ru` (`ZenYandex` ie_key). Ordinary
+  `/video/watch/{id}`, `/shorts/{id}`, legacy `/media/…`, and `zen.yandex.ru`
+  hosts converge on `/video/watch/{id}`. Channel, article, embed, and live
+  pages stay unsupported. Payload dual labels (`extractor` vs `extractor_key`)
+  resolve through the generic allowlist-aware parser rather than a Dzen-only
+  branch.
 - Live end-to-end download reliability on staging remains an operator smoke
   concern and is not claimed by this ADR alone.

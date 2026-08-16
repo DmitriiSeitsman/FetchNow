@@ -122,7 +122,18 @@ def _assert_json_structure(
         )
 
 
-def _extractor_key(payload: Mapping[str, Any]) -> str:
+def _extractor_key(
+    payload: Mapping[str, Any],
+    *,
+    allowed_extractor_keys: frozenset[str] | set[str],
+) -> str:
+    """Resolve yt-dlp extractor identity from payload fields.
+
+    Some IEs emit distinct ``extractor`` (IE_NAME) and ``extractor_key``
+    (ie_key) labels — e.g. Dzen: ``dzen.ru`` vs ``ZenYandex``. When labels
+    disagree, accept exactly one allowlisted hit and ignore sibling labels
+    outside the provider allowlist. Any generic label still fails closed.
+    """
     raw_key = payload.get("extractor_key")
     raw_name = payload.get("extractor")
     values: list[str] = []
@@ -140,17 +151,26 @@ def _extractor_key(payload: Mapping[str, Any]) -> str:
             InspectionErrorKind.INSPECTION_INVALID_OUTPUT,
             internal_reason="MISSING_EXTRACTOR_KEY",
         )
-    if len(set(values)) > 1:
-        raise_inspection_error(
-            InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH,
-            internal_reason="EXTRACTOR_FIELD_CONFLICT",
-        )
-    key = values[0]
-    if key in {"generic", "default"} or key.startswith("generic"):
+    if any(
+        value in {"generic", "default"} or value.startswith("generic")
+        for value in values
+    ):
         raise_inspection_error(
             InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH,
             internal_reason="GENERIC_EXTRACTOR",
         )
+    unique = list(dict.fromkeys(values))
+    allowed = {k.lower() for k in allowed_extractor_keys}
+    if len(unique) == 1:
+        key = unique[0]
+    else:
+        hits = [value for value in unique if value in allowed]
+        if len(set(hits)) != 1:
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH,
+                internal_reason="EXTRACTOR_FIELD_CONFLICT",
+            )
+        key = hits[0]
     return key
 
 
@@ -404,8 +424,8 @@ def parse_ytdlp_json(
         max_string_len=max_string_len,
     )
     _reject_playlist(payload)
-    extractor = _extractor_key(payload)
     allowed = {k.lower() for k in allowed_extractor_keys}
+    extractor = _extractor_key(payload, allowed_extractor_keys=allowed)
     if extractor not in allowed:
         raise_inspection_error(
             InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH,

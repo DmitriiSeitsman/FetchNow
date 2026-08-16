@@ -72,7 +72,7 @@ JSON formatter повторно валидирует download diagnostic extras 
 
 ### `UNSUPPORTED_PROVIDER` от validate
 
-Проверить normalized hostname, exact allowlist и флаги `PROVIDER_VK_ENABLED`/`PROVIDER_RUTUBE_ENABLED`/`PROVIDER_OK_ENABLED`. Учесть trailing dot и IDNA normalization. `vk.com.attacker.example` и `notvk.com` не VK: suffix matching не используется. Unknown hostname не должен доходить до DNS.
+Проверить normalized hostname, exact allowlist и флаги `PROVIDER_VK_ENABLED`/`PROVIDER_RUTUBE_ENABLED`/`PROVIDER_OK_ENABLED`/`PROVIDER_DZEN_ENABLED`. Учесть trailing dot и IDNA normalization. `vk.com.attacker.example` и `notvk.com` не VK: suffix matching не используется. Unknown hostname не должен доходить до DNS.
 
 ### `BLOCKED_DESTINATION` от validate
 

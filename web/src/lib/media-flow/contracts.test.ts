@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FlowError } from "./errors";
 import {
+  DZEN_CANONICAL_HOSTS,
   OK_CANONICAL_HOSTS,
   RUTUBE_CANONICAL_HOSTS,
   VK_CANONICAL_HOSTS,
@@ -171,7 +172,7 @@ describe("contracts", () => {
     expect(() => parseInspectionJob(missing)).toThrow(FlowError);
   });
 
-  it("accepts every backend VK, Rutube, and OK public host alias", () => {
+  it("accepts every backend VK, Rutube, OK, and Dzen public host alias", () => {
     expect([...VK_CANONICAL_HOSTS]).toEqual([
       "vk.com",
       "www.vk.com",
@@ -193,6 +194,12 @@ describe("contracts", () => {
       "www.odnoklassniki.ru",
       "m.odnoklassniki.ru",
       "mobile.odnoklassniki.ru",
+    ]);
+    expect([...DZEN_CANONICAL_HOSTS]).toEqual([
+      "dzen.ru",
+      "www.dzen.ru",
+      "zen.yandex.ru",
+      "www.zen.yandex.ru",
     ]);
     for (const host of VK_CANONICAL_HOSTS) {
       expect(
@@ -226,6 +233,17 @@ describe("contracts", () => {
           }),
         ).result?.canonicalProviderUrl,
       ).toBe(`https://${host}/video/20079905452`);
+    }
+    for (const host of DZEN_CANONICAL_HOSTS) {
+      expect(
+        parseInspectionJob(
+          inspectedPayload({
+            providerId: "dzen",
+            canonicalProviderUrl: `https://${host}/video/watch/6002240ff8b1af50bb2da5e3`,
+            mediaId: "6002240ff8b1af50bb2da5e3",
+          }),
+        ).result?.canonicalProviderUrl,
+      ).toBe(`https://${host}/video/watch/6002240ff8b1af50bb2da5e3`);
     }
   });
 

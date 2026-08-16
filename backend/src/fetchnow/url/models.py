@@ -12,6 +12,7 @@ class ProviderID(StrEnum):
     VK = "vk"
     RUTUBE = "rutube"
     OK = "ok"
+    DZEN = "dzen"
 
 
 @dataclass(frozen=True, slots=True)
