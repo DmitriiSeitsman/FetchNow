@@ -71,6 +71,7 @@ def _settings(**overrides: object) -> Settings:
         "DNS_RESOLUTION_TIMEOUT_SECONDS": 1,
         "PROVIDER_VK_ENABLED": True,
         "PROVIDER_RUTUBE_ENABLED": True,
+        "PROVIDER_OK_ENABLED": True,
         "OUTBOUND_CONNECT_TIMEOUT_SECONDS": 1,
         "OUTBOUND_READ_TIMEOUT_SECONDS": 1,
         "OUTBOUND_TOTAL_TIMEOUT_SECONDS": 5,
@@ -579,12 +580,12 @@ async def test_unsupported_youtube_in_target() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unsupported_ok_in_target() -> None:
-    body = _target_html("1", video_url="https://ok.ru/video/123")
+async def test_yandex_ok_target_canonicalizes() -> None:
+    body = _target_html("1", video_url="https://ok.ru/videoembed/20079905452")
     svc = _service(html_body=body, preview_path="/video/preview/1")
-    with pytest.raises(ResolutionError) as exc:
-        await svc.resolve("https://yandex.ru/video/preview/1")
-    assert exc.value.kind == ResolutionErrorKind.RESOLVED_PROVIDER_UNSUPPORTED
+    result = await svc.resolve("https://yandex.ru/video/preview/1")
+    assert result.provider_id == "ok"
+    assert result.canonical_provider_url == "https://ok.ru/video/20079905452"
 
 
 @pytest.mark.asyncio

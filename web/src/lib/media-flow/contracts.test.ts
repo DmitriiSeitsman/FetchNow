@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FlowError } from "./errors";
 import {
+  OK_CANONICAL_HOSTS,
   RUTUBE_CANONICAL_HOSTS,
   VK_CANONICAL_HOSTS,
   isDownloadEligible,
@@ -170,7 +171,7 @@ describe("contracts", () => {
     expect(() => parseInspectionJob(missing)).toThrow(FlowError);
   });
 
-  it("accepts every backend VK and Rutube public host alias", () => {
+  it("accepts every backend VK, Rutube, and OK public host alias", () => {
     expect([...VK_CANONICAL_HOSTS]).toEqual([
       "vk.com",
       "www.vk.com",
@@ -183,6 +184,16 @@ describe("contracts", () => {
       "m.vkvideo.ru",
     ]);
     expect([...RUTUBE_CANONICAL_HOSTS]).toEqual(["rutube.ru", "www.rutube.ru"]);
+    expect([...OK_CANONICAL_HOSTS]).toEqual([
+      "ok.ru",
+      "www.ok.ru",
+      "m.ok.ru",
+      "mobile.ok.ru",
+      "odnoklassniki.ru",
+      "www.odnoklassniki.ru",
+      "m.odnoklassniki.ru",
+      "mobile.odnoklassniki.ru",
+    ]);
     for (const host of VK_CANONICAL_HOSTS) {
       expect(
         parseInspectionJob(
@@ -204,6 +215,17 @@ describe("contracts", () => {
           }),
         ).result?.canonicalProviderUrl,
       ).toBe(`https://${host}/video/abc_1-2`);
+    }
+    for (const host of OK_CANONICAL_HOSTS) {
+      expect(
+        parseInspectionJob(
+          inspectedPayload({
+            providerId: "ok",
+            canonicalProviderUrl: `https://${host}/video/20079905452`,
+            mediaId: "20079905452",
+          }),
+        ).result?.canonicalProviderUrl,
+      ).toBe(`https://${host}/video/20079905452`);
     }
   });
 

@@ -102,6 +102,59 @@ RUTUBE_FIXTURE: dict[str, object] = {
     ],
 }
 
+# Live-shaped OK.ru payload: progressive named MP4s lack codecs/dimensions in
+# yt-dlp metadata; usable public options come from webm DASH A/V + muxing.
+OK_FIXTURE: dict[str, object] = {
+    "id": "20079905452",
+    "title": "Sample OK video",
+    "duration": 100,
+    "extractor": "odnoklassniki",
+    "extractor_key": "odnoklassniki",
+    "webpage_url": "https://ok.ru/video/20079905452",
+    "original_url": "https://ok.ru/video/20079905452",
+    "formats": [
+        {
+            "format_id": "webm-4",
+            "ext": "webm",
+            "width": 1280,
+            "height": 720,
+            "fps": 25,
+            "vcodec": "vp9",
+            "acodec": "none",
+            "tbr": 850,
+            "protocol": "https",
+            "url": "https://okcdn.example.invalid/v720/PLACEHOLDER",
+        },
+        {
+            "format_id": "webm-2",
+            "ext": "webm",
+            "width": 640,
+            "height": 360,
+            "fps": 25,
+            "vcodec": "vp9",
+            "acodec": "none",
+            "tbr": 240,
+            "protocol": "https",
+            "url": "https://okcdn.example.invalid/v360/PLACEHOLDER",
+        },
+        {
+            "format_id": "webm-6",
+            "ext": "webm",
+            "vcodec": "none",
+            "acodec": "opus",
+            "abr": 36,
+            "protocol": "https",
+            "url": "https://okcdn.example.invalid/a/PLACEHOLDER",
+        },
+        {
+            "format_id": "hd",
+            "ext": "mp4",
+            "protocol": "https",
+            "url": "https://okcdn.example.invalid/hd/PLACEHOLDER",
+        },
+    ],
+}
+
 
 # Live-shaped Yandex Preview → VK inspection: no progressive file, split A/V.
 YANDEX_PREVIEW_VK_SPLIT_FIXTURE: dict[str, object] = {

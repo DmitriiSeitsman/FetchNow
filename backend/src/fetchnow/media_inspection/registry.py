@@ -252,5 +252,7 @@ DEFAULT_YTDLP_EXTRACTOR_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         ProviderID.VK.value: frozenset({"vk"}),
         ProviderID.RUTUBE.value: frozenset({"rutube"}),
+        # Provider id is "ok"; yt-dlp IE_NAME / --use-extractors key is odnoklassniki.
+        ProviderID.OK.value: frozenset({"odnoklassniki"}),
     }
 )

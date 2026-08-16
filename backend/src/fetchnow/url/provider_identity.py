@@ -1,4 +1,4 @@
-"""Neutral stable provider-media identity grammar (VK / Rutube).
+"""Neutral stable provider-media identity grammar (VK / Rutube / OK).
 
 Shared by URL validation consumers without importing media_inspection,
 resolution, jobs, downloads, or API layers. Callers map
@@ -24,6 +24,12 @@ _VK_STABLE_PATH = re.compile(r"^/(?:video|clip)(-?\d+)_(\d+)/?$")
 # Embed/private/live/playlist paths stay out of this grammar.
 _RUTUBE_STABLE_PATH = re.compile(
     r"^/(?:video|shorts)/([A-Za-z0-9_-]{1,64})/?$"
+)
+# OK.ru / Odnoklassniki: numeric media id (optional hyphen suffix). Input aliases
+# /videoembed/{id} and /web-api/video/moviePlayer/{id} rewrite to /video/{id}.
+# Live (/live/…), dk?st.mvId= query forms, and group/profile pages stay out.
+_OK_STABLE_PATH = re.compile(
+    r"^/(?:video(?:embed)?|web-api/video/moviePlayer)/([\d-]{1,32})/?$"
 )
 _SAFE_HOST = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 _FORBIDDEN_PATH_MARKERS = (
@@ -107,6 +113,12 @@ def parse_stable_provider_identity(
             raise ProviderIdentityError("RUTUBE_PATH_INVALID")
         media_id = match.group(1)
         canonical_path = f"/video/{media_id}/"
+    elif provider_id == ProviderID.OK.value:
+        match = _OK_STABLE_PATH.fullmatch(raw_path)
+        if match is None:
+            raise ProviderIdentityError("OK_PATH_INVALID")
+        media_id = match.group(1)
+        canonical_path = f"/video/{media_id}"
     else:
         raise ProviderIdentityError("IDENTITY_PROVIDER_UNSUPPORTED")
     return StableProviderIdentity(

@@ -29,18 +29,20 @@ closed.
    with `/clip(-?)owner_id` as an input/authoritative-URL alias that always
    canonicalizes to `/video{owner}_{id}`; Rutube `/video/<id>/` with
    `/shorts/<id>/` as an input alias that always canonicalizes to
-   `/video/<id>/`). The shared grammar lives in `fetchnow.url.provider_identity`
+   `/video/<id>/`; OK.ru `/video/<id>` with `/videoembed/<id>` and
+   `/web-api/video/moviePlayer/<id>` as input aliases that always canonicalize
+   to `/video/<id>`). The shared grammar lives in `fetchnow.url.provider_identity`
    (no media_inspection / resolution / jobs imports). `ResolutionService`
-   rewrites the validated URL snapshot for VK and Rutube so public
+   rewrites the validated URL snapshot for VK, Rutube, and OK so public
    `/media/resolve` path and canonical already use `/video…` before jobs or
    inspection run. yt-dlp output must present
    authoritative `webpage_url` / `original_url` values that resolve to the
    **same** identity; payload `id` must agree. Cross-alias hosts
    (including `vk.ru` / `m.vk.ru`) for the same identity may be accepted;
    different media on the same host is rejected. Final canonical URLs always
-   come from the trusted target, never from extractor substitution. `/clip` and
-   `/shorts` are stable media-identity aliases, not generic wrappers and not a
-   reason to enable the Generic extractor.
+   come from the trusted target, never from extractor substitution. `/clip`,
+   `/shorts`, and OK `/videoembed` are stable media-identity aliases, not
+   generic wrappers and not a reason to enable the Generic extractor.
 
 3. Invoke yt-dlp **only** as a pinned CLI dependency via a hardened subprocess
    adapter (`shell=False`, fixed argv, no user flags, metadata-only /

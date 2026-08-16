@@ -35,7 +35,7 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     retryable: false,
   },
   UNSUPPORTED_PROVIDER: {
-    text: "This site is not supported yet. Try a public VK, Rutube, or Yandex Preview link.",
+    text: "This site is not supported yet. Try a public VK, Rutube, OK, or Yandex Preview link.",
     retryable: false,
   },
   BLOCKED_DESTINATION: {

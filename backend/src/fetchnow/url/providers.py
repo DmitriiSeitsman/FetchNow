@@ -28,6 +28,9 @@ _VK_HEAD_FALLBACK = frozenset({418, 405, 501})
 # Confirmed live: Rutube serves HEAD 200 for real pages; keep only standard
 # method-not-allowed / not-implemented codes (do not treat 404 as fallback).
 _RUTUBE_HEAD_FALLBACK = frozenset({405, 501})
+# OK.ru: start with the same method-not-useful set as Rutube until live HEAD
+# evidence justifies broader transport fallbacks.
+_OK_HEAD_FALLBACK = frozenset({405, 501})
 
 
 def build_default_providers(settings: Settings) -> tuple[ProviderDescriptor, ...]:
@@ -60,6 +63,26 @@ def build_default_providers(settings: Settings) -> tuple[ProviderDescriptor, ...
             exact_hostnames=frozenset({"rutube.ru", "www.rutube.ru"}),
             enabled=settings.provider_rutube_enabled,
             head_fallback_statuses=_RUTUBE_HEAD_FALLBACK,
+        ),
+        ProviderDescriptor(
+            id=ProviderID.OK.value,
+            display_name="OK",
+            # Exact hosts only (ok.ru + legacy odnoklassniki.ru + mobile).
+            # No suffix matching; live/playlist/group pages stay out of grammar.
+            exact_hostnames=frozenset(
+                {
+                    "ok.ru",
+                    "www.ok.ru",
+                    "m.ok.ru",
+                    "mobile.ok.ru",
+                    "odnoklassniki.ru",
+                    "www.odnoklassniki.ru",
+                    "m.odnoklassniki.ru",
+                    "mobile.odnoklassniki.ru",
+                }
+            ),
+            enabled=settings.provider_ok_enabled,
+            head_fallback_statuses=_OK_HEAD_FALLBACK,
         ),
     )
 
