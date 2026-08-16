@@ -122,7 +122,7 @@ export const legalPages: ReadonlyArray<LegalPage> = Object.freeze([
     path: "/terms/",
     title: "Условия использования — FetchNow",
     description:
-      "Условия использования FetchNow. Актуальная версия документа будет опубликована на этой странице.",
+      "Условия использования FetchNow: законное использование сервиса, ответственность пользователя, ограничения и порядок обращений.",
     h1: "Условия использования",
     indexable: false,
     robotsFollow: true,
