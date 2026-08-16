@@ -114,9 +114,30 @@ describe("provider landing wiring", () => {
       join(here, "../../components/MediaFlow.astro"),
       "utf8",
     );
-    expect(mediaFlow).toContain(
-      "Поддерживаем публичные видео из VK, RUTUBE, Одноклассников и Дзена",
+    const providerSupport = readFileSync(
+      join(here, "../../components/ProviderSupport.astro"),
+      "utf8",
     );
+    expect(mediaFlow).toContain("ProviderSupport");
+    expect(providerSupport).toContain("Поддерживаем публичные видео:");
+    expect(providerSupport).toContain("Регистрация не нужна.");
+    expect(providerSupport).toContain("homePage.providerLinks");
     expect(mediaFlow).not.toMatch(/Yandex Preview/i);
+    expect(providerSupport).not.toMatch(/Yandex Preview/i);
+  });
+
+  it("keeps provider navigation once under the downloader, not under the trust line", () => {
+    const index = readFileSync(join(here, "../../pages/index.astro"), "utf8");
+    expect(index).toContain("ProviderSupport");
+    expect(index).toContain("trust-premium");
+    expect(index).toContain("Достаточно хорош, чтобы полюбить.");
+    expect(index).toContain("Достаточно полезен, чтобы выбрать Premium.");
+    // Provider row must not sit between trust-line and slogan.
+    const trustBlock = index.slice(
+      index.indexOf('class="trust-premium"'),
+      index.indexOf('class="trust-points"'),
+    );
+    expect(trustBlock).not.toContain("platform-links");
+    expect(trustBlock).not.toContain("providerLinks");
   });
 });

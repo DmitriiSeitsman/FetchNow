@@ -1,5 +1,6 @@
 ---
 import { isMediaFlowEnabled } from "../lib/media-flow/flag";
+import ProviderSupport from "./ProviderSupport.astro";
 
 const enabled = isMediaFlowEnabled();
 ---
@@ -76,9 +77,7 @@ const enabled = isMediaFlowEnabled();
       </button>
     </div>
   </form>
-  <p class="hint" id="flow-hint">
-    Поддерживаем публичные видео из VK, RUTUBE, Одноклассников и Дзена. Регистрация не нужна.
-  </p>
+  <ProviderSupport id="flow-hint" />
   <p class="status" data-flow-status aria-live="polite"></p>
   <p class="hint" data-flow-restored hidden>
     Восстановлена текущая задача скачивания.
