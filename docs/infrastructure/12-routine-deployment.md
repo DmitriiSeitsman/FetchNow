@@ -1,5 +1,12 @@
 # 12. Обычное развёртывание
 
+**INFO:** Для актуального staging release path используйте главы
+[24](24-release-preflight-health.md)–[29](29-verified-migration-transaction.md)
+(`preflight → prepare → verify → deploy-plan → migrate-if-required →
+rollout → health`). Плановый production path и blockers — в
+[главе 30](30-production-release-runbook.md). Ниже сохранён исторический
+checklist; не выдумывать отсутствующие script names.
+
 ## Термины
 
 `checkout` выбирает Git revision; `pull` получает и интегрирует remote branch. `build` создаёт image, `rebuild` повторяет это для нового кода. `restart` перезапускает тот же container без нового env/image. `recreate` заменяет container согласно актуальному config/image. `rollback` возвращает проверенную release reference, но не автоматически БД.

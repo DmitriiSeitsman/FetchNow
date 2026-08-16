@@ -54,6 +54,8 @@ Internet
 
 **PRD1C3B2B2 (verified migration transaction):** journaled forward migration under rollout lock with B2B1 backup proof, retention holds, Alembic from target release image, atomic database-side `current.json` commit, and explicit recovery — without application activation. См. [главу 29](29-verified-migration-transaction.md).
 
+**Production release design (docs only):** planned production host/domain isolation, bootstrap vs routine release, migration/rollback/smoke/GO-NO-GO, and the future `PRD1D-prod-param` parameterization milestone are documented in [главе 30](30-production-release-runbook.md). This does **not** claim a production server exists or that Make/CLI already accept `fetchnow-production`.
+
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
 ## Как читать
@@ -63,6 +65,10 @@ Internet
 ### Быстрый маршрут для первого deployment
 
 [Основы сервера](01-server-basics.md) → [сеть](03-networking-and-ports.md) → [Compose](06-docker-compose.md) → [контейнеры FetchNow](07-fetch-now-containers.md) → [release preflight/health](24-release-preflight-health.md) → [первое развёртывание](11-first-staging-deployment.md) → [healthchecks](13-healthchecks-and-smoke-tests.md) → [backup](15-backups-and-restore.md).
+
+### Маршрут для будущего production
+
+[Production release runbook / design](30-production-release-runbook.md) → [release preflight/health](24-release-preflight-health.md) → [materialize/build](25-release-materialization-build.md) → [rollout/recover](26-deployment-transaction-rollback.md) → [deploy-plan](27-migration-compatibility-deployment-planning.md) → [migrate](29-verified-migration-transaction.md) → [smoke](13-healthchecks-and-smoke-tests.md). Production host/DNS/TLS and the `PRD1D-prod-param` milestone are prerequisites; do not treat chapter 30 as a live deploy claim.
 
 ### Маршрут для диагностики
 
@@ -103,3 +109,4 @@ Internet
 27. [Migration compatibility & deploy-plan (PRD1C3B1)](27-migration-compatibility-deployment-planning.md)
 28. [Dual application/database state (PRD1C3B2A)](28-dual-application-database-state.md)
 29. [Verified migration transaction (PRD1C3B2B2)](29-verified-migration-transaction.md)
+30. [Production release runbook / design](30-production-release-runbook.md)
