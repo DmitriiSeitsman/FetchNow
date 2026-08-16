@@ -105,7 +105,7 @@ function mountFlow(): void {
           aria-valuemin="0"
           aria-valuemax="100"
           aria-valuenow="0"
-          aria-valuetext="Waiting to start…"
+          aria-valuetext="Ожидание начала…"
         >
           <span class="progress-fill" data-flow-progress-fill></span>
         </div>
@@ -128,7 +128,7 @@ function el(selector: string): HTMLElement {
 
 describe("PR12 size, filename, percent, and placeholder", () => {
   it("pins the exact URL placeholder string", () => {
-    expect(astroSource).toContain('placeholder="https://examplelink.com/..."');
+    expect(astroSource).toContain('placeholder="https://…"');
     expect(astroSource).not.toContain("vk.com/video");
   });
 
@@ -145,7 +145,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
         downloadEligible: true,
       }),
     );
-    expect(el(".format-detail").textContent).toContain("≈ 11.4 MB");
+    expect(el(".format-detail").textContent).toContain("≈ 11.4 МБ");
     const unknown: MediaFormat = { ...progressiveFormat, approxBytes: null };
     const unknownFormats = [unknown, alternateFormat];
     renderFlow(
@@ -174,7 +174,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
         formats: [progressiveFormat],
       }),
     );
-    expect(el("[data-flow-progress-label]").textContent).toBe("Ready to download · 11.4 MB");
+    expect(el("[data-flow-progress-label]").textContent).toBe("Готово к скачиванию · 11.4 МБ");
     expect(el("[data-flow-progress-label]").textContent).not.toContain("≈");
   });
 
@@ -182,17 +182,17 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     const withPercent = progressView("downloading", "downloading_video", {
       progressPercent: 42,
     });
-    expect(withPercent.label).toBe("Downloading file (42%)");
-    expect(withPercent.valueText).toBe("Downloading file (42%)");
+    expect(withPercent.label).toBe("Скачиваем файл (42%)");
+    expect(withPercent.valueText).toBe("Скачиваем файл (42%)");
     const without = progressView("downloading", "downloading_video", {
       progressPercent: null,
     });
-    expect(without.label).toBe("Downloading file…");
+    expect(without.label).toBe("Скачиваем файл…");
     expect(without.label).not.toMatch(/\(\d+%\)/);
     const audio = progressView("downloading", "downloading_audio", {
       progressPercent: 18,
     });
-    expect(audio.label).toBe("Downloading audio (18%)");
+    expect(audio.label).toBe("Скачиваем звук (18%)");
   });
 
   it("does not change a direct download label because of an unrelated video_only option", () => {
@@ -206,17 +206,17 @@ describe("PR12 size, filename, percent, and placeholder", () => {
       progressPercent: 42,
       formats: [progressiveFormat, videoOnly],
     });
-    expect(direct.label).toBe("Downloading file (42%)");
+    expect(direct.label).toBe("Скачиваем файл (42%)");
     expect(direct.label).not.toContain("Downloading video");
     const unrelated_video_only_changes_direct_label = direct.label.includes("video");
     expect(unrelated_video_only_changes_direct_label).toBe(false);
-    const direct_download_label_accurate = direct.label === "Downloading file (42%)";
+    const direct_download_label_accurate = direct.label === "Скачиваем файл (42%)";
     expect(direct_download_label_accurate).toBe(true);
   });
 
   it("does not claim that the percent is not a download percentage", () => {
     expect(astroSource).toContain(
-      "Progress follows preparation stages. Download percentages appear when an estimated size is available.",
+      "Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен примерный размер.",
     );
     expect(astroSource).not.toMatch(/not a download percentage/i);
     const ui_claims_percent_is_not_download_percent = /not a download percentage/i.test(
@@ -224,7 +224,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     );
     expect(ui_claims_percent_is_not_download_percent).toBe(false);
     const progress_copy_matches_backend_semantics = astroSource.includes(
-      "Download percentages appear when an estimated size is available",
+      "Проценты скачивания появляются, когда известен примерный размер",
     );
     expect(progress_copy_matches_backend_semantics).toBe(true);
   });
@@ -252,7 +252,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     });
     const retrying = progressView("downloading", "retrying", { progressPercent: null });
     expect(retrying.percent).toBeLessThan(downloading.percent);
-    expect(retrying.label).toBe("Retrying preparation…");
+    expect(retrying.label).toBe("Повторяем подготовку…");
   });
 
   it("keeps accessibility attributes on interpolated download progress", () => {
@@ -268,7 +268,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     );
     const bar = el("[data-flow-progress-bar]");
     expect(bar.getAttribute("role")).toBe("progressbar");
-    expect(bar.getAttribute("aria-valuetext")).toBe("Downloading file (42%)");
+    expect(bar.getAttribute("aria-valuetext")).toBe("Скачиваем файл (42%)");
     expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(0);
     expect(el("[data-flow-loader]").hidden).toBe(false);
   });

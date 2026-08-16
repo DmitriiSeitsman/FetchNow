@@ -2,26 +2,37 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import MediaFlow from "../components/MediaFlow.astro";
 import { isMediaFlowEnabled } from "../lib/media-flow/flag";
+import {
+  homePage,
+  robotsContentForPage,
+  websiteJsonLd,
+  webApplicationJsonLd,
+} from "../lib/seo/pages";
 
 const enabled = isMediaFlowEnabled();
 ---
 
-<BaseLayout>
+<BaseLayout
+  title={homePage.title}
+  description={homePage.description}
+  canonicalPath={homePage.path}
+  robots={robotsContentForPage(homePage.indexable)}
+  jsonLd={[websiteJsonLd(), webApplicationJsonLd()]}
+>
   <main class="shell">
     <div class="atmosphere" aria-hidden="true"></div>
     <section class="hero">
       <p class="brand">FetchNow</p>
-      <h1 class="tagline">Paste. Fetch. Done.</h1>
-      <p class="lede">
-        Drop a public media link and get a clean download path — no account, no clutter.
-      </p>
+      <h1 class="tagline">{homePage.h1}</h1>
+      <p class="lede">{homePage.lede}</p>
+
       {
         enabled ? (
           <MediaFlow />
         ) : (
           <>
             <label class="field">
-              <span class="field-label">Media link</span>
+              <span class="field-label">Ссылка на видео</span>
               <input
                 class="field-input"
                 type="url"
@@ -32,11 +43,45 @@ const enabled = isMediaFlowEnabled();
               />
             </label>
             <p class="hint">
-              Fetching arrives in a later release. This is the foundation.
+              Скачивание появится в следующем релизе. Сейчас это основа интерфейса.
             </p>
           </>
         )
       }
+
+      <p class="trust-line">Без рекламы. Вообще.</p>
+
+      <ul class="platform-links" aria-label="Поддерживаемые площадки">
+        {
+          homePage.providerLinks.map((link) => (
+            <li>
+              <a href={link.href}>{link.label}</a>
+            </li>
+          ))
+        }
+      </ul>
+
+      <p class="slogan">
+        Достаточно хорош, чтобы полюбить. Достаточно полезен, чтобы выбрать Premium.
+      </p>
+    </section>
+
+    <section class="trust-points" aria-labelledby="trust-heading">
+      <h2 id="trust-heading" class="trust-heading">Честный сервис для простой задачи</h2>
+      <ul class="trust-grid">
+        <li>
+          <h3>Просто</h3>
+          <p>Вставьте ссылку, выберите вариант и скачайте файл.</p>
+        </li>
+        <li>
+          <h3>Честно</h3>
+          <p>Понятные возможности бесплатного режима. Premium — только когда нужны дополнительные возможности.</p>
+        </li>
+        <li>
+          <h3>Без рекламы</h3>
+          <p>Никаких баннеров, всплывающих окон и фальшивых кнопок «Скачать».</p>
+        </li>
+      </ul>
     </section>
   </main>
 </BaseLayout>

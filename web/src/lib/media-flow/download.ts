@@ -1,6 +1,6 @@
 import { readBoundedUtf8, sameOriginApiUrl } from "./api";
 import { isSafeSuggestedFilename, isUuid } from "./contracts";
-import { FlowError, flowErrorFromCode, isAbortError } from "./errors";
+import { FlowError, flowErrorFromCode, isAbortError, GENERIC_USER_MESSAGE } from "./errors";
 
 export const ALLOWED_CONTENT_TYPES = new Set([
   "video/mp4",
@@ -17,7 +17,7 @@ const ATTR_CHAR = /^[A-Za-z0-9!#$&+\-.^_`|~]$/;
 
 export class PickerCancelledError extends FlowError {
   constructor() {
-    super("PICKER_CANCELLED", "Save was cancelled.", false);
+    super("PICKER_CANCELLED", "Сохранение отменено.", false);
     this.name = "PickerCancelledError";
   }
 }
@@ -50,7 +50,7 @@ export function suggestedFilename(downloadJobId: string, container: string): str
   if (!isUuid(downloadJobId) || !/^[a-z0-9]{2,8}$/.test(container)) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   return `fetchnow-${downloadJobId}.${container}`;
@@ -116,7 +116,7 @@ export function contentDispositionHeader(filename: string, asciiFallback: string
   if (/[\r\n\0]/.test(filename) || /[\r\n\0"\\]/.test(ascii)) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   return `attachment; filename="${ascii}"; filename*=${encodeRfc8187(filename)}`;
@@ -333,7 +333,7 @@ export async function saveArtifactStream(input: {
   if (!isSafeSuggestedFilename(input.suggestedFilename, input.container)) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   const origin = input.deps?.origin;
@@ -426,7 +426,7 @@ export async function saveArtifactStream(input: {
     if (!ownedBody) {
       throw new FlowError(
         "CONTRACT",
-        "Something went wrong. Please try again in a moment, or start over.",
+        GENERIC_USER_MESSAGE,
       );
     }
     reader = ownedBody.getReader();
@@ -434,14 +434,14 @@ export async function saveArtifactStream(input: {
     if (!type || !ALLOWED_CONTENT_TYPES.has(type)) {
       throw new FlowError(
         "CONTRACT",
-        "Something went wrong. Please try again in a moment, or start over.",
+        GENERIC_USER_MESSAGE,
       );
     }
     const lengthHeader = response.headers.get("Content-Length");
     if (!lengthHeader || !/^\d+$/.test(lengthHeader)) {
       throw new FlowError(
         "CONTRACT",
-        "Something went wrong. Please try again in a moment, or start over.",
+        GENERIC_USER_MESSAGE,
       );
     }
     const expected = Number(lengthHeader);
@@ -455,7 +455,7 @@ export async function saveArtifactStream(input: {
     if (filename !== name || !isSafeSuggestedFilename(filename, input.container)) {
       throw new FlowError(
         "CONTRACT",
-        "Something went wrong. Please try again in a moment, or start over.",
+        GENERIC_USER_MESSAGE,
       );
     }
     let written = 0;

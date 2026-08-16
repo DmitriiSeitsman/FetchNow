@@ -70,15 +70,15 @@ function shorthandHeight(label: string): number | null {
 export function qualityTierLabel(format: MediaFormat): string {
   const height = finiteHeight(format) ?? shorthandHeight(format.qualityLabel);
   if (height === null) {
-    return "Quality";
+    return "Качество";
   }
   if (height >= 720) {
-    return "High";
+    return "Высокое";
   }
   if (height >= 480) {
-    return "Medium";
+    return "Среднее";
   }
-  return "Low";
+  return "Низкое";
 }
 
 function qualityTechnicalLabel(format: MediaFormat): string {
@@ -91,7 +91,7 @@ function qualityTechnicalLabel(format: MediaFormat): string {
   if (inferredHeight !== null) {
     return `${inferredHeight}p`;
   }
-  return label.length > 0 ? label : "Unknown quality";
+  return label.length > 0 ? label : "Неизвестное качество";
 }
 
 export function qualityDisplayLabel(format: MediaFormat): string {

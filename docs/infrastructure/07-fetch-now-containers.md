@@ -7,7 +7,7 @@
 | Service | Image/build | Port/publish | User | Health, dependency, volume |
 |---|---|---|---|---|
 | `gateway` | `fetchnow-gateway:${FETCHNOW_RELEASE_REVISION}` (`local` or full SHA), `deploy/nginx/Dockerfile` | container `8080`; local host `8080` (override); staging `127.0.0.1:8091` | UID 10001 | live endpoint; ждёт healthy `api`, `web`; volume нет; OCI revision label |
-| `web` | `fetchnow-web:${FETCHNOW_RELEASE_REVISION}`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; build args `PUBLIC_SITE_URL`, `PUBLIC_MEDIA_FLOW_ENABLED` (default `false`); dependency/volume нет; OCI revision label |
+| `web` | `fetchnow-web:${FETCHNOW_RELEASE_REVISION}`, `web/Dockerfile` | `8080`; host port нет | UID 10001 | GET `/`; build args `PUBLIC_SITE_URL`, `PUBLIC_MEDIA_FLOW_ENABLED` (default `false`), `PUBLIC_SEARCH_INDEXING_ENABLED` (default `false`, staging hard-coded `false`); dependency/volume нет; OCI revision label |
 | `api` | `fetchnow-api:${FETCHNOW_RELEASE_REVISION}`, `backend/Dockerfile` | `8000`; local debug host `8000` (override); staging host port нет | UID 10001 | live endpoint; ждёт healthy `postgres`; **без** volume `tmp` (PR7); OCI revision label |
 | `storage-init` | тот же `fetchnow-api` image, `fetchnow-storage-init` | HTTP-порта нет | UID 10001 | oneshot; `restart: no`; `network_mode: none`; rw `tmp` only; mkdir/validate download root; без DB/tool env; без sleep |
 | `delivery` | тот же `fetchnow-api` image, `fetchnow-delivery` | `8000` internal only; host port нет | UID 10001 | read-only `tmp`; ждёт `storage-init` completed; `MEDIA_DELIVERY_*` only; не вызывает yt-dlp/ffmpeg |

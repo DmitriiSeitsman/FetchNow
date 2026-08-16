@@ -817,6 +817,40 @@ def check_media_flow_flag() -> None:
     print("OK: media flow UI flag defaults false (web build arg)")
 
 
+def check_search_indexing_flag() -> None:
+    """Search indexing stays off by default; staging is hard-coded false."""
+    cfg = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    args = _web_build_args(_services(cfg)["web"])
+    _assert(
+        str(args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "false")).lower()
+        == "false",
+        "base: PUBLIC_SEARCH_INDEXING_ENABLED must default false",
+    )
+    staging = _run_compose(
+        ["-f", "compose.yaml", "-f", "compose.staging.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow-staging",
+            "POSTGRES_PASSWORD": "staging-contract-check-password-xxxxxxxx",
+            "POSTGRES_USER": "fetchnow",
+            "POSTGRES_DB": "fetchnow",
+            "FETCHNOW_RELEASE_REVISION": "a" * 40,
+            "PUBLIC_SITE_URL": "https://staging.example.test",
+            # Even if an operator sets true, staging Compose must ignore it.
+            "PUBLIC_SEARCH_INDEXING_ENABLED": "true",
+        },
+    )
+    staging_args = _web_build_args(_services(staging)["web"])
+    _assert(
+        str(staging_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "")).lower()
+        == "false",
+        "staging: PUBLIC_SEARCH_INDEXING_ENABLED must be hard-coded false",
+    )
+    print("OK: search indexing flag defaults false; staging hard-closed")
+
+
 def check_browser_grant_uuid4_route() -> None:
     """Public grant delivery paths must use exact lowercase canonical UUID4."""
     text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
@@ -911,6 +945,7 @@ def main() -> int:
     check_media_jobs_env_split()
     check_muxing_and_storage_init()
     check_media_flow_flag()
+    check_search_indexing_flag()
     check_gateway_nginx_config()
     check_browser_grant_uuid4_route()
     check_gateway_csp()

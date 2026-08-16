@@ -90,11 +90,11 @@ function el(selector: string): HTMLElement {
 describe("PR14 native browser download", () => {
   it("pins a real anchor for native download, not a button or blob URL", () => {
     expect(astroSource).toContain('data-flow-native-download');
-    expect(astroSource).toContain("Download file");
+    expect(astroSource).toContain("Скачать файл");
     expect(astroSource).toContain("download");
     expect(astroSource).toContain("data-flow-save-as");
     expect(astroSource).not.toContain("data-flow-save hidden");
-    expect(astroSource).toContain("Save as…");
+    expect(astroSource).toContain("Сохранить как…");
     // Save as… leads the action row where it exists, so it is mounted first.
     expect(astroSource.indexOf("data-flow-save-as")).toBeLessThan(
       astroSource.indexOf("data-flow-native-download"),
@@ -131,7 +131,7 @@ describe("PR14 native browser download", () => {
     expect(link.href).toContain(BROWSER_GRANT_PATH);
     expect(link.href).not.toMatch(/[?#]/);
     expect(link.hidden).toBe(false);
-    expect(link.textContent).toBe("Download file");
+    expect(link.textContent).toBe("Скачать файл");
   });
 
   it("shows grant arming and handoff copy without faking progress", () => {
@@ -141,7 +141,7 @@ describe("PR14 native browser download", () => {
       snapshot({
         phase: "ready",
         grantArming: true,
-        statusText: "Preparing secure download…",
+        statusText: "Готовим безопасное скачивание…",
         progressStage: "ready",
         artifactBytes: 12_000_000,
       }),
@@ -156,7 +156,7 @@ describe("PR14 native browser download", () => {
         nativeDownloadHandoff: true,
         canNativeDownload: true,
         downloadHref: BROWSER_GRANT_PATH,
-        statusText: "Sent to your browser",
+        statusText: "Отправлено в браузер",
         progressStage: "ready",
         artifactBytes: 12_000_000,
       }),
@@ -164,7 +164,7 @@ describe("PR14 native browser download", () => {
     expect(el("[data-flow-handoff]").hidden).toBe(false);
     expect(el("[data-flow-progress]").hidden).toBe(true);
     const link = el("[data-flow-native-download]") as HTMLAnchorElement;
-    expect(link.textContent).toBe("Download again");
+    expect(link.textContent).toBe("Скачать снова");
   });
 
   it("shows HTTPS required on insecure remote origins and never arms download", () => {
@@ -577,6 +577,6 @@ describe("PR14 grant refresh / resume / retry hardening", () => {
     const retry = document.querySelector<HTMLButtonElement>("[data-flow-grant-retry]");
     expect(retry?.hidden).toBe(false);
     expect(retry?.disabled).toBe(false);
-    expect(astroSource).toContain("Retry download access");
+    expect(astroSource).toContain("Обновить доступ к скачиванию");
   });
 });

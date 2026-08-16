@@ -12,15 +12,15 @@ function setText(el: Element | null, text: string): void {
 
 function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: boolean): string {
   if (muxingBlocked) {
-    return "This media is not available as a combined video and audio file.";
+    return "Это медиа недоступно как единый файл с видео и звуком.";
   }
   if (!format.freeTierEligible) {
-    return "Above the free 720p limit.";
+    return "Выше лимита бесплатного режима 720p.";
   }
   if (!format.hasVideo || !format.hasAudio || format.category !== "progressive") {
-    return "Needs a combined video and audio file.";
+    return "Нужен единый файл с видео и звуком.";
   }
-  return "Not available in the current free download mode.";
+  return "Недоступно в текущем бесплатном режиме.";
 }
 
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
@@ -110,8 +110,8 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     nativeDownload.classList.toggle("btn-primary", !canPickLocation);
     nativeDownload.classList.toggle("btn-ghost", canPickLocation);
     nativeDownload.textContent = snapshot.nativeDownloadHandoff
-      ? "Download again"
-      : "Download file";
+      ? "Скачать снова"
+      : "Скачать файл";
     if (snapshot.downloadHref) {
       nativeDownload.href = snapshot.downloadHref;
     } else {
@@ -210,7 +210,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     if (snapshot.result) {
       setText(
         meta.querySelector("[data-flow-title]"),
-        snapshot.result.title ?? "Untitled media",
+        snapshot.result.title ?? "Без названия",
       );
       setText(
         meta.querySelector("[data-flow-provider]"),
@@ -218,7 +218,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       );
       const duration = snapshot.result.durationSeconds;
       if (duration === null) {
-        setText(meta.querySelector("[data-flow-duration]"), "Duration unavailable");
+        setText(meta.querySelector("[data-flow-duration]"), "Длительность неизвестна");
       } else {
         const mins = Math.floor(duration / 60);
         const secs = Math.round(duration % 60)

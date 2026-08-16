@@ -17,7 +17,7 @@ describe("error copy", () => {
 
   it("names the concrete duration maximum instead of an abstract limit", () => {
     const duration = userMessageForCode("DURATION_TOO_LONG");
-    expect(duration.text).toContain("2-hour");
+    expect(duration.text).toContain("2 часа");
     expect(duration.retryable).toBe(false);
   });
 });

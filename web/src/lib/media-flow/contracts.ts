@@ -1,5 +1,5 @@
 import { isCanonicalAccessToken } from "./credentials";
-import { FlowError, flowErrorFromCode } from "./errors";
+import { FlowError, flowErrorFromCode, GENERIC_USER_MESSAGE } from "./errors";
 
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -431,7 +431,7 @@ export const PROVIDER_CANONICAL_RULES: Readonly<
     mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
   }),
   dzen: Object.freeze({
-    displayName: "Dzen",
+    displayName: "Дзен",
     hosts: Object.freeze([
       "dzen.ru",
       "www.dzen.ru",
@@ -1212,14 +1212,14 @@ export function parseApiError(value: unknown): ApiErrorBody {
   if (!isRecord(value) || !isRecord(value.error)) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   const code = value.error.code;
   if (typeof code !== "string" || code.length === 0 || code.length > 64) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   return {
@@ -1234,7 +1234,7 @@ export function assertCanonicalToken(token: string): void {
   if (!isCanonicalAccessToken(token)) {
     throw new FlowError(
       "INVALID_ACCESS_TOKEN",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
 }

@@ -1,3 +1,5 @@
+/** FetchNow — скачать видео по ссылке. Без рекламы. Вообще. */
+
 export class FlowError extends Error {
   readonly code: string;
   readonly userMessage: string;
@@ -26,170 +28,173 @@ export function isAbortError(err: unknown): boolean {
   );
 }
 
-const GENERIC = "Something went wrong. Please try again in a moment, or start over.";
+export const GENERIC_USER_MESSAGE =
+  "Что-то пошло не так. Попробуйте ещё раз чуть позже или начните сначала.";
+
+const GENERIC = GENERIC_USER_MESSAGE;
 
 const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
-  INVALID_URL: { text: "That link could not be accepted.", retryable: false },
+  INVALID_URL: { text: "Эту ссылку не удалось принять.", retryable: false },
   UNSUPPORTED_SCHEME: {
-    text: "Only http and https links are allowed.",
+    text: "Разрешены только ссылки http и https.",
     retryable: false,
   },
   UNSUPPORTED_PROVIDER: {
-    text: "This site is not supported yet. Try a public VK, Rutube, OK, Dzen, or Yandex Preview link.",
+    text: "Этот сайт пока не поддерживается. Попробуйте публичную ссылку VK, RUTUBE, Одноклассников или Дзена.",
     retryable: false,
   },
   BLOCKED_DESTINATION: {
-    text: "That destination is not allowed.",
+    text: "Этот адрес недоступен для скачивания.",
     retryable: false,
   },
   WRAPPER_UNSUPPORTED: {
-    text: "This kind of wrapped link is not supported.",
+    text: "Такой тип обёрнутой ссылки не поддерживается.",
     retryable: false,
   },
   WRAPPER_UNRESOLVED: {
-    text: "The preview page could not be resolved to a supported video.",
+    text: "Не удалось найти поддерживаемое видео на странице превью.",
     retryable: false,
   },
   RESOLVED_PROVIDER_UNSUPPORTED: {
-    text: "The resolved video host is not supported.",
+    text: "Видео ведёт на неподдерживаемый сайт.",
     retryable: false,
   },
   RESOLUTION_LOOP: {
-    text: "The preview page could not be resolved.",
+    text: "Не удалось разобрать страницу превью.",
     retryable: false,
   },
   RESOLUTION_LIMIT_EXCEEDED: {
-    text: "The preview page could not be resolved.",
+    text: "Не удалось разобрать страницу превью.",
     retryable: false,
   },
   UNSAFE_RESOLUTION_TARGET: {
-    text: "That destination is not allowed.",
+    text: "Этот адрес недоступен для скачивания.",
     retryable: false,
   },
   MEDIA_INSPECTION_FAILED: {
-    text: "Media information could not be read from this link.",
+    text: "Не удалось прочитать информацию о медиа по этой ссылке.",
     retryable: false,
   },
   CAPACITY_UNAVAILABLE: {
-    text: "The service is temporarily at capacity. Please try again later.",
+    text: "Сервис сейчас перегружен. Попробуйте позже.",
     retryable: true,
   },
   RATE_LIMITED: {
-    text: "Too many requests. Please wait a moment and try again.",
+    text: "Слишком много запросов. Подождите немного и попробуйте снова.",
     retryable: true,
   },
   JOB_NOT_FOUND: { text: GENERIC, retryable: false },
   JOB_EXPIRED: {
-    text: "This check expired. Start over with the same link.",
+    text: "Проверка устарела. Начните сначала с той же ссылкой.",
     retryable: false,
   },
   INVALID_ACCESS_TOKEN: { text: GENERIC, retryable: false },
   IDEMPOTENCY_CONFLICT: { text: GENERIC, retryable: false },
   DOWNLOADS_DISABLED: {
-    text: "Downloads are not available right now.",
+    text: "Скачивание сейчас недоступно.",
     retryable: true,
   },
   DELIVERY_DISABLED: {
-    text: "Saving files is not available right now.",
+    text: "Сохранение файлов сейчас недоступно.",
     retryable: true,
   },
   DOWNLOAD_JOB_NOT_FOUND: { text: GENERIC, retryable: false },
   PARENT_JOB_NOT_READY: {
-    text: "Media information is not ready yet. Please wait.",
+    text: "Информация о медиа ещё не готова. Подождите немного.",
     retryable: true,
   },
   FORMAT_NOT_FOUND: {
-    text: "That quality is no longer available. Start over to refresh options.",
+    text: "Это качество больше недоступно. Начните сначала, чтобы обновить варианты.",
     retryable: false,
   },
   FORMAT_NOT_ELIGIBLE: {
-    text: "That quality is not available in the current free download mode.",
+    text: "Это качество недоступно в текущем бесплатном режиме.",
     retryable: false,
   },
   FORMAT_UNAVAILABLE: {
-    text: "That quality is no longer available. Start over to refresh options.",
+    text: "Это качество больше недоступно. Начните сначала, чтобы обновить варианты.",
     retryable: false,
   },
   MUXING_UNAVAILABLE: {
-    text: "This media is not available as a combined video and audio file.",
+    text: "Это медиа недоступно как единый файл с видео и звуком.",
     retryable: false,
   },
   MUXING_FAILED: {
-    text: "The file could not be prepared. Please try again later.",
+    text: "Не удалось подготовить файл. Попробуйте позже.",
     retryable: true,
   },
   MUXING_TIMEOUT: {
-    text: "Preparing the file took too long. Please try again later.",
+    text: "Подготовка файла заняла слишком много времени. Попробуйте позже.",
     retryable: true,
   },
   MUXED_OUTPUT_INVALID: {
-    text: "The prepared file could not be used. Please start over.",
+    text: "Подготовленный файл нельзя использовать. Начните сначала.",
     retryable: false,
   },
   DOWNLOAD_TIMEOUT: {
-    text: "Preparing the file took too long. Please try again later.",
+    text: "Подготовка файла заняла слишком много времени. Попробуйте позже.",
     retryable: true,
   },
   DOWNLOAD_TOO_LARGE: {
-    text: "This file is larger than the free download limit.",
+    text: "Файл больше лимита бесплатного скачивания.",
     retryable: false,
   },
   DOWNLOAD_TOOL_FAILED: {
-    text: "The file could not be prepared. Please try again later.",
+    text: "Не удалось подготовить файл. Попробуйте позже.",
     retryable: true,
   },
   DOWNLOAD_INVALID_OUTPUT: {
-    text: "The prepared file could not be used. Please start over.",
+    text: "Подготовленный файл нельзя использовать. Начните сначала.",
     retryable: false,
   },
   DOWNLOAD_STORAGE_UNAVAILABLE: {
-    text: "Storage is temporarily unavailable. Please try again later.",
+    text: "Хранилище временно недоступно. Попробуйте позже.",
     retryable: true,
   },
   DOWNLOAD_EXPIRED: {
-    text: "The prepared file expired. Start over to prepare it again.",
+    text: "Подготовленный файл устарел. Начните сначала, чтобы подготовить его снова.",
     retryable: false,
   },
   DOWNLOAD_CANCELLED: {
-    text: "Download cancelled",
+    text: "Скачивание отменено",
     retryable: false,
   },
   DOWNLOAD_NOT_READY: {
-    text: "The file is not ready yet. Please wait.",
+    text: "Файл ещё не готов. Подождите немного.",
     retryable: true,
   },
   FILE_TOO_LARGE: {
-    text: "This file is larger than the free download limit.",
+    text: "Файл больше лимита бесплатного скачивания.",
     retryable: false,
   },
   // Keep the stated maximum in sync with MAX_SOURCE_DURATION_SECONDS.
   DURATION_TOO_LONG: {
-    text: "This video is longer than the 2-hour maximum. Please try a shorter video.",
+    text: "Это видео длиннее максимума в 2 часа. Попробуйте более короткое.",
     retryable: false,
   },
   INTERNAL_ERROR: { text: GENERIC, retryable: true },
   SOURCE_UNAVAILABLE: {
-    text: "The source could not be reached. Please try again later.",
+    text: "Источник недоступен. Попробуйте позже.",
     retryable: true,
   },
   SOURCE_TIMEOUT: {
-    text: "The source timed out. Please try again later.",
+    text: "Источник не ответил вовремя. Попробуйте позже.",
     retryable: true,
   },
   NETWORK_ERROR: {
-    text: "The network request failed. Check your connection and try again.",
+    text: "Сетевой запрос не удался. Проверьте соединение и попробуйте снова.",
     retryable: true,
   },
   BROWSER_UNSUPPORTED: {
-    text: "Save as… requires a browser with the File System Access API (current Chromium desktop). Use Download file, or open this page in a supported browser to pick a save location.",
+    text: "«Сохранить как…» доступно в браузерах с File System Access API (актуальный Chromium на компьютере). Используйте «Скачать файл» или откройте страницу в поддерживаемом браузере.",
     retryable: false,
   },
   HTTPS_REQUIRED: {
-    text: "Open this page over HTTPS to download the prepared file.",
+    text: "Откройте эту страницу по HTTPS, чтобы скачать подготовленный файл.",
     retryable: false,
   },
   SAVE_FAILED: {
-    text: "The file could not be saved completely. It was not marked as finished.",
+    text: "Файл не удалось сохранить полностью. Он не отмечен как завершённый.",
     retryable: false,
   },
   CONTRACT: { text: GENERIC, retryable: false },

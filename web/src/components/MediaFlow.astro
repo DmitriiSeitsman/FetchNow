@@ -7,7 +7,7 @@ const enabled = isMediaFlowEnabled();
 <section class="flow" data-media-flow>
   <form class="flow-form" data-flow-form>
     <div class="field">
-      <label class="field-label" for="media-link">Media link</label>
+      <label class="field-label" for="media-link">Ссылка на видео</label>
       <div class="field-control">
         <input
           class="field-input field-input-live field-input-with-action"
@@ -17,7 +17,7 @@ const enabled = isMediaFlowEnabled();
           name="url"
           inputmode="url"
           autocomplete="url"
-          placeholder="https://examplelink.com/..."
+          placeholder="https://…"
           required
           disabled={!enabled}
           aria-disabled={enabled ? "false" : "true"}
@@ -28,8 +28,8 @@ const enabled = isMediaFlowEnabled();
           type="button"
           data-flow-paste
           disabled={!enabled}
-          aria-label="Paste link from clipboard"
-          title="Paste"
+          aria-label="Вставить ссылку из буфера обмена"
+          title="Вставить"
         >
           <svg
             class="btn-paste-icon"
@@ -69,19 +69,19 @@ const enabled = isMediaFlowEnabled();
         data-flow-submit
         disabled={!enabled}
       >
-        Fetch
+        Скачать
       </button>
       <button class="btn btn-ghost" type="button" data-flow-reset hidden>
-        Start over
+        Начать сначала
       </button>
     </div>
   </form>
   <p class="hint" id="flow-hint">
-    Public VK, Rutube, OK, Dzen, and Yandex Preview links. No account required.
+    Поддерживаем публичные видео из VK, RUTUBE, Одноклассников и Дзена. Регистрация не нужна.
   </p>
   <p class="status" data-flow-status aria-live="polite"></p>
   <p class="hint" data-flow-restored hidden>
-    Restored an existing download task.
+    Восстановлена текущая задача скачивания.
   </p>
   <article class="meta-card" data-flow-meta hidden>
     <h2 class="meta-title" data-flow-title></h2>
@@ -92,7 +92,7 @@ const enabled = isMediaFlowEnabled();
     </p>
   </article>
   <fieldset class="quality-card" data-flow-quality hidden>
-    <legend class="card-title">Choose quality</legend>
+    <legend class="card-title">Выберите качество</legend>
     <div class="quality-list" data-flow-formats hidden></div>
   </fieldset>
   <section class="progress-card" data-flow-progress data-tone="active" hidden>
@@ -115,38 +115,38 @@ const enabled = isMediaFlowEnabled();
       aria-valuemin="0"
       aria-valuemax="100"
       aria-valuenow="0"
-      aria-valuetext="Waiting to start…"
+      aria-valuetext="Ожидание начала…"
     >
       <span class="progress-fill" data-flow-progress-fill></span>
     </div>
     <p class="hint progress-note">
-      Progress follows preparation stages. Download percentages appear when an estimated size is available.
+      Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен примерный размер.
     </p>
     <div class="progress-actions" data-flow-progress-actions hidden>
       <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
-        Cancel task
+        Отменить задачу
       </button>
     </div>
   </section>
   <p class="hint" data-flow-mux hidden>
-    This media is not available in the current free download mode. A combined video and
-    audio file is required.
+    Это медиа недоступно в текущем бесплатном режиме. Нужен единый файл с видео и
+    звуком.
   </p>
   <p class="hint" data-flow-https hidden>
-    Open this page over HTTPS to download the prepared file.
+    Откройте эту страницу по HTTPS, чтобы скачать подготовленный файл.
   </p>
   <p class="hint" data-flow-grant-pending hidden>
-    Preparing secure download…
+    Готовим безопасное скачивание…
   </p>
   <p class="hint" data-flow-handoff hidden>
-    Sent to your browser
+    Отправлено в браузер
   </p>
   <div class="flow-actions">
     <button class="btn btn-primary" type="button" data-flow-download hidden>
-      Prepare download
+      Подготовить скачивание
     </button>
     <button class="btn btn-primary" type="button" data-flow-save-as hidden>
-      Save as…
+      Сохранить как…
     </button>
     <a
       class="btn btn-primary"
@@ -154,10 +154,10 @@ const enabled = isMediaFlowEnabled();
       hidden
       download
     >
-      Download file
+      Скачать файл
     </a>
     <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>
-      Retry download access
+      Обновить доступ к скачиванию
     </button>
   </div>
 </section>

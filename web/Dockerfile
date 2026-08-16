@@ -13,6 +13,9 @@ ENV PUBLIC_SITE_URL=$PUBLIC_SITE_URL
 ARG PUBLIC_MEDIA_FLOW_ENABLED=false
 RUN test "$PUBLIC_MEDIA_FLOW_ENABLED" = "true" -o "$PUBLIC_MEDIA_FLOW_ENABLED" = "false"
 ENV PUBLIC_MEDIA_FLOW_ENABLED=$PUBLIC_MEDIA_FLOW_ENABLED
+ARG PUBLIC_SEARCH_INDEXING_ENABLED=false
+RUN test "$PUBLIC_SEARCH_INDEXING_ENABLED" = "true" -o "$PUBLIC_SEARCH_INDEXING_ENABLED" = "false"
+ENV PUBLIC_SEARCH_INDEXING_ENABLED=$PUBLIC_SEARCH_INDEXING_ENABLED
 RUN npm run build
 
 FROM nginx:1.31.3-alpine AS runtime
@@ -24,6 +27,16 @@ RUN addgroup -g 10001 -S fetchnow \
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
+
+# Fail-closed X-Robots-Tag: only exact "true" omits the header.
+ARG PUBLIC_SEARCH_INDEXING_ENABLED=false
+RUN test "$PUBLIC_SEARCH_INDEXING_ENABLED" = "true" -o "$PUBLIC_SEARCH_INDEXING_ENABLED" = "false" \
+    && if [ "$PUBLIC_SEARCH_INDEXING_ENABLED" = "true" ]; then \
+         printf '%s\n' '# Search indexing enabled for this image build.' > /etc/nginx/robots-headers.inc; \
+       else \
+         printf '%s\n' 'add_header X-Robots-Tag "noindex, nofollow" always;' > /etc/nginx/robots-headers.inc; \
+       fi \
+    && chown fetchnow:fetchnow /etc/nginx/robots-headers.inc
 
 USER fetchnow
 

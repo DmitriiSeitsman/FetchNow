@@ -154,7 +154,8 @@ describe("bind", () => {
     await vi.waitFor(() => {
       expect(hint?.hidden).toBe(false);
     });
-    expect(hint?.textContent).toMatch(/V to paste/);
+    expect(hint?.textContent).toMatch(/Не удалось вставить автоматически/);
+    expect(hint?.textContent).toMatch(/⌘V|Ctrl\+V/);
     expect(document.activeElement).toBe(input);
 
     input?.dispatchEvent(new Event("paste", { bubbles: true }));
@@ -183,6 +184,23 @@ describe("bind", () => {
     );
     controller?.disconnect();
     vi.unstubAllGlobals();
+  });
+
+  it("keeps paste hint hidden until the paste button is used", () => {
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="button" data-flow-paste>Paste</button>
+          <p data-flow-paste-hint hidden></p>
+        </form>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    const hint = document.querySelector<HTMLElement>("[data-flow-paste-hint]");
+    expect(hint?.hidden).toBe(true);
+    expect(hint?.textContent).toBe("");
+    controller?.disconnect();
   });
 
   it("clears the url field when Start over is clicked", () => {

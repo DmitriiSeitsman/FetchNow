@@ -23,30 +23,30 @@ export type ProgressView = {
 };
 
 export const STAGE_LABEL: Readonly<Record<ProgressStage, string>> = Object.freeze({
-  queued: "Waiting to start…",
-  inspecting: "Confirming the selected quality…",
-  downloading_video: "Downloading file…",
-  downloading_audio: "Downloading audio…",
-  muxing: "Combining video and audio…",
-  verifying: "Checking the prepared file…",
-  publishing: "Placing the file in temporary storage…",
-  retrying: "Retrying preparation…",
-  ready: "Ready to download",
-  failed: "The file could not be prepared.",
-  cancelled: "Download cancelled",
-  expired: "This download expired.",
+  queued: "Ожидание начала…",
+  inspecting: "Проверяем выбранное качество…",
+  downloading_video: "Скачиваем файл…",
+  downloading_audio: "Скачиваем звук…",
+  muxing: "Собираем видео и звук…",
+  verifying: "Проверяем подготовленный файл…",
+  publishing: "Размещаем файл во временном хранилище…",
+  retrying: "Повторяем подготовку…",
+  ready: "Готово к скачиванию",
+  failed: "Не удалось подготовить файл.",
+  cancelled: "Скачивание отменено",
+  expired: "Это скачивание устарело.",
 });
 
 export const PHASE_LABEL: Readonly<Partial<Record<FlowPhase, string>>> = Object.freeze({
-  submitting: "Checking the link…",
-  inspecting: "Reading media information…",
-  inspected: "Choose a quality to download.",
-  enqueueing_download: "Waiting to start…",
-  downloading: "Waiting to start…",
-  ready: "Ready to download",
-  saving: "Saving to your computer…",
-  completed: "Saved to your computer",
-  cancelled: "Download cancelled",
+  submitting: "Проверяем ссылку…",
+  inspecting: "Читаем информацию о медиа…",
+  inspected: "Выберите качество для скачивания.",
+  enqueueing_download: "Ожидание начала…",
+  downloading: "Ожидание начала…",
+  ready: "Готово к скачиванию",
+  saving: "Сохраняем на ваш компьютер…",
+  completed: "Сохранено на ваш компьютер",
+  cancelled: "Скачивание отменено",
 });
 
 /**
@@ -92,7 +92,7 @@ const PHASE_COMPLETION: Readonly<Partial<Record<FlowPhase, number>>> = Object.fr
 });
 
 export const PROGRESS_NOTE =
-  "Progress follows preparation stages. Download percentages appear when an estimated size is available.";
+  "Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен примерный размер.";
 
 const STAGE_DRIVEN_PHASES: ReadonlySet<FlowPhase> = new Set([
   "enqueueing_download",
@@ -166,10 +166,10 @@ export function progressView(
 function downloadAwareLabel(stage: ProgressStage, options: ProgressOptions): string {
   const percent = options.progressPercent ?? null;
   if (stage === "downloading_audio") {
-    return withOptionalPercent("Downloading audio", percent);
+    return withOptionalPercent("Скачиваем звук", percent);
   }
   if (stage === "downloading_video") {
-    return withOptionalPercent("Downloading file", percent);
+    return withOptionalPercent("Скачиваем файл", percent);
   }
   return STAGE_LABEL[stage] ?? "";
 }

@@ -7,7 +7,7 @@ import {
   type DownloadJob,
   type InspectionJob,
 } from "./contracts";
-import { FlowError, flowErrorFromCode } from "./errors";
+import { FlowError, flowErrorFromCode, GENERIC_USER_MESSAGE } from "./errors";
 import { parseRetryAfterMs } from "./poller";
 
 const JSON_HEADERS = {
@@ -32,7 +32,7 @@ function resolveOrigin(explicit?: string): string {
   }
   throw new FlowError(
     "INTERNAL_ERROR",
-    "Something went wrong. Please try again in a moment, or start over.",
+    GENERIC_USER_MESSAGE,
   );
 }
 
@@ -40,13 +40,13 @@ export function sameOriginApiUrl(path: string, origin?: string): string {
   if (!path.startsWith("/api/")) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   if (path.includes("?") || path.includes("#")) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   const base = resolveOrigin(origin);
@@ -54,13 +54,13 @@ export function sameOriginApiUrl(path: string, origin?: string): string {
   if (url.origin !== base) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   if (url.search || url.hash) {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
   return url.href;
@@ -91,7 +91,7 @@ export async function readBoundedUtf8(
         }
         throw new FlowError(
           "CONTRACT",
-          "Something went wrong. Please try again in a moment, or start over.",
+          GENERIC_USER_MESSAGE,
         );
       }
       chunks.push(value);
@@ -132,7 +132,7 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     throw new FlowError(
       "CONTRACT",
-      "Something went wrong. Please try again in a moment, or start over.",
+      GENERIC_USER_MESSAGE,
     );
   }
 }
