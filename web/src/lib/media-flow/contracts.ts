@@ -380,6 +380,7 @@ const TOOL_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/;
 const VK_PATH_RE = /^\/video(-?\d+)_(\d+)\/?$/;
 const RUTUBE_PATH_RE = /^\/video\/([A-Za-z0-9_-]{1,64})\/?$/;
 const OK_PATH_RE = /^\/video\/([\d-]{1,32})\/?$/;
+const DZEN_PATH_RE = /^\/video\/watch\/([a-z0-9-]{1,64})\/?$/;
 
 export type ProviderCanonicalRule = {
   readonly displayName: string;
@@ -429,12 +430,24 @@ export const PROVIDER_CANONICAL_RULES: Readonly<
     pathRe: OK_PATH_RE,
     mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
   }),
+  dzen: Object.freeze({
+    displayName: "Dzen",
+    hosts: Object.freeze([
+      "dzen.ru",
+      "www.dzen.ru",
+      "zen.yandex.ru",
+      "www.zen.yandex.ru",
+    ]),
+    pathRe: DZEN_PATH_RE,
+    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+  }),
 });
 
 /** Exact public hosts mirrored from the backend provider registry. */
 export const VK_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.vk!.hosts;
 export const RUTUBE_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.rutube!.hosts;
 export const OK_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.ok!.hosts;
+export const DZEN_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.dzen!.hosts;
 
 export function providerDisplayName(providerId: string): string {
   return PROVIDER_CANONICAL_RULES[providerId]?.displayName ?? providerId;

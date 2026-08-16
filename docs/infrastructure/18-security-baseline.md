@@ -17,6 +17,7 @@ Registry:
 - VK (`vk`, `VK`): `vk.com`, `www.vk.com`, `m.vk.com`, `vk.ru`, `www.vk.ru`, `m.vk.ru`, `vkvideo.ru`, `www.vkvideo.ru`, `m.vkvideo.ru`; enabled default `true`. Exact hosts only — no suffix matching; `login.vk.ru` and unknown subdomains are unsupported.
 - Rutube (`rutube`, `Rutube`): `rutube.ru`, `www.rutube.ru`; enabled default `true`.
 - OK (`ok`, `OK`): `ok.ru`, `www.ok.ru`, `m.ok.ru`, `mobile.ok.ru`, `odnoklassniki.ru`, `www.odnoklassniki.ru`, `m.odnoklassniki.ru`, `mobile.odnoklassniki.ru`; enabled default `true`; yt-dlp extractor allowlist `odnoklassniki`.
+- Dzen (`dzen`, `Dzen`): `dzen.ru`, `www.dzen.ru`, `zen.yandex.ru`, `www.zen.yandex.ru`; enabled default `true`; yt-dlp extractor allowlist `dzen.ru` (IE_NAME; payload may also report `ZenYandex`).
 
 ## Реализованный safe outbound probe (PR2)
 
@@ -24,7 +25,7 @@ Registry:
 
 Перед HTTP call hostname дважды resolve-ится: оба набора должны быть непустыми и полностью публичными, их пересечение — непустым. Это best-effort DNS TOCTOU mitigation, не полноценное IP pinning. Hostname URL сохраняется для SNI и certificate verification.
 
-HEAD fallback provider-specific: VK `{418,405,501}`, Rutube/OK `{405,501}`. Такой status не успех, а разрешение на bounded streaming GET. GET требует MIME из `text/html`, `application/json`, `text/plain`, останавливается на soft probe limit и защищён hard response limit/timeouts. Cookies, Authorization, Referer, Range, browser fingerprint и пользовательские headers не используются. Raw URL/query, `Location`, IP и body не логируются. См. [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
+HEAD fallback provider-specific: VK `{418,405,501}`, Rutube/OK/Dzen `{405,501}`. Такой status не успех, а разрешение на bounded streaming GET. GET требует MIME из `text/html`, `application/json`, `text/plain`, останавливается на soft probe limit и защищён hard response limit/timeouts. Cookies, Authorization, Referer, Range, browser fingerprint и пользовательские headers не используются. Raw URL/query, `Location`, IP и body не логируются. См. [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
 ## Что защита не означает
 

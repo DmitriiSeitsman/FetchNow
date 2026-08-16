@@ -72,6 +72,7 @@ def _settings(**overrides: object) -> Settings:
         "PROVIDER_VK_ENABLED": True,
         "PROVIDER_RUTUBE_ENABLED": True,
         "PROVIDER_OK_ENABLED": True,
+        "PROVIDER_DZEN_ENABLED": True,
         "OUTBOUND_CONNECT_TIMEOUT_SECONDS": 1,
         "OUTBOUND_READ_TIMEOUT_SECONDS": 1,
         "OUTBOUND_TOTAL_TIMEOUT_SECONDS": 5,

@@ -331,14 +331,16 @@ class ResolutionService:
     ) -> URLValidationResult:
         """Rewrite stable provider path aliases into a coherent trusted snapshot.
 
-        VK ``/clip…``, Rutube ``/shorts/…``, and OK ``/videoembed/…`` (plus
-        moviePlayer) become their ``/video…`` canonical forms. Non-stable paths
-        keep the prior snapshot. No extra DNS or HTTP I/O.
+        VK ``/clip…``, Rutube ``/shorts/…``, OK ``/videoembed/…`` (plus
+        moviePlayer), and Dzen ``/shorts/…`` / ``/media/…`` become their
+        ``/video…`` canonical forms. Non-stable paths keep the prior snapshot.
+        No extra DNS or HTTP I/O.
         """
         if validated.provider_id not in {
             ProviderID.VK.value,
             ProviderID.RUTUBE.value,
             ProviderID.OK.value,
+            ProviderID.DZEN.value,
         }:
             return validated
         provider = self._providers.find(validated.url.hostname)
@@ -362,6 +364,7 @@ class ResolutionService:
         )
         if (
             validated.url.path == identity.canonical_path
+            and validated.url.hostname == identity.hostname
             and validated.url.canonical == canonical
         ):
             return validated
@@ -369,7 +372,7 @@ class ResolutionService:
         rebuilt_url = NormalizedMediaURL(
             original_scheme=validated.url.original_scheme,
             scheme=validated.url.scheme,
-            hostname=validated.url.hostname,
+            hostname=identity.hostname,
             port=validated.url.port,
             path=identity.canonical_path,
             query=validated.url.query,

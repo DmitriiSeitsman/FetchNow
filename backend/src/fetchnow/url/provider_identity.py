@@ -1,4 +1,4 @@
-"""Neutral stable provider-media identity grammar (VK / Rutube / OK).
+"""Neutral stable provider-media identity grammar (VK / Rutube / OK / Dzen).
 
 Shared by URL validation consumers without importing media_inspection,
 resolution, jobs, downloads, or API layers. Callers map
@@ -31,6 +31,23 @@ _RUTUBE_STABLE_PATH = re.compile(
 _OK_STABLE_PATH = re.compile(
     r"^/(?:video(?:embed)?|web-api/video/moviePlayer)/([\d-]{1,32})/?$"
 )
+# Dzen / ZenYandex: opaque hex-ish media id. Shorts and legacy /media/… forms are
+# input aliases of /video/watch/{id}. Channel, article (/a/), and post (/b/)
+# pages stay out. Extractor IE_NAME is dzen.ru (not ZenYandex ie_key).
+_DZEN_STABLE_PATH = re.compile(
+    r"^/(?:"
+    r"(?:video/)?(?:watch|shorts)/([a-z0-9-]{1,64})"
+    r"|"
+    r"(?:video/)?media/(?:(?:id/[^/]+/|[^/]+/)(?:[a-z0-9-]+)-)?([a-z0-9-]{1,64})"
+    r")/?$",
+    re.IGNORECASE,
+)
+_DZEN_HOST_CANONICAL = {
+    "www.dzen.ru": "dzen.ru",
+    "dzen.ru": "dzen.ru",
+    "www.zen.yandex.ru": "zen.yandex.ru",
+    "zen.yandex.ru": "zen.yandex.ru",
+}
 _SAFE_HOST = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 _FORBIDDEN_PATH_MARKERS = (
     "/video_ext.php",
@@ -119,6 +136,15 @@ def parse_stable_provider_identity(
             raise ProviderIdentityError("OK_PATH_INVALID")
         media_id = match.group(1)
         canonical_path = f"/video/{media_id}"
+    elif provider_id == ProviderID.DZEN.value:
+        match = _DZEN_STABLE_PATH.fullmatch(raw_path)
+        if match is None:
+            raise ProviderIdentityError("DZEN_PATH_INVALID")
+        media_id = (match.group(1) or match.group(2) or "").lower()
+        if not media_id:
+            raise ProviderIdentityError("DZEN_PATH_INVALID")
+        canonical_path = f"/video/watch/{media_id}"
+        host = _DZEN_HOST_CANONICAL.get(host, host)
     else:
         raise ProviderIdentityError("IDENTITY_PROVIDER_UNSUPPORTED")
     return StableProviderIdentity(

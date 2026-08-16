@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     provider_vk_enabled: bool = Field(default=True, alias="PROVIDER_VK_ENABLED")
     provider_rutube_enabled: bool = Field(default=True, alias="PROVIDER_RUTUBE_ENABLED")
     provider_ok_enabled: bool = Field(default=True, alias="PROVIDER_OK_ENABLED")
+    provider_dzen_enabled: bool = Field(default=True, alias="PROVIDER_DZEN_ENABLED")
 
     # Safe outbound HTTP (PR2)
     outbound_connect_timeout_seconds: float = Field(

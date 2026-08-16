@@ -386,13 +386,22 @@ def test_generic_extractor_rejected() -> None:
     assert exc.value.kind is InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH
 
 
-def test_conflicting_extractor_fields_rejected() -> None:
+def test_conflicting_extractor_fields_rejected_when_both_allowlisted() -> None:
     payload = copy.deepcopy(VK_FIXTURE)
     payload["extractor_key"] = "vk"
     payload["extractor"] = "rutube"
     with pytest.raises(InspectionError) as exc:
-        _parse(payload)
+        _parse(payload, extractors=frozenset({"vk", "rutube"}))
     assert exc.value.kind is InspectionErrorKind.INSPECTION_PROVIDER_MISMATCH
+
+
+def test_sibling_extractor_label_outside_allowlist_accepted() -> None:
+    """IE_NAME vs ie_key dual labels resolve via the allowlist."""
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["extractor_key"] = "ZenYandexSibling"
+    payload["extractor"] = "vk"
+    draft = _parse(payload, extractors=frozenset({"vk"}))
+    assert draft.extractor_key == "vk"
 
 
 def test_generic_secondary_field_rejected() -> None:

@@ -31,6 +31,8 @@ _RUTUBE_HEAD_FALLBACK = frozenset({405, 501})
 # OK.ru: start with the same method-not-useful set as Rutube until live HEAD
 # evidence justifies broader transport fallbacks.
 _OK_HEAD_FALLBACK = frozenset({405, 501})
+# Dzen: same method-not-useful set until live HEAD evidence widens it.
+_DZEN_HEAD_FALLBACK = frozenset({405, 501})
 
 
 def build_default_providers(settings: Settings) -> tuple[ProviderDescriptor, ...]:
@@ -83,6 +85,22 @@ def build_default_providers(settings: Settings) -> tuple[ProviderDescriptor, ...
             ),
             enabled=settings.provider_ok_enabled,
             head_fallback_statuses=_OK_HEAD_FALLBACK,
+        ),
+        ProviderDescriptor(
+            id=ProviderID.DZEN.value,
+            display_name="Dzen",
+            # Exact hosts only. ZenYandex IE matches apex dzen.ru / zen.yandex.ru;
+            # www.* are input aliases rewritten to apex in identity grammar.
+            exact_hostnames=frozenset(
+                {
+                    "dzen.ru",
+                    "www.dzen.ru",
+                    "zen.yandex.ru",
+                    "www.zen.yandex.ru",
+                }
+            ),
+            enabled=settings.provider_dzen_enabled,
+            head_fallback_statuses=_DZEN_HEAD_FALLBACK,
         ),
     )
 
