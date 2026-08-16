@@ -18,6 +18,14 @@
   --disabled-line: #5b7089;
   --surface: rgba(255, 255, 255, 0.82);
   --radius: 14px;
+  /* Shared motion primitives: every interactive/entrance effect reuses these. */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-entrance: 260ms;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --lift: -1px;
+  --ring-primary: 0 6px 16px rgba(15, 81, 50, 0.24);
+  --ring-quiet: 0 4px 12px rgba(18, 54, 95, 0.14);
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: var(--font-sans);
@@ -183,9 +191,11 @@ body {
   line-height: 0;
   cursor: pointer;
   transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+    background-color var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .btn-paste-icon {
@@ -194,15 +204,25 @@ body {
   pointer-events: none;
 }
 
+/* The centering translate must stay in every transform of this button. */
 .btn-paste:hover:enabled {
   border-color: var(--blue-accent);
   background: #d9e6f5;
   color: var(--navy);
+  box-shadow: var(--ring-quiet);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.btn-paste:active:enabled {
+  transform: translateY(-50%) scale(0.98);
+  box-shadow: none;
 }
 
 .btn-paste:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+  transform: translateY(-50%);
+  box-shadow: none;
 }
 
 .field-input-live:focus-visible,
@@ -211,6 +231,15 @@ body {
 .format:focus-within {
   outline: 3px solid var(--blue-accent);
   outline-offset: 2px;
+}
+
+/* Keyboard focus gets the same elevation as hover, so both read as "actionable". */
+.btn:not(:disabled):not([aria-disabled="true"]):focus-visible {
+  box-shadow: var(--ring-quiet);
+}
+
+.btn-paste:focus-visible:enabled {
+  box-shadow: var(--ring-quiet);
 }
 
 .flow {
@@ -255,9 +284,28 @@ body {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  transition:
+    background-color var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
 }
 
-.btn:disabled {
+/* `:not(:disabled)` instead of `:enabled` so the download anchor shares the pattern. */
+.btn:not(:disabled):not([aria-disabled="true"]):hover {
+  transform: translateY(var(--lift));
+}
+
+.btn:not(:disabled):not([aria-disabled="true"]):active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 1;
   background: var(--disabled-fill);
@@ -265,6 +313,7 @@ body {
   border-color: var(--disabled-line);
   border-style: dashed;
   box-shadow: none;
+  transform: none;
 }
 
 .btn-primary {
@@ -272,8 +321,9 @@ body {
   color: #ffffff;
 }
 
-.btn-primary:hover:enabled {
+.btn-primary:not(:disabled):not([aria-disabled="true"]):hover {
   background: var(--leaf-deep);
+  box-shadow: var(--ring-primary);
 }
 
 .btn-ghost {
@@ -282,9 +332,11 @@ body {
   color: var(--ink-muted);
 }
 
-.btn-ghost:hover:enabled {
+.btn-ghost:not(:disabled):not([aria-disabled="true"]):hover {
   border-color: var(--blue-accent);
   color: var(--navy);
+  background: var(--blue-wash);
+  box-shadow: var(--ring-quiet);
 }
 
 .status {
@@ -292,10 +344,34 @@ body {
   min-height: 1.4em;
   font-size: 0.95rem;
   color: var(--ink);
+  transition: color var(--motion-base) var(--ease-out);
 }
 
 .status[data-tone="error"] {
   color: var(--danger);
+}
+
+/*
+ * Entrance motion for panels that the flow reveals by toggling [hidden].
+ * These containers are stable DOM nodes, so the animation plays once per
+ * visibility change instead of on every re-render.
+ */
+.meta-card:not([hidden]),
+.quality-card:not([hidden]),
+.progress-card:not([hidden]) {
+  animation: fade-rise var(--motion-entrance) var(--ease-out);
+}
+
+/*
+ * No animation fill-mode on buttons: a retained final keyframe would outrank the
+ * hover/active transform in the cascade.
+ */
+.flow-actions .btn:not([hidden]) {
+  animation: fade-rise var(--motion-entrance) var(--ease-out);
+}
+
+.progress-actions:not([hidden]) {
+  animation: fade-in var(--motion-entrance) var(--ease-out);
 }
 
 .meta-card {
@@ -350,6 +426,16 @@ body {
   padding: 0.5rem 0.75rem;
   background: rgba(255, 255, 255, 0.7);
   cursor: pointer;
+  transition:
+    background-color var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out);
+}
+
+.format:not(.format-disabled):hover {
+  border-color: var(--blue-accent);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: var(--ring-quiet);
 }
 
 .format input {
@@ -436,15 +522,38 @@ body {
 }
 
 .progress-fill {
+  position: relative;
   display: block;
   height: 100%;
   width: 0;
+  overflow: hidden;
   background: var(--leaf);
-  transition: width 0.35s ease;
+  transition:
+    width var(--motion-entrance) var(--ease-out),
+    background-color var(--motion-base) var(--ease-out);
+}
+
+/* Sheen runs only while work is actually in flight (tone stays "done" when idle). */
+.progress-card[data-tone="active"] .progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: progress-sheen 1.6s var(--ease-out) infinite;
 }
 
 .progress-card[data-tone="done"] .progress-fill {
   background: var(--leaf-deep);
+}
+
+.progress-card[data-tone="done"] .progress-fill::after {
+  content: none;
 }
 
 .progress-note {
@@ -458,9 +567,9 @@ body {
   justify-content: flex-end;
   align-items: center;
   gap: 0.55rem;
-  padding-top: 0.15rem;
+  padding-top: 0.85rem;
   border-top: 1px solid var(--mist);
-  margin-top: 0.15rem;
+  margin-top: 0.4rem;
 }
 
 .progress-actions .btn {
@@ -523,6 +632,7 @@ body {
 
   .progress-actions {
     justify-content: stretch;
+    padding-top: 1rem;
   }
 
   .progress-actions .btn {
@@ -573,15 +683,72 @@ body {
   }
 }
 
+/* Entrance primitives: opacity plus a short transform, nothing layout-triggering. */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes progress-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* Collapsing the shared tokens minimizes every transition built on them. */
+  :root {
+    --motion-fast: 1ms;
+    --motion-base: 1ms;
+    --motion-entrance: 1ms;
+  }
+
   .atmosphere,
   .hero,
   .brand,
-  .spinner {
+  .spinner,
+  .meta-card:not([hidden]),
+  .quality-card:not([hidden]),
+  .progress-card:not([hidden]),
+  .progress-actions:not([hidden]),
+  .flow-actions .btn:not([hidden]) {
     animation: none;
+  }
+
+  .progress-card[data-tone="active"] .progress-fill::after {
+    content: none;
   }
 
   .progress-fill {
     transition: none;
+  }
+
+  /* Colour, border, and shadow feedback stays; only the movement is dropped. */
+  .btn:not(:disabled):not([aria-disabled="true"]):hover,
+  .btn:not(:disabled):not([aria-disabled="true"]):active {
+    transform: none;
+  }
+
+  .btn-paste:hover:enabled,
+  .btn-paste:active:enabled {
+    transform: translateY(-50%);
   }
 }
