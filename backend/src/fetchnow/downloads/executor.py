@@ -572,6 +572,10 @@ class DownloadExecutor:
             stage="muxing",
         )
         await self._advance_progress(snap, DownloadProgressStage.MUXING)
+        # Mux write ceiling must use the product byte cap, not approx-derived
+        # peak_bytes. yt-dlp stages already write under media_download_max_bytes;
+        # underestimated stream approx would otherwise trip DOWNLOAD_TOO_LARGE as
+        # soon as video+audio dirs are counted via extra_size_dirs.
         mux_result = await self._run_supervised(
             snap,
             argv,
@@ -582,9 +586,10 @@ class DownloadExecutor:
             stderr_limit_bytes=settings.media_muxing_max_stderr_bytes,
             output_dir=str(workspace.mux),
             extra_size_dirs=(str(workspace.video), str(workspace.audio)),
-            max_output_bytes=peak_bytes,
+            max_output_bytes=stage_write_cap,
             min_free_bytes=(
-                settings.media_download_min_free_bytes + max(0, peak_bytes - consumed)
+                settings.media_download_min_free_bytes
+                + max(0, stage_write_cap - consumed)
             ),
             root_for_disk=str(self._store.root),
             overflow_code=DownloadErrorCode.MUXING_FAILED,
