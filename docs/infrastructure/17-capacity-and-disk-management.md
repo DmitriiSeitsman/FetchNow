@@ -19,6 +19,7 @@ Disk capacity измеряет bytes, inode — количество filesystem 
 | Database | `POSTGRES_PASSWORD` | development placeholder | Compose secret; production обязано заменить |
 | Providers | `PROVIDER_VK_ENABLED` | `true` | runtime exact registry flag |
 | Providers | `PROVIDER_RUTUBE_ENABLED` | `true` | runtime exact registry flag |
+| Providers | `PROVIDER_OK_ENABLED` | `true` | runtime exact registry flag |
 | URL | `URL_ALLOWED_SCHEMES` | `http,https` | runtime validation; другие schemes invalid config |
 | URL | `URL_ALLOWED_PORTS` | `80,443` | runtime validation |
 | URL | `URL_MAX_LENGTH` | `4096` | runtime validation/redirect limit; API payload max отдельно 8192 |

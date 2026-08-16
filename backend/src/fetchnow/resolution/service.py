@@ -331,13 +331,14 @@ class ResolutionService:
     ) -> URLValidationResult:
         """Rewrite stable provider path aliases into a coherent trusted snapshot.
 
-        VK ``/clip…`` and Rutube ``/shorts/…`` become their ``/video…``
-        canonical forms. Non-stable paths keep the prior snapshot. No extra
-        DNS or HTTP I/O.
+        VK ``/clip…``, Rutube ``/shorts/…``, and OK ``/videoembed/…`` (plus
+        moviePlayer) become their ``/video…`` canonical forms. Non-stable paths
+        keep the prior snapshot. No extra DNS or HTTP I/O.
         """
         if validated.provider_id not in {
             ProviderID.VK.value,
             ProviderID.RUTUBE.value,
+            ProviderID.OK.value,
         }:
             return validated
         provider = self._providers.find(validated.url.hostname)

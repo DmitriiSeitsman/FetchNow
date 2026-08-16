@@ -125,7 +125,7 @@ _ALLOWED_EXTRA_KEYS = frozenset(
     }
 )
 
-_URLISH = re.compile(rb"https?://|www\.|vk\.com|rutube\.ru|yandex\.|token=|/tmp/|/var/")
+_URLISH = re.compile(rb"https?://|www\.|vk\.com|rutube\.ru|ok\.ru|odnoklassniki\.ru|yandex\.|token=|/tmp/|/var/")
 
 
 def process_exit_category(

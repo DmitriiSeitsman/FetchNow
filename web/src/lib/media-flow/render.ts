@@ -1,5 +1,6 @@
 import type { FlowSnapshot } from "./controller";
 import { formatApproxBytes } from "./bytes";
+import { providerDisplayName } from "./contracts";
 import { progressView } from "./progress";
 import { groupQualityOptions, type QualityOption } from "./quality";
 
@@ -213,7 +214,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       );
       setText(
         meta.querySelector("[data-flow-provider]"),
-        snapshot.result.providerId === "vk" ? "VK" : "Rutube",
+        providerDisplayName(snapshot.result.providerId),
       );
       const duration = snapshot.result.durationSeconds;
       if (duration === null) {

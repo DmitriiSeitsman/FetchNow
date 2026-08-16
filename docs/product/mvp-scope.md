@@ -3,7 +3,7 @@
 ## In scope
 
 - **Public links only.** Users paste publicly reachable media URLs.
-- **First providers:** VK and Rutube.
+- **First providers:** VK, Rutube, and OK.ru.
 - **Free quality:** up to 720p without payment.
 - **Turbo:** time-limited boost (24 hours) for faster/higher-priority processing — details in a later PR.
 - **No registration.** No accounts, no passwords, no OAuth in the MVP.

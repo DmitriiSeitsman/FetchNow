@@ -84,9 +84,6 @@ _UNSUPPORTED_MEDIA_HOSTS = frozenset(
         "www.youtube.com",
         "m.youtube.com",
         "youtu.be",
-        "ok.ru",
-        "www.ok.ru",
-        "m.ok.ru",
     }
 )
 _VK_HOSTS = frozenset(
@@ -103,6 +100,18 @@ _VK_HOSTS = frozenset(
     }
 )
 _RUTUBE_HOSTS = frozenset({"rutube.ru", "www.rutube.ru"})
+_OK_HOSTS = frozenset(
+    {
+        "ok.ru",
+        "www.ok.ru",
+        "m.ok.ru",
+        "mobile.ok.ru",
+        "odnoklassniki.ru",
+        "www.odnoklassniki.ru",
+        "m.odnoklassniki.ru",
+        "mobile.odnoklassniki.ru",
+    }
+)
 
 _SCRIPT_OPEN_RE = re.compile(r"<script\b[^>]*>", re.IGNORECASE)
 _SCRIPT_CLOSE_RE = re.compile(r"</script\s*>", re.IGNORECASE)
@@ -1147,7 +1156,8 @@ def _normalize_stable_provider_url(
 def _canonical_stable_provider_path(host: str, path: str) -> str | None:
     """Return trusted path form, or None when the path is not stable.
 
-    VK ``/clip…`` and Rutube ``/shorts/…`` aliases rewrite to ``/video…``.
+    VK ``/clip…``, Rutube ``/shorts/…``, and OK ``/videoembed/…`` aliases
+    rewrite to ``/video…``.
     """
     if host in _VK_HOSTS:
         provider_id = ProviderID.VK.value
@@ -1155,6 +1165,9 @@ def _canonical_stable_provider_path(host: str, path: str) -> str | None:
     elif host in _RUTUBE_HOSTS:
         provider_id = ProviderID.RUTUBE.value
         allowed = _RUTUBE_HOSTS
+    elif host in _OK_HOSTS:
+        provider_id = ProviderID.OK.value
+        allowed = _OK_HOSTS
     else:
         return None
     try:

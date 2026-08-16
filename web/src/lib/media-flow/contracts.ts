@@ -379,25 +379,66 @@ const TOOL_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/;
 /** Backend always emits /video…; /clip… is an input alias only (PR13). */
 const VK_PATH_RE = /^\/video(-?\d+)_(\d+)\/?$/;
 const RUTUBE_PATH_RE = /^\/video\/([A-Za-z0-9_-]{1,64})\/?$/;
+const OK_PATH_RE = /^\/video\/([\d-]{1,32})\/?$/;
 
-/** Exact public hosts from the backend provider registry (PR13 snapshot). */
-export const VK_CANONICAL_HOSTS = Object.freeze([
-  "vk.com",
-  "www.vk.com",
-  "m.vk.com",
-  "vk.ru",
-  "www.vk.ru",
-  "m.vk.ru",
-  "vkvideo.ru",
-  "www.vkvideo.ru",
-  "m.vkvideo.ru",
-] as const);
-export const RUTUBE_CANONICAL_HOSTS = Object.freeze([
-  "rutube.ru",
-  "www.rutube.ru",
-] as const);
-const VK_HOSTS = new Set<string>(VK_CANONICAL_HOSTS);
-const RUTUBE_HOSTS = new Set<string>(RUTUBE_CANONICAL_HOSTS);
+export type ProviderCanonicalRule = {
+  readonly displayName: string;
+  readonly hosts: readonly string[];
+  readonly pathRe: RegExp;
+  readonly mediaIdFromMatch: (match: RegExpExecArray) => string;
+};
+
+/** Exact public hosts + path grammar from the backend provider registry. */
+export const PROVIDER_CANONICAL_RULES: Readonly<
+  Record<string, ProviderCanonicalRule>
+> = Object.freeze({
+  vk: Object.freeze({
+    displayName: "VK",
+    hosts: Object.freeze([
+      "vk.com",
+      "www.vk.com",
+      "m.vk.com",
+      "vk.ru",
+      "www.vk.ru",
+      "m.vk.ru",
+      "vkvideo.ru",
+      "www.vkvideo.ru",
+      "m.vkvideo.ru",
+    ]),
+    pathRe: VK_PATH_RE,
+    mediaIdFromMatch: (match: RegExpExecArray) => `${match[1]}_${match[2]}`,
+  }),
+  rutube: Object.freeze({
+    displayName: "Rutube",
+    hosts: Object.freeze(["rutube.ru", "www.rutube.ru"]),
+    pathRe: RUTUBE_PATH_RE,
+    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+  }),
+  ok: Object.freeze({
+    displayName: "OK",
+    hosts: Object.freeze([
+      "ok.ru",
+      "www.ok.ru",
+      "m.ok.ru",
+      "mobile.ok.ru",
+      "odnoklassniki.ru",
+      "www.odnoklassniki.ru",
+      "m.odnoklassniki.ru",
+      "mobile.odnoklassniki.ru",
+    ]),
+    pathRe: OK_PATH_RE,
+    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+  }),
+});
+
+/** Exact public hosts mirrored from the backend provider registry. */
+export const VK_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.vk!.hosts;
+export const RUTUBE_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.rutube!.hosts;
+export const OK_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.ok!.hosts;
+
+export function providerDisplayName(providerId: string): string {
+  return PROVIDER_CANONICAL_RULES[providerId]?.displayName ?? providerId;
+}
 
 function requireDurationSeconds(value: unknown): number | null {
   if (value === null) {
@@ -463,33 +504,22 @@ export function assertCanonicalProviderUrl(
   if (parsed.search !== "" || parsed.hash !== "") {
     fail();
   }
+  const rule = PROVIDER_CANONICAL_RULES[providerId];
+  if (!rule) {
+    fail();
+  }
   const host = parsed.hostname.toLowerCase();
   const path = parsed.pathname || "/";
-  if (providerId === "vk") {
-    if (!VK_HOSTS.has(host)) {
-      fail();
-    }
-    const match = VK_PATH_RE.exec(path);
-    if (!match) {
-      fail();
-    }
-    const identity = `${match[1]}_${match[2]}`;
-    if (mediaId !== identity) {
-      fail();
-    }
-    return;
+  if (!rule.hosts.includes(host)) {
+    fail();
   }
-  if (providerId === "rutube") {
-    if (!RUTUBE_HOSTS.has(host)) {
-      fail();
-    }
-    const match = RUTUBE_PATH_RE.exec(path);
-    if (!match || mediaId !== match[1]) {
-      fail();
-    }
-    return;
+  const match = rule.pathRe.exec(path);
+  if (!match) {
+    fail();
   }
-  fail();
+  if (mediaId !== rule.mediaIdFromMatch(match)) {
+    fail();
+  }
 }
 
 function httpsAuthority(raw: string): string {
@@ -767,7 +797,7 @@ function parseInspectionResult(value: unknown): InspectionResult {
   rejectForbidden(value);
   rejectUnknown(value, RESULT_KEYS);
   const providerId = requireSafeToken(value.providerId);
-  if (providerId !== "vk" && providerId !== "rutube") {
+  if (!(providerId in PROVIDER_CANONICAL_RULES)) {
     fail();
   }
   const mediaId = requireString(value.mediaId, 128);

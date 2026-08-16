@@ -16,10 +16,10 @@ from fetchnow.url.models import ProviderID
 
 
 def _capabilities(provider_id: ProviderID) -> ProviderCapabilities:
-    # VK and Rutube share this product policy. Rutube Shorts are an URL alias of
-    # ordinary videos; they do not get a separate matrix row. Live metadata
-    # probing confirmed progressive download + quality selection remain valid
-    # defaults; extract-audio / select-container stay disabled.
+    # Shared product policy for providers that expose ordinary + short-form
+    # public video download with quality selection. Live metadata probing
+    # confirmed progressive download + quality selection remain valid defaults;
+    # extract-audio / select-container stay disabled.
     return ProviderCapabilities(
         provider_id=provider_id,
         operations={
@@ -42,11 +42,38 @@ def _capabilities(provider_id: ProviderID) -> ProviderCapabilities:
     )
 
 
+def _ok_capabilities() -> ProviderCapabilities:
+    # OK.ru has no confirmed separate clip/short-form URL family. Public
+    # progressive options are derived from DASH webm A/V via muxing when
+    # MEDIA_MUXING_ENABLED is on (confirmed live against odnoklassniki IE).
+    return ProviderCapabilities(
+        provider_id=ProviderID.OK,
+        operations={
+            MediaOperation.DOWNLOAD_VIDEO: CapabilityState.ENABLED,
+            MediaOperation.EXTRACT_AUDIO: CapabilityState.DISABLED,
+            MediaOperation.SELECT_QUALITY: CapabilityState.ENABLED,
+            MediaOperation.SELECT_CONTAINER: CapabilityState.DISABLED,
+        },
+        content_kinds={
+            ContentKind.VIDEO: CapabilityState.ENABLED,
+            ContentKind.CLIP: CapabilityState.DISABLED,
+            ContentKind.LIVE: CapabilityState.DISABLED,
+            ContentKind.PLAYLIST: CapabilityState.DISABLED,
+        },
+        metadata={
+            MetadataField.TITLE: CapabilityState.ENABLED,
+            MetadataField.DURATION: CapabilityState.ENABLED,
+            MetadataField.THUMBNAIL: CapabilityState.PLANNED,
+        },
+    )
+
+
 DEFAULT_PROVIDER_CAPABILITIES: Mapping[ProviderID, ProviderCapabilities] = (
     MappingProxyType(
         {
             ProviderID.VK: _capabilities(ProviderID.VK),
             ProviderID.RUTUBE: _capabilities(ProviderID.RUTUBE),
+            ProviderID.OK: _ok_capabilities(),
         }
     )
 )

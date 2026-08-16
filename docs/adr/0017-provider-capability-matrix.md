@@ -28,10 +28,13 @@ may support quality selection without each media item having every resolution.
 
 Only `CapabilityState.ENABLED` permits execution. `DISABLED` and `PLANNED`
 both fail closed in runtime paths. The initial matrix preserves the existing
-download-video and quality-selection behavior for VK and Rutube. Audio
+download-video and quality-selection behavior for VK, Rutube, and OK.ru. Audio
 extraction, container selection, live streams, and playlists are disabled;
+OK.ru has no separate clip family so `clip` is disabled for that provider;
 thumbnails are planned because the current extraction contract does not expose
-them.
+them. OK.ru progressive public options currently depend on bounded muxing of
+DASH webm A/V (`MEDIA_MUXING_ENABLED`) because named progressive MP4 rows from
+the odnoklassniki extractor lack codecs/dimensions.
 
 `DownloadJobService.create` validates `DOWNLOAD_VIDEO` before enqueueing.
 `DownloadExecutor._resolve_selection` validates it again after rebuilding the
