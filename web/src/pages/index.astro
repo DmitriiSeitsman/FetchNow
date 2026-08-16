@@ -1,6 +1,7 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import MediaFlow from "../components/MediaFlow.astro";
+import ProviderSupport from "../components/ProviderSupport.astro";
 import { isMediaFlowEnabled } from "../lib/media-flow/flag";
 import {
   homePage,
@@ -45,39 +46,32 @@ const enabled = isMediaFlowEnabled();
             <p class="hint">
               Скачивание появится в следующем релизе. Сейчас это основа интерфейса.
             </p>
+            <ProviderSupport />
           </>
         )
       }
 
-      <p class="trust-line">Без рекламы. Вообще.</p>
-
-      <ul class="platform-links" aria-label="Поддерживаемые площадки">
-        {
-          homePage.providerLinks.map((link) => (
-            <li>
-              <a href={link.href}>{link.label}</a>
-            </li>
-          ))
-        }
-      </ul>
-
-      <p class="slogan">
-        Достаточно хорош, чтобы полюбить. Достаточно полезен, чтобы выбрать Premium.
-      </p>
+      <div class="trust-premium">
+        <p class="trust-line">Без рекламы. Вообще.</p>
+        <p class="slogan">
+          <span>Достаточно хорош, чтобы полюбить.</span>
+          <span>Достаточно полезен, чтобы выбрать Premium.</span>
+        </p>
+      </div>
     </section>
 
     <section class="trust-points" aria-labelledby="trust-heading">
       <h2 id="trust-heading" class="trust-heading">Честный сервис для простой задачи</h2>
       <ul class="trust-grid">
-        <li>
+        <li class="trust-item">
           <h3>Просто</h3>
           <p>Вставьте ссылку, выберите вариант и скачайте файл.</p>
         </li>
-        <li>
+        <li class="trust-item">
           <h3>Честно</h3>
           <p>Понятные возможности бесплатного режима. Premium — только когда нужны дополнительные возможности.</p>
         </li>
-        <li>
+        <li class="trust-item">
           <h3>Без рекламы</h3>
           <p>Никаких баннеров, всплывающих окон и фальшивых кнопок «Скачать».</p>
         </li>

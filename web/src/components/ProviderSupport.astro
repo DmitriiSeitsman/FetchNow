@@ -1,0 +1,24 @@
+---
+import { homePage } from "../lib/seo/pages";
+
+interface Props {
+  /** Optional id for aria-describedby from the URL field. */
+  id?: string;
+}
+
+const { id } = Astro.props;
+---
+
+<div class="flow-support" id={id}>
+  <p class="flow-support-intro">Поддерживаем публичные видео:</p>
+  <ul class="platform-links" aria-label="Поддерживаемые площадки">
+    {
+      homePage.providerLinks.map((link) => (
+        <li>
+          <a href={link.href}>{link.label}</a>
+        </li>
+      ))
+    }
+  </ul>
+  <p class="flow-support-note">Регистрация не нужна.</p>
+</div>
