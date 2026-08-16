@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import SiteFooter from "../components/SiteFooter.astro";
 import {
   isSearchIndexingEnabled,
   robotsMetaContent,
@@ -78,7 +79,10 @@ const jsonLdItems = jsonLd
       ))
     }
   </head>
-  <body>
-    <slot />
+  <body class="page-root">
+    <div class="page-body">
+      <slot />
+    </div>
+    <SiteFooter />
   </body>
 </html>

@@ -26,6 +26,19 @@ export type HomePage = {
   providerLinks: ReadonlyArray<{ href: string; label: string }>;
 };
 
+/** Legal / policy pages — always noindex; never SEO landings. */
+export type LegalPage = {
+  id: "privacy" | "terms" | "copyright";
+  path: string;
+  title: string;
+  description: string;
+  h1: string;
+  /** Always false: legal pages stay out of search even when global indexing is on. */
+  indexable: false;
+  /** Prefer follow so crawlers may still discover linked public pages. */
+  robotsFollow: true;
+};
+
 export const homePage: HomePage = Object.freeze({
   path: "/",
   title: "FetchNow — скачать видео по ссылке",
@@ -93,10 +106,51 @@ export const providerPages: ReadonlyArray<ProviderPage> = Object.freeze([
   }),
 ]);
 
+export const legalPages: ReadonlyArray<LegalPage> = Object.freeze([
+  Object.freeze({
+    id: "privacy",
+    path: "/privacy/",
+    title: "Политика конфиденциальности — FetchNow",
+    description:
+      "Политика конфиденциальности FetchNow: какие технические данные используются сервисом и как устроена агрегированная статистика.",
+    h1: "Политика конфиденциальности",
+    indexable: false,
+    robotsFollow: true,
+  }),
+  Object.freeze({
+    id: "terms",
+    path: "/terms/",
+    title: "Условия использования — FetchNow",
+    description:
+      "Условия использования FetchNow. Актуальная версия документа будет опубликована на этой странице.",
+    h1: "Условия использования",
+    indexable: false,
+    robotsFollow: true,
+  }),
+  Object.freeze({
+    id: "copyright",
+    path: "/copyright/",
+    title: "Правообладателям — FetchNow",
+    description:
+      "Информация для правообладателей FetchNow. Порядок взаимодействия готовится к публикации.",
+    h1: "Правообладателям",
+    indexable: false,
+    robotsFollow: true,
+  }),
+]);
+
 export function providerPageById(id: ProviderPage["id"]): ProviderPage {
   const page = providerPages.find((entry) => entry.id === id);
   if (!page) {
     throw new Error(`Unknown provider page: ${id}`);
+  }
+  return page;
+}
+
+export function legalPageById(id: LegalPage["id"]): LegalPage {
+  const page = legalPages.find((entry) => entry.id === id);
+  if (!page) {
+    throw new Error(`Unknown legal page: ${id}`);
   }
   return page;
 }
@@ -141,6 +195,7 @@ export function webApplicationJsonLd(): Record<string, unknown> {
 
 /** Paths eligible for sitemap when global indexing is enabled. */
 export function indexablePaths(): string[] {
+  // Legal pages are intentionally omitted: they stay noindex and are not landings.
   const pages: Array<{ path: string; indexable: boolean }> = [
     homePage,
     ...providerPages,
@@ -148,10 +203,26 @@ export function indexablePaths(): string[] {
   return pages.filter((page) => page.indexable).map((page) => page.path);
 }
 
-export function robotsContentForPage(indexable: boolean): string | undefined {
+export type RobotsPageOptions = {
+  /**
+   * When indexable is false, emit `noindex,follow` instead of `noindex,nofollow`.
+   * Used for legal pages so linked public URLs remain discoverable.
+   */
+  follow?: boolean;
+};
+
+export function robotsContentForPage(
+  indexable: boolean,
+  options?: RobotsPageOptions,
+): string | undefined {
   // When a page opts out, force noindex even if the global switch is on.
   if (!indexable) {
-    return "noindex,nofollow";
+    return options?.follow ? "noindex,follow" : "noindex,nofollow";
   }
   return undefined;
+}
+
+/** Robots override for legal documents (`noindex,follow`). */
+export function robotsContentForLegalPage(page: LegalPage): string {
+  return robotsContentForPage(page.indexable, { follow: page.robotsFollow })!;
 }

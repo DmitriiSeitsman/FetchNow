@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   homePage,
   indexablePaths,
+  legalPageById,
+  legalPages,
   providerPages,
   providerPageById,
+  robotsContentForLegalPage,
   robotsContentForPage,
   webApplicationJsonLd,
   websiteJsonLd,
@@ -76,6 +79,22 @@ describe("seo pages", () => {
     expect(pageOverride).toBe("noindex,nofollow");
   });
 
+  it("keeps legal pages noindex,follow and out of the sitemap", () => {
+    expect(legalPages.map((page) => page.path)).toEqual([
+      "/privacy/",
+      "/terms/",
+      "/copyright/",
+    ]);
+    for (const page of legalPages) {
+      expect(page.indexable).toBe(false);
+      expect(robotsContentForLegalPage(page)).toBe("noindex,follow");
+      expect(indexablePaths()).not.toContain(page.path);
+    }
+    expect(legalPageById("privacy").title).toBe(
+      "Политика конфиденциальности — FetchNow",
+    );
+  });
+
   it("emits factual JSON-LD without offers", () => {
     const website = websiteJsonLd();
     const app = webApplicationJsonLd();
@@ -139,5 +158,39 @@ describe("provider landing wiring", () => {
     );
     expect(trustBlock).not.toContain("platform-links");
     expect(trustBlock).not.toContain("providerLinks");
+  });
+
+  it("ships legal routes, shared footer, and privacy policy copy", () => {
+    const layout = readFileSync(
+      join(here, "../../layouts/BaseLayout.astro"),
+      "utf8",
+    );
+    const footer = readFileSync(
+      join(here, "../../components/SiteFooter.astro"),
+      "utf8",
+    );
+    const privacy = readFileSync(
+      join(here, "../../pages/privacy/index.astro"),
+      "utf8",
+    );
+    const terms = readFileSync(
+      join(here, "../../pages/terms/index.astro"),
+      "utf8",
+    );
+    const copyright = readFileSync(
+      join(here, "../../pages/copyright/index.astro"),
+      "utf8",
+    );
+    expect(layout).toContain("SiteFooter");
+    expect(footer).toContain("/privacy/");
+    expect(footer).toContain("/terms/");
+    expect(footer).toContain("/copyright/");
+    expect(footer).toContain("mailto:support@fetchnow.online");
+    expect(footer).toContain("mailto:copyright@fetchnow.online");
+    expect(privacy).toContain("Редакция от 16 августа 2026 года");
+    expect(privacy).toContain("Локальная статистика использования");
+    expect(terms).toContain("Раздел готовится");
+    expect(copyright).toContain("copyright@fetchnow.online");
+    expect(copyright).not.toMatch(/DMCA|информационн(ый|ого) посредник/i);
   });
 });

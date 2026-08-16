@@ -1,0 +1,56 @@
+---
+/**
+ * Site-wide footer: legal information and contacts.
+ * Kept lean — no org details, phones, or social placeholders.
+ */
+const infoLinks = [
+  { href: "/terms/", label: "Условия использования" },
+  { href: "/copyright/", label: "Правообладателям" },
+  { href: "/privacy/", label: "Политика конфиденциальности" },
+] as const;
+
+const contactLinks = [
+  {
+    href: "mailto:support@fetchnow.online",
+    label: "Поддержка",
+    email: "support@fetchnow.online",
+  },
+  {
+    href: "mailto:copyright@fetchnow.online",
+    label: "Правообладателям",
+    email: "copyright@fetchnow.online",
+  },
+] as const;
+---
+
+<footer class="site-footer">
+  <div class="site-footer-inner">
+    <nav class="site-footer-col" aria-labelledby="footer-info-heading">
+      <h2 id="footer-info-heading" class="site-footer-heading">Информация</h2>
+      <ul class="site-footer-list">
+        {
+          infoLinks.map((link) => (
+            <li>
+              <a href={link.href}>{link.label}</a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+    <nav class="site-footer-col" aria-labelledby="footer-contacts-heading">
+      <h2 id="footer-contacts-heading" class="site-footer-heading">Контакты</h2>
+      <ul class="site-footer-list">
+        {
+          contactLinks.map((link) => (
+            <li>
+              <a href={link.href}>
+                <span class="site-footer-contact-label">{link.label}</span>
+                <span class="site-footer-contact-email">{link.email}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+  </div>
+</footer>
