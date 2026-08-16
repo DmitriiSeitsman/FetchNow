@@ -64,6 +64,12 @@ has not yet committed as ready. Symlink entries under the root, job attempt
 directories, and `published/` are unlinked themselves after grace — never
 followed — so an invalid link cannot persist or redirect deletion.
 
+Expire hygiene clears DB artifact pointers in the same transaction as marking
+the download job `expired`, then attempts `delete_artifact`. If that filesystem
+call fails, the publication is unreferenced and **`reconcile` retries deletion**
+on later worker polls after orphan grace. A single transient delete failure must
+not leave a deliverable or permanent artifact.
+
 ### Idempotent create coherence
 
 `UNIQUE(media_job_id, format_option_id)` recovery returns the existing row only

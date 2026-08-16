@@ -65,6 +65,58 @@ free -h
 
 `du` — потенциально тяжёлая read-only операция. Сравнивайте тренд и filesystem, где расположен Docker data root (`docker info`). CPU/RAM pressure проявляется throttling/OOM/restarts; увеличивать concurrency при этом нельзя.
 
+## Media artifact GC (worker)
+
+Physical cleanup of private download artifacts under `MEDIA_DOWNLOAD_TEMP_ROOT`
+(`/var/lib/fetchnow/tmp/downloads` by default) is performed **only by the worker**
+hygiene loop (`expire_due_jobs` → `delete_artifact` → `ArtifactStore.reconcile`).
+
+Facts for operators:
+
+- After artifact/job TTL, DB artifact pointers are cleared **before** filesystem
+  delete is attempted. Delivery cannot reopen an expired artifact even if the
+  file briefly remains on disk.
+- A transient `delete_artifact` failure does **not** leave the file forever:
+  the directory becomes an unreferenced publication and later `reconcile`
+  cycles retry removal after orphan grace (`MEDIA_DOWNLOAD_ORPHAN_GRACE_SECONDS`,
+  floor 60s).
+- If the worker is down, **delivery already stops at expiry** (no DB pointer /
+  grant validity). Physical files may linger until the worker recovers; on the
+  next successful hygiene polls, reconcile deletes them.
+- Do **not** use ad-hoc `rm` on the volume as a routine flow. Prefer restoring
+  the worker and waiting for hygiene, or investigating structured logs first.
+
+### Observability (structured log events)
+
+Worker / artifact logs (no URLs, cookies, Bearer, or media bytes):
+
+| Event | Meaning |
+|---|---|
+| `artifact_delete_failed` | Physical delete left the dir (expire or reconcile) |
+| `artifact_delete_retry` | Reconcile retrying an unreferenced publication |
+| `artifact_delete_succeeded_after_retry` | Reconcile removed a previously leftover dir |
+| `orphan_artifact_detected` | Unreferenced published dir selected for removal |
+| `orphan_artifact_deleted` | Orphan publication removed |
+| `download_orphan_sweep_removed count=N` | Bounded reconcile batch size |
+
+### Checking leftover publications (read-only)
+
+```bash
+# Count published artifact directories on the staging/production host volume
+# (path via MEDIA_DOWNLOAD_TEMP_ROOT; default shown).
+docker compose --env-file /srv/fetchnow-staging/env/.env.staging \
+  --project-name fetchnow-staging \
+  -f compose.yaml -f compose.staging.yaml \
+  exec -T worker sh -c 'find /var/lib/fetchnow/tmp/downloads/published -mindepth 1 -maxdepth 1 -type d ! -name ".partial_*" | wc -l'
+
+# Confirm worker is running and emitting hygiene / orphan events
+docker compose ... logs --since 30m worker 2>&1 | grep -E 'artifact_delete_|orphan_artifact_|download_orphan_sweep'
+```
+
+After worker recovery, wait at least one poll interval plus orphan grace before
+expecting counts to drop. Manual filesystem surgery remains an emergency-only
+last resort after confirming no active referenced artifacts in DB.
+
 ## Действия и ограничения
 
 Soft/hard capacity enforcement, TTL cleanup и media job admission пока не реализованы. При реальном low-disk сначала прекратить новые writes доступным операционным способом, определить владельца объёма, применить targeted log/TTL cleanup по фактической политике либо добавить capacity. PostgreSQL cleanup требует DB-aware процедур.

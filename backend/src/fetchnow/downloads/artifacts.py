@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -20,6 +21,8 @@ from fetchnow.downloads.errors import (
     DownloadErrorCode,
     raise_download_error,
 )
+
+logger = logging.getLogger("fetchnow.downloads.artifacts")
 
 _MANIFEST_SCHEMA = 1
 _MANIFEST_KEYS = frozenset(
@@ -1003,35 +1006,55 @@ class ArtifactStore:
             content_type=content_type,
         )
 
-    def delete_artifact(self, artifact_id: uuid.UUID) -> None:
-        """Delete the published artifact directory by opaque id."""
+    def delete_artifact(self, artifact_id: uuid.UUID) -> bool:
+        """Delete the published artifact directory by opaque id.
+
+        Returns ``True`` when the published directory is absent afterward
+        (deleted or never present). Returns ``False`` when a transient
+        filesystem error leaves the directory behind — callers must rely on
+        later ``reconcile`` cycles to retry physical removal. Delivery must
+        already be impossible because DB artifact pointers are cleared before
+        this call on the expire path.
+        """
         dest = self._resolve_under_root("published", str(artifact_id))
         try:
             resolved_root = self._root.resolve(strict=True)
             resolved = dest.resolve(strict=False)
             resolved.relative_to(resolved_root)
         except (OSError, ValueError):
-            return
+            return True
         if dest.is_symlink():
-            return
+            # Never follow; leave for reconcile symlink unlink after grace.
+            return False
         try:
             if dest.is_dir():
                 shutil.rmtree(dest, ignore_errors=False)
             elif dest.exists():
                 dest.unlink()
         except FileNotFoundError:
-            return
-        except OSError:
-            return
+            pass
+        except OSError as exc:
+            logger.warning(
+                "artifact_delete_failed artifact_id=%s error_class=%s",
+                artifact_id,
+                type(exc).__name__,
+            )
+            try:
+                still_present = dest.exists()
+            except OSError:
+                still_present = True
+            return not still_present
         # Also remove a leftover partial staging dir for the same id.
         partial = self._resolve_under_root("published", f".partial_{artifact_id}")
         try:
-            if partial.is_symlink():
-                return
-            if partial.is_dir():
+            if not partial.is_symlink() and partial.is_dir():
                 shutil.rmtree(partial, ignore_errors=True)
         except OSError:
-            return
+            pass
+        try:
+            return not dest.exists()
+        except OSError:
+            return False
 
     def _entry_mtime(self, path: Path) -> float | None:
         try:
@@ -1286,8 +1309,34 @@ class ArtifactStore:
                 )
                 if keep:
                     continue
+                # Unreferenced after grace: expire-path delete may have failed,
+                # or a crash left a publication with no DB pointer. Reconcile
+                # is the durable retry — never delete referenced/active rows.
+                logger.info(
+                    "orphan_artifact_detected artifact_id=%s",
+                    artifact_id,
+                )
+                logger.info(
+                    "artifact_delete_retry artifact_id=%s reason=orphan_reconcile",
+                    artifact_id,
+                )
                 if self._safe_rmtree(entry):
                     removed += 1
+                    logger.info(
+                        "orphan_artifact_deleted artifact_id=%s",
+                        artifact_id,
+                    )
+                    logger.info(
+                        "artifact_delete_succeeded_after_retry "
+                        "artifact_id=%s reason=orphan_reconcile",
+                        artifact_id,
+                    )
+                else:
+                    logger.warning(
+                        "artifact_delete_failed artifact_id=%s "
+                        "error_class=OSError reason=orphan_reconcile",
+                        artifact_id,
+                    )
         except OSError:
             return removed
         return removed

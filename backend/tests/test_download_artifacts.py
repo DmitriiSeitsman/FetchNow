@@ -335,6 +335,7 @@ def test_reconcile_deletes_partial_after_grace(tmp_path: Path) -> None:
 
 def test_reconcile_removes_dir_left_after_delete_artifact_failure(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Simulate TTL delete failure: published dir remains, then reconcile cleans it."""
     store = _store(tmp_path / "root", max_bytes=1024, grace=MIN_ORPHAN_GRACE_SECONDS)
@@ -354,12 +355,135 @@ def test_reconcile_removes_dir_left_after_delete_artifact_failure(
     # DB no longer references the artifact id.
     old = time.time() - _AGED
     os.utime(dest, (old, old))
+    with caplog.at_level("INFO", logger="fetchnow.downloads.artifacts"):
+        removed = store.reconcile(
+            referenced_artifact_ids=frozenset(),
+            active_attempts=frozenset(),
+            limit=16,
+        )
+    assert removed >= 1
+    assert not dest.exists()
+    messages = "\n".join(r.getMessage() for r in caplog.records)
+    assert "orphan_artifact_detected" in messages
+    assert "artifact_delete_retry" in messages
+    assert "orphan_artifact_deleted" in messages
+    assert "artifact_delete_succeeded_after_retry" in messages
+    assert "Bearer" not in messages
+    assert "cookie" not in messages.lower()
+
+
+def test_delete_artifact_returns_false_on_transient_oserror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = _store(tmp_path / "root", max_bytes=1024)
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    (workspace.output / "artifact.mp4").write_bytes(b"keep-me")
+    published = store.publish(
+        workspace=workspace,
+        expected_container="mp4",
+        job_id=job_id,
+        format_option_id="fmt_y",
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+    )
+    dest = store.root / "published" / str(published.artifact_id)
+    assert dest.is_dir()
+
+    def _boom(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError("injected transient failure")
+
+    monkeypatch.setattr("fetchnow.downloads.artifacts.shutil.rmtree", _boom)
+    with caplog.at_level("WARNING", logger="fetchnow.downloads.artifacts"):
+        ok = store.delete_artifact(published.artifact_id)
+    assert ok is False
+    assert dest.is_dir()
+    assert any(
+        "artifact_delete_failed" in r.getMessage()
+        and str(published.artifact_id) in r.getMessage()
+        for r in caplog.records
+    )
+    # Delivery would already be blocked by cleared DB pointers; physical
+    # leftover is cleaned by a later reconcile once aged past grace.
+    old = time.time() - _AGED
+    os.utime(dest, (old, old))
+    monkeypatch.undo()
     removed = store.reconcile(
         referenced_artifact_ids=frozenset(),
         active_attempts=frozenset(),
         limit=16,
     )
     assert removed >= 1
+    assert not dest.exists()
+
+
+def test_delete_artifact_returns_true_when_absent(tmp_path: Path) -> None:
+    store = _store(tmp_path / "root")
+    missing = uuid.uuid4()
+    assert store.delete_artifact(missing) is True
+
+
+def test_reconcile_keeps_referenced_after_failed_peer_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Referenced artifact survives reconcile even if delete fails elsewhere."""
+    store = _store(tmp_path / "root", max_bytes=2048)
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    (workspace.output / "artifact.mp4").write_bytes(b"active")
+    published = store.publish(
+        workspace=workspace,
+        expected_container="mp4",
+        job_id=job_id,
+        format_option_id="fmt_z",
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+    )
+    dest = store.root / "published" / str(published.artifact_id)
+    old = time.time() - _AGED
+    os.utime(dest, (old, old))
+
+    def _boom(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError("should not be reached for referenced keep path")
+
+    monkeypatch.setattr("fetchnow.downloads.artifacts.shutil.rmtree", _boom)
+    removed = store.reconcile(
+        referenced_artifact_ids=frozenset({published.artifact_id}),
+        active_attempts=frozenset(),
+        limit=16,
+    )
+    assert removed == 0
+    assert dest.is_dir()
+
+
+def test_repeated_reconcile_is_idempotent_after_cleanup(tmp_path: Path) -> None:
+    store = _store(tmp_path / "root", max_bytes=1024)
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    (workspace.output / "artifact.mp4").write_bytes(b"once")
+    published = store.publish(
+        workspace=workspace,
+        expected_container="mp4",
+        job_id=job_id,
+        format_option_id="fmt_once",
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+    )
+    dest = store.root / "published" / str(published.artifact_id)
+    old = time.time() - _AGED
+    os.utime(dest, (old, old))
+    first = store.reconcile(
+        referenced_artifact_ids=frozenset(),
+        active_attempts=frozenset(),
+        limit=16,
+    )
+    second = store.reconcile(
+        referenced_artifact_ids=frozenset(),
+        active_attempts=frozenset(),
+        limit=16,
+    )
+    assert first >= 1
+    assert second == 0
     assert not dest.exists()
 
 

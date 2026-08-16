@@ -260,12 +260,30 @@ class MediaJobWorkerRunner:
             referenced_artifacts = await repo.list_referenced_artifact_ids()
             await session.commit()
 
+        # DB pointers are already cleared in expire_due_jobs (committed above),
+        # so delivery cannot reopen these artifacts even if physical delete fails.
+        # Failed deletes become unreferenced publications; reconcile retries them.
         for artifact_id in expired_artifacts:
             try:
-                store.delete_artifact(artifact_id)
-            except Exception:
+                deleted = store.delete_artifact(artifact_id)
+            except Exception as exc:
                 logger.warning(
-                    "download_artifact_delete_failed artifact_kind=expired"
+                    "artifact_delete_failed artifact_id=%s error_class=%s "
+                    "reason=expired",
+                    artifact_id,
+                    type(exc).__name__,
+                )
+                continue
+            if deleted:
+                logger.info(
+                    "artifact_delete_succeeded artifact_id=%s reason=expired",
+                    artifact_id,
+                )
+            else:
+                logger.warning(
+                    "artifact_delete_failed artifact_id=%s error_class=OSError "
+                    "reason=expired; will_retry_via_reconcile=true",
+                    artifact_id,
                 )
 
         # Protect in-memory claims that may not yet be visible as DOWNLOADING
@@ -280,7 +298,10 @@ class MediaJobWorkerRunner:
                 limit=64,
             )
             if removed:
-                logger.info("download_orphan_sweep_removed count=%s", removed)
+                logger.info(
+                    "download_orphan_sweep_removed count=%s",
+                    removed,
+                )
         except Exception:
             logger.exception("download_orphan_sweep_failed")
 
