@@ -189,7 +189,14 @@ describe("provider landing wiring", () => {
     expect(footer).toContain("mailto:copyright@fetchnow.online");
     expect(privacy).toContain("Редакция от 16 августа 2026 года");
     expect(privacy).toContain("Локальная статистика использования");
-    expect(terms).toContain("Раздел готовится");
+    expect(terms).toContain("Редакция от 16 августа 2026 года");
+    expect(terms).toContain("Назначение FetchNow");
+    expect(terms).not.toContain("Раздел готовится");
+    expect(terms).toContain('href="/privacy/"');
+    expect(terms).toContain('href="/copyright/"');
+    expect(terms).toContain("mailto:support@fetchnow.online");
+    expect(terms).toContain("mailto:copyright@fetchnow.online");
+    expect(copyright).toContain("Раздел готовится");
     expect(copyright).toContain("copyright@fetchnow.online");
     expect(copyright).not.toMatch(/DMCA|информационн(ый|ого) посредник/i);
   });
