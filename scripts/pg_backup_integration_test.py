@@ -3,7 +3,7 @@
 
 Creates a unique per-run Compose project under the fixed prefix
 ``fetchnow-backup-test-<suffix>``. Never touches fetchnow / fetchnow-staging /
-fetchnow-prod. Always attempts cleanup of only that run's resources.
+fetchnow-production / fetchnow-prod. Always attempts cleanup of only that run's resources.
 
 Explicitly builds the API image from the repository Dockerfile so a fresh
 GitHub-hosted runner does not depend on a pre-existing fetchnow-api:local.

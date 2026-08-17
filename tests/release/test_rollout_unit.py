@@ -535,6 +535,10 @@ def test_project_name_validator() -> None:
     with pytest.raises(RolloutProjectError):
         assert_rollout_project("fetchnow-staging")
     with pytest.raises(RolloutProjectError):
+        assert_rollout_project("fetchnow-production")
+    with pytest.raises(RolloutProjectError):
+        assert_rollout_project("fetchnow-prod")
+    with pytest.raises(RolloutProjectError):
         assert_rollout_project("fetchnow")
     with pytest.raises(RolloutProjectError):
         assert_rollout_project("fetchnow-rollout-test")

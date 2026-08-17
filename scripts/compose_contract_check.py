@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate FetchNow Compose base/dev/staging contracts (PRD1A).
+"""Validate FetchNow Compose base/dev/staging/production contracts (PRD1A + PRD1D-A).
 
 Uses `docker compose config --format json` — no extra Python deps.
 Exits non-zero on the first failed invariant.
@@ -11,7 +11,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -56,6 +55,42 @@ def _published_ports(service: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _has_host_ports(service: dict[str, Any]) -> bool:
     return bool(_published_ports(service))
+
+
+def _service_environment(service: dict[str, Any]) -> dict[str, str]:
+    raw = service.get("environment") or {}
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        out: dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, str) and "=" in item:
+                key, value = item.split("=", 1)
+                out[key] = value
+        return out
+    return {}
+
+
+def _assert_loopback_gateway(
+    service: dict[str, Any], *, label: str, expected_port: str = "8091"
+) -> None:
+    gateway_ports = _published_ports(service)
+    _assert(len(gateway_ports) == 1, f"{label}: gateway must publish exactly one port")
+    gp = gateway_ports[0]
+    published = str(gp.get("published"))
+    host_ip = gp.get("host_ip") or ""
+    published_full = published
+    if host_ip:
+        published_full = f"{host_ip}:{published}"
+    _assert(
+        published_full.startswith("127.0.0.1:") or host_ip == "127.0.0.1",
+        f"{label}: gateway must be loopback-only, got {gp!r}",
+    )
+    _assert(
+        published_full.endswith(f":{expected_port}") or str(published) == expected_port,
+        f"{label}: default gateway host port must be {expected_port}, got {gp!r}",
+    )
+    _assert(int(gp.get("target") or 0) == 8080, f"{label}: gateway target must be 8080")
 
 
 def _volume_defs(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -237,24 +272,7 @@ def check_staging_config() -> None:
             f"staging: {name} must not publish host ports",
         )
 
-    gateway_ports = _published_ports(services["gateway"])
-    _assert(len(gateway_ports) == 1, "staging: gateway must publish exactly one port")
-    gp = gateway_ports[0]
-    published = str(gp.get("published"))
-    host_ip = gp.get("host_ip") or gp.get("host_ip".upper())  # noqa: SIM910
-    # Compose JSON may place bind address in published ("127.0.0.1:8091") or host_ip.
-    published_full = published
-    if host_ip:
-        published_full = f"{host_ip}:{published}"
-    _assert(
-        published_full.startswith("127.0.0.1:") or host_ip == "127.0.0.1",
-        f"staging: gateway must be loopback-only, got {gp!r}",
-    )
-    _assert(
-        published_full.endswith(":8091") or str(published) == "8091",
-        f"staging: default gateway host port must be 8091, got {gp!r}",
-    )
-    _assert(int(gp.get("target") or 0) == 8080, "staging: gateway target must be 8080")
+    _assert_loopback_gateway(services["gateway"], label="staging")
 
     _assert(
         services["api"].get("image") == f"fetchnow-api:{revision}",
@@ -386,6 +404,200 @@ def check_staging_missing_revision_fails() -> None:
             "staging: failure must mention FETCHNOW_RELEASE_REVISION",
         )
     print("OK: staging fail-closed for missing FETCHNOW_RELEASE_REVISION")
+
+
+def check_production_config() -> None:
+    example = ROOT / ".env.production.example"
+    _assert(example.is_file(), ".env.production.example must exist")
+    _assert(
+        not (ROOT / "deploy" / "compose" / "compose.prod.yaml").exists(),
+        "retired deploy/compose/compose.prod.yaml must not exist",
+    )
+    revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = Path(tmp) / ".env.production"
+        text = example.read_text(encoding="utf-8")
+        text = text.replace(
+            "replace-with-32plus-url-safe-production-password",
+            "production-contract-check-password-xxxx",
+        )
+        text = text.replace(
+            "0000000000000000000000000000000000000000",
+            revision,
+        )
+        env_path.write_text(text, encoding="utf-8")
+
+        cfg = _run_compose(
+            [
+                "--env-file",
+                str(env_path),
+                "--project-name",
+                "fetchnow-production",
+                "-f",
+                "compose.yaml",
+                "-f",
+                "compose.production.yaml",
+            ],
+            env={"COMPOSE_PROJECT_NAME": "fetchnow-production"},
+        )
+
+    _assert(cfg.get("name") == "fetchnow-production", "production: wrong project name")
+    _check_no_container_name(cfg, "production")
+    _check_volumes_project_scoped(cfg, "production")
+    _check_no_bind_mounts(cfg, "production")
+    _check_no_reload_command(cfg, "production")
+
+    services = _services(cfg)
+    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
+        _assert(required in services, f"production: missing service {required}")
+
+    for name in ("api", "worker", "web", "postgres", "delivery", "storage-init"):
+        _assert(
+            not _has_host_ports(services[name]),
+            f"production: {name} must not publish host ports",
+        )
+
+    _assert_loopback_gateway(services["gateway"], label="production")
+
+    for name in ("api", "worker", "delivery"):
+        env = _service_environment(services[name])
+        _assert(
+            env.get("APP_ENV") == "production",
+            f"production: {name} APP_ENV must be production, got {env.get('APP_ENV')!r}",
+        )
+
+    _assert(
+        services["api"].get("image") == f"fetchnow-api:{revision}",
+        "production: api image must use full SHA tag",
+    )
+    _assert(
+        services["worker"].get("image") == f"fetchnow-api:{revision}",
+        "production: worker must share api image tag",
+    )
+    _assert(
+        services["delivery"].get("image") == f"fetchnow-api:{revision}",
+        "production: delivery must share api image tag",
+    )
+    _assert(
+        services["storage-init"].get("image") == f"fetchnow-api:{revision}",
+        "production: storage-init must share api image tag",
+    )
+    _assert_storage_init_least_privilege(services["storage-init"], "production")
+    _assert(
+        services["web"].get("image") == f"fetchnow-web:{revision}",
+        "production: web image must use full SHA tag",
+    )
+    _assert(
+        services["gateway"].get("image") == f"fetchnow-gateway:{revision}",
+        "production: gateway image must use full SHA tag",
+    )
+    _assert(
+        str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
+        "production: postgres image must remain pinned",
+    )
+
+    vols = _volume_defs(cfg)
+    for key in ("pgdata", "tmp"):
+        name = vols[key].get("name") if isinstance(vols[key], dict) else None
+        _assert(
+            name == f"fetchnow-production_{key}",
+            f"production: volume {key} must render as fetchnow-production_{key}, got {name!r}",
+        )
+
+    networks = cfg.get("networks") or {}
+    _assert("fetchnow" in networks, "production: missing fetchnow network")
+    print("OK: production compose contract")
+
+
+def check_production_missing_password_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = Path(tmp) / ".env.production"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "COMPOSE_PROJECT_NAME=fetchnow-production",
+                    "FETCHNOW_RELEASE_REVISION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "GATEWAY_PORT=127.0.0.1:8091",
+                    "APP_ENV=production",
+                    "LOG_LEVEL=INFO",
+                    "PUBLIC_SITE_URL=https://fetchnow.online",
+                    "POSTGRES_DB=fetchnow",
+                    "POSTGRES_USER=fetchnow",
+                    # POSTGRES_PASSWORD intentionally omitted
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cmd = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(env_path),
+            "--project-name",
+            "fetchnow-production",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.production.yaml",
+            "config",
+        ]
+        proc = subprocess.run(
+            cmd, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        _assert(proc.returncode != 0, "production: missing password must fail closed")
+        blob = (proc.stderr or "") + (proc.stdout or "")
+        _assert(
+            "POSTGRES_PASSWORD" in blob,
+            "production: failure message must mention POSTGRES_PASSWORD",
+        )
+    print("OK: production fail-closed for missing POSTGRES_PASSWORD")
+
+
+def check_production_missing_revision_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = Path(tmp) / ".env.production"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "COMPOSE_PROJECT_NAME=fetchnow-production",
+                    "GATEWAY_PORT=127.0.0.1:8091",
+                    "APP_ENV=production",
+                    "PUBLIC_SITE_URL=https://fetchnow.online",
+                    "POSTGRES_DB=fetchnow",
+                    "POSTGRES_USER=fetchnow",
+                    "POSTGRES_PASSWORD=production-contract-check-password-xxxx",
+                    # FETCHNOW_RELEASE_REVISION intentionally omitted
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cmd = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(env_path),
+            "--project-name",
+            "fetchnow-production",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.production.yaml",
+            "config",
+        ]
+        proc = subprocess.run(
+            cmd, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        _assert(proc.returncode != 0, "production: missing revision must fail closed")
+        blob = (proc.stderr or "") + (proc.stdout or "")
+        _assert(
+            "FETCHNOW_RELEASE_REVISION" in blob,
+            "production: failure must mention FETCHNOW_RELEASE_REVISION",
+        )
+    print("OK: production fail-closed for missing FETCHNOW_RELEASE_REVISION")
+
 
 
 def check_isolation_render() -> None:
@@ -848,6 +1060,41 @@ def check_search_indexing_flag() -> None:
         == "false",
         "staging: PUBLIC_SEARCH_INDEXING_ENABLED must be hard-coded false",
     )
+    production_off = _run_compose(
+        ["-f", "compose.yaml", "-f", "compose.production.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow-production",
+            "POSTGRES_PASSWORD": "production-contract-check-password-xxxx",
+            "POSTGRES_USER": "fetchnow",
+            "POSTGRES_DB": "fetchnow",
+            "FETCHNOW_RELEASE_REVISION": "b" * 40,
+            "PUBLIC_SITE_URL": "https://fetchnow.online",
+        },
+    )
+    production_off_args = _web_build_args(_services(production_off)["web"])
+    _assert(
+        str(production_off_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower()
+        == "false",
+        "production: PUBLIC_SEARCH_INDEXING_ENABLED must default false",
+    )
+    production_on = _run_compose(
+        ["-f", "compose.yaml", "-f", "compose.production.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow-production",
+            "POSTGRES_PASSWORD": "production-contract-check-password-xxxx",
+            "POSTGRES_USER": "fetchnow",
+            "POSTGRES_DB": "fetchnow",
+            "FETCHNOW_RELEASE_REVISION": "b" * 40,
+            "PUBLIC_SITE_URL": "https://fetchnow.online",
+            "PUBLIC_SEARCH_INDEXING_ENABLED": "true",
+        },
+    )
+    production_on_args = _web_build_args(_services(production_on)["web"])
+    _assert(
+        str(production_on_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "")).lower()
+        == "true",
+        "production: PUBLIC_SEARCH_INDEXING_ENABLED must interpolate operator true",
+    )
     print("OK: search indexing flag defaults false; staging hard-closed")
 
 
@@ -941,6 +1188,9 @@ def main() -> int:
     check_staging_config()
     check_staging_missing_password_fails()
     check_staging_missing_revision_fails()
+    check_production_config()
+    check_production_missing_password_fails()
+    check_production_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
     check_muxing_and_storage_init()

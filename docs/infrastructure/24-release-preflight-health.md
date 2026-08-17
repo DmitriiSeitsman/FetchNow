@@ -111,7 +111,7 @@ tag fallback in managed mode and no CLI option for operator-supplied image IDs.
 
 Omitting `--deploy-root` retains the historical tag-based check **only** for
 strictly validated isolated projects named `fetchnow-health-test-<suffix>`.
-Protected managed projects (`fetchnow-staging`, `fetchnow-prod`, `fetchnow`, and
+Protected managed projects (`fetchnow-staging`, `fetchnow-production`, `fetchnow-prod`, `fetchnow`, and
 any other non-matching name) fail closed without `--deploy-root` so operators
 cannot accidentally obtain a misleading tag-mode result against ID-pinned
 containers. Protected staging use through `make release-health` always passes
@@ -156,7 +156,7 @@ the isolated tag-based scenario. Rollout integration additionally proves that an
 immutable-ID bootstrap publishes schema-v2 `current.json` and that the real managed
 standalone health CLI succeeds from that authority. Ancestry integration uses a
 disposable temporary Git repository (never mutates real `origin/main`). Never
-touches `fetchnow` / `fetchnow-staging` / `fetchnow-prod`. CI cleanup uses
+touches `fetchnow` / `fetchnow-staging` / `fetchnow-production` / `fetchnow-prod`. CI cleanup uses
 `if: always()`.
 
 ## Boundaries

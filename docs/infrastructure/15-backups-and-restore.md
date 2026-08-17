@@ -150,7 +150,7 @@ make pg-backup-test            # unit
 make pg-backup-integration     # unique project fetchnow-backup-test-<suffix>; builds API image
 ```
 
-Integration always uses a per-run project name matching `fetchnow-backup-test-[a-z0-9]{8,32}` and refuses `fetchnow`, `fetchnow-staging`, `fetchnow-prod`, and the bare shared name `fetchnow-backup-test`. `down -v` is allowed only for that exact validated name. CI runs this in a dedicated **Postgres backup restore integration** job that explicitly builds the API image on a fresh runner (no shared Docker state with other jobs).
+Integration always uses a per-run project name matching `fetchnow-backup-test-[a-z0-9]{8,32}` and refuses `fetchnow`, `fetchnow-staging`, `fetchnow-production`, `fetchnow-prod`, and the bare shared name `fetchnow-backup-test`. `down -v` is allowed only for that exact validated name. CI runs this in a dedicated **Postgres backup restore integration** job that explicitly builds the API image on a fresh runner (no shared Docker state with other jobs).
 
 ## Ошибки и rollback
 

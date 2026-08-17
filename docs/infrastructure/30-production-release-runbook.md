@@ -14,9 +14,11 @@ release state, and backups.
 allowlist are still staging-shaped (`fetchnow-staging`,
 `compose.staging.yaml`). Passing `--project-name fetchnow-production`
 is **not** supported until the parameterization milestone in
-[§12](#12-future-milestone-production-parameterization) lands. Do not
-improvise production deploys with the staging project name, staging
-deploy root, or `deploy/compose/compose.prod.yaml` as a substitute.
+[§12](#12-future-milestone-production-parameterization) (PRD1D-B) lands.
+The canonical overlay `compose.production.yaml` and
+`.env.production.example` exist (PRD1D-A) but are **not** a substitute
+for that pipeline. Do not improvise production deploys with the staging
+project name, staging deploy root, or ad-hoc `docker compose up`.
 
 ## Target topology (planned)
 
@@ -180,10 +182,11 @@ and the operator intentionally publishes the domain.
 ### Boundaries
 
 - Container gateway never terminates public TLS.
-- `deploy/compose/compose.prod.yaml` currently defaults gateway publish
-  to host `:80` and is **not** on the release path — do not use it for
-  production until replaced by a loopback fail-closed overlay accepted
-  by the source contract (see §12).
+- Canonical overlay is repo-root `compose.production.yaml` (loopback
+  gateway, fail-closed secrets/SHA, `APP_ENV=production`). It is **not**
+  on the release Make/CLI path until PRD1D-B. The retired fragment
+  `deploy/compose/compose.prod.yaml` (host `:80`) no longer exists and
+  must not be reintroduced.
 
 ---
 
@@ -196,10 +199,9 @@ and the operator intentionally publishes the domain.
 
 - Path: `/srv/fetchnow-production/env/.env.production`
 - Mode: `600`, owner = operator account
-- Start from a **production example** once the parameterization
-  milestone ships (today only `.env.staging.example` exists). Until
-  then, derive the contract from `.env.staging.example` and this
-  chapter, substituting production names/paths/domains.
+- Start from `.env.production.example` (placeholders only; never commit
+  a real `.env.production`). Release preflight/Make still do not consume
+  this file until PRD1D-B.
 
 ### Classes of values that must differ from staging
 
@@ -640,9 +642,9 @@ would create false confidence.
    forbidden in test naming and is **not** an allowlisted env).
 2. Introduce a production compose overlay that matches the release
    safety model: fail-closed secrets/revision interpolation, loopback
-   gateway publish, `APP_ENV=production`. Replace or retire the current
-   `deploy/compose/compose.prod.yaml` host-`:80` fragment for release
-   use.
+   gateway publish, `APP_ENV=production`. **Done in PRD1D-A**
+   (`compose.production.yaml`; `deploy/compose/compose.prod.yaml`
+   retired). Overlay is still unused by release Make/CLI until PRD1D-B.
 3. Parameterize Make defaults or add explicit production targets so
    `--project-name`, `--compose-file` list, `ENV_FILE`, `DEPLOY_ROOT`,
    and `BACKUP_ROOT` are not hard-coded to staging.
@@ -651,7 +653,8 @@ would create false confidence.
    overlay when the project is production (today they always select
    `compose.staging.yaml` from the snapshot).
 5. Add `.env.production.example` (placeholders only) documenting the
-   production contract.
+   production contract. **Done in PRD1D-A**; not consumed by Make/CLI
+   until PRD1D-B.
 6. Keep gateway health URL loopback-only; document production public
    HTTPS as operator smoke, not CLI health authority.
 7. Update chapters 06/21/24–29 cross-links once Make target names are
@@ -667,7 +670,6 @@ would create false confidence.
 | Required source file `compose.staging.yaml` | release source contract (C2) |
 | Runtime compose always `compose.yaml` + `compose.staging.yaml` | rollout / migrate / recover |
 | Preflight password helper / messaging named “staging” | preflight helpers |
-| Optional prod fragment publishes `:80` | `deploy/compose/compose.prod.yaml` |
 
 ### Out of scope for that milestone
 
@@ -706,8 +708,10 @@ substitute for host/Nginx/TLS operator work.
 3. TLS certificate not issued.
 4. `.env.production` with real secrets not created (and must not be
    created in Git).
-5. Release Make/CLI still staging-shaped (§12).
-6. No production compose overlay accepted by the source contract.
+5. Release Make/CLI still staging-shaped (§12 / PRD1D-B).
+6. Production overlay exists (`compose.production.yaml`) but is **not**
+   yet selected by the prepared-release source contract or runtime
+   rollout/migrate/recover (PRD1D-B).
 7. Staging acceptance process for each SHA must remain the promotion
    gate once production exists.
 8. Off-host backup copy still planned (same residual risk as staging

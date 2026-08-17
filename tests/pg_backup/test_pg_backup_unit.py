@@ -331,6 +331,7 @@ def test_integration_project_name_safety() -> None:
         "fetchnow",
         "fetchnow-staging",
         "fetchnow-prod",
+        "fetchnow-production",
         "fetchnow-backup-test",
         "fetchnow-backup-test-",
         "other-project",
@@ -363,6 +364,7 @@ def test_project_file_cleanup_validation(tmp_path: Path) -> None:
         "fetchnow",
         "fetchnow-staging",
         "fetchnow-prod",
+        "fetchnow-production",
         "fetchnow-backup-test",
     ):
         path = tmp_path / f"{bad}.txt"
