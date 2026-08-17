@@ -1,0 +1,85 @@
+# Production overrides for FetchNow.
+#
+# Canonical production Compose overlay (PRD1D-A). Release Make/CLI remain
+# staging-shaped until PRD1D-B; do not treat this file as a deploy entry point
+# by itself.
+#
+# Always launch with an explicit project name and file set so the local
+# compose.override.yaml is NOT applied:
+#
+#   docker compose \
+#     --env-file .env.production \
+#     --project-name fetchnow-production \
+#     -f compose.yaml \
+#     -f compose.production.yaml \
+#     <command>
+#
+# Do not rely on the working-directory name for isolation.
+# Host Nginx owns public :443; this overlay publishes gateway on loopback only.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}
+
+  api:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.production}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.production}
+
+  worker:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.production}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.production}
+
+  storage-init:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  delivery:
+    image: fetchnow-api:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set in .env.production}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set in .env.production}
+
+  web:
+    image: fetchnow-web:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:?PUBLIC_SITE_URL must be set in .env.production}
+        PUBLIC_MEDIA_FLOW_ENABLED: ${PUBLIC_MEDIA_FLOW_ENABLED:-false}
+        # Operator choice; default false until official launch. Unlike staging,
+        # this overlay interpolates the env value instead of hard-coding false.
+        PUBLIC_SEARCH_INDEXING_ENABLED: ${PUBLIC_SEARCH_INDEXING_ENABLED:-false}
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+
+  gateway:
+    image: fetchnow-gateway:${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    build:
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:?FETCHNOW_RELEASE_REVISION must be a full 40-char lowercase Git SHA}
+    # Loopback-only publish. Default already includes 127.0.0.1 so a missing
+    # GATEWAY_PORT cannot bind 0.0.0.0:80. Host Nginx terminates public TLS.
+    # Override with GATEWAY_PORT=127.0.0.1:<port> in .env.production if needed.
+    ports:
+      - "${GATEWAY_PORT:-127.0.0.1:8091}:8080"

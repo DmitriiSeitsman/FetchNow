@@ -18,6 +18,7 @@ _EXACT_FORBIDDEN = frozenset(
         "secret",
         "replace-with-unique-staging-password",
         "replace-with-32plus-url-safe-staging-password",
+        "replace-with-32plus-url-safe-production-password",
     }
 )
 

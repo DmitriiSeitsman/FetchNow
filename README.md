@@ -186,7 +186,7 @@ make migration m="add something"
 
 Staging PostgreSQL backup/restore-verify tooling: `make pg-backup-create|verify|list|prune-dry` (see Infrastructure Handbook ch. 15). Isolated integration: `make pg-backup-integration` (unique `fetchnow-backup-test-<suffix>` project only).
 
-Release identity / read-only preflight & health (PRD1C1): `make release-preflight|release-health EXPECTED_REVISION=<40-char-sha> ENV_FILE=... DEPLOY_ROOT=...`. Preflight requires the revision to already be contained in local `origin/main` and does not fetch. Protected staging health reads schema-v2 `current.json` and validates exact immutable image IDs. Omitting `DEPLOY_ROOT` is allowed only for validated `fetchnow-health-test-*` projects; protected names (`fetchnow-staging`, `fetchnow-prod`, …) fail closed without managed mode. External env files are consumed in place—no repository-local secret copy or symlink is required. A newer tooling checkout may recheck an older deployed revision without rebuild/restart. Exact-revision materialization & image build (PRD1C2): `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` and `make release-verify ...` (no compose up). PRD1C3A adds application-only `make release-rollout ... [BOOTSTRAP=1]` and explicit `make release-recover ...`; it uses immutable image IDs and never performs a DB migration. Isolated transaction coverage: `make release-rollout-integration`. See Infrastructure Handbook ch. 24–26; repository tooling does not claim that this hotfix is deployed to staging.
+Release identity / read-only preflight & health (PRD1C1): `make release-preflight|release-health EXPECTED_REVISION=<40-char-sha> ENV_FILE=... DEPLOY_ROOT=...`. Preflight requires the revision to already be contained in local `origin/main` and does not fetch. Protected staging health reads schema-v2 `current.json` and validates exact immutable image IDs. Omitting `DEPLOY_ROOT` is allowed only for validated `fetchnow-health-test-*` projects; protected names (`fetchnow-staging`, `fetchnow-production`, `fetchnow-prod`, …) fail closed without managed mode. External env files are consumed in place—no repository-local secret copy or symlink is required. A newer tooling checkout may recheck an older deployed revision without rebuild/restart. Exact-revision materialization & image build (PRD1C2): `make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=... DEPLOY_ROOT=...` and `make release-verify ...` (no compose up). PRD1C3A adds application-only `make release-rollout ... [BOOTSTRAP=1]` and explicit `make release-recover ...`; it uses immutable image IDs and never performs a DB migration. Isolated transaction coverage: `make release-rollout-integration`. See Infrastructure Handbook ch. 24–26; repository tooling does not claim that this hotfix is deployed to staging.
 
 ## Configuration
 
@@ -196,8 +196,9 @@ All runtime configuration is environment-driven. Templates:
 - `web/.env.example`
 - root `.env.example` (local Compose knobs; set `COMPOSE_PROJECT_NAME=fetchnow`)
 - `.env.staging.example` → gitignored `.env.staging` for staging
+- `.env.production.example` → gitignored `.env.production` (placeholders only; not a deploy entry point until PRD1D-B)
 
-Compose injects service environment in `compose.yaml`. Local overrides live in `compose.override.yaml` (auto-loaded). Staging uses explicit `-f compose.yaml -f compose.staging.yaml` with `--project-name fetchnow-staging`. An optional production-shaped fragment remains in `deploy/compose/compose.prod.yaml`.
+Compose injects service environment in `compose.yaml`. Local overrides live in `compose.override.yaml` (auto-loaded). Staging uses explicit `-f compose.yaml -f compose.staging.yaml` with `--project-name fetchnow-staging`. The canonical production overlay is `compose.production.yaml` (`--project-name fetchnow-production`, loopback gateway). Release Make/CLI remain staging-shaped until PRD1D-B.
 
 ## Repository layout
 

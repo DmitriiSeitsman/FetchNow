@@ -74,6 +74,8 @@ def test_migration_project_validation() -> None:
         assert_migration_project("fetchnow-staging")
     with pytest.raises(MigrationProjectError):
         assert_migration_project("fetchnow-prod")
+    with pytest.raises(MigrationProjectError):
+        assert_migration_project("fetchnow-production")
 
 
 def test_empty_heads_rejected() -> None:

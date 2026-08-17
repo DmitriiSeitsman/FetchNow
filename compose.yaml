@@ -298,8 +298,8 @@ services:
         FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
     image: fetchnow-gateway:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
-    # Host ports are published only by compose.override.yaml (local) or
-    # compose.staging.yaml / deploy/compose/compose.prod.yaml.
+    # Host ports are published only by compose.override.yaml (local),
+    # compose.staging.yaml, or compose.production.yaml.
     networks:
       - fetchnow
     depends_on:

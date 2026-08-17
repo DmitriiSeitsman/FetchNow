@@ -104,6 +104,8 @@ def test_password_policy() -> None:
     with pytest.raises(PasswordError):
         validate_staging_password("replace-with-32plus-url-safe-staging-password")
     with pytest.raises(PasswordError):
+        validate_staging_password("replace-with-32plus-url-safe-production-password")
+    with pytest.raises(PasswordError):
         validate_staging_password("x" * 32 + "@evil")
     with pytest.raises(PasswordError):
         validate_staging_password("fetchnow")

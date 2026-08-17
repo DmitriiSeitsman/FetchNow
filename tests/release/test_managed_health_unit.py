@@ -359,6 +359,7 @@ def test_isolated_tag_mode_still_passes_for_health_test_project(
     [
         "fetchnow-staging",
         "fetchnow-prod",
+        "fetchnow-production",
         "fetchnow",
         "fetchnow-health-test",
         "fetchnow-health-test-SHORT",

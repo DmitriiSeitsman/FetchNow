@@ -16,6 +16,7 @@ FORBIDDEN = frozenset(
         "",
         "fetchnow",
         "fetchnow-staging",
+        "fetchnow-production",
         "fetchnow-prod",
         "fetchnow-migration-test",
     }

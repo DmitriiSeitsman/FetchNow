@@ -96,4 +96,4 @@ make release-recover \
 | PRD1D | host Nginx/TLS/public publish and production operationalization |
 | PRD1D-prod-param | parameterize release Make/CLI/source contract for `fetchnow-production` — see [chapter 30](30-production-release-runbook.md) §12 |
 
-Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, or `fetchnow-prod`.
+Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, `fetchnow-production`, or `fetchnow-prod`.

@@ -13,6 +13,7 @@ FORBIDDEN = frozenset(
         "",
         "fetchnow",
         STAGING_PROJECT,
+        "fetchnow-production",
         "fetchnow-prod",
         "fetchnow-health-test",
         HEALTH_TEST_PROJECT_PREFIX.rstrip("-"),

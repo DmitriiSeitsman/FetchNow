@@ -14,6 +14,7 @@ FORBIDDEN_PROJECTS = frozenset(
         "",
         "fetchnow",
         "fetchnow-staging",
+        "fetchnow-production",
         "fetchnow-prod",
         "fetchnow-backup-test",
     }

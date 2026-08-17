@@ -2,7 +2,7 @@
 
 ## Фактический inventory
 
-Источник — `compose.yaml`, `compose.override.yaml`, `compose.staging.yaml`, `deploy/compose/compose.prod.yaml` и Dockerfiles.
+Источник — `compose.yaml`, `compose.override.yaml`, `compose.staging.yaml`, `compose.production.yaml` и Dockerfiles.
 
 | Service | Image/build | Port/publish | User | Health, dependency, volume |
 |---|---|---|---|---|

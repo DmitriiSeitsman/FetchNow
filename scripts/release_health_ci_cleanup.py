@@ -11,7 +11,7 @@ from pathlib import Path
 
 PROJECT_RE = re.compile(r"^fetchnow-health-test-[a-z0-9]{8,32}$")
 FORBIDDEN = frozenset(
-    {"", "fetchnow", "fetchnow-staging", "fetchnow-prod", "fetchnow-health-test"}
+    {"", "fetchnow", "fetchnow-staging", "fetchnow-production", "fetchnow-prod", "fetchnow-health-test"}
 )
 
 

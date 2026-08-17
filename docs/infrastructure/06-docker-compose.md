@@ -13,7 +13,7 @@ Compose interpolation (файл `.env` рядом с Compose / `--env-file`) п�
 | `compose.yaml` | нейтральная топология: gateway/api/worker/postgres/web/delivery/`storage-init`, network, logical volumes `pgdata`/`tmp`, healthchecks; **без** host ports и **без** top-level `name:` |
 | `compose.override.yaml` | local-only: gateway `8080`, api debug `8000`, `APP_ENV=development` |
 | `compose.staging.yaml` | staging-only: loopback gateway, fail-closed Postgres secrets, без override |
-| `deploy/compose/compose.prod.yaml` | optional production-shaped fragment (host gateway port) |
+| `compose.production.yaml` | canonical production overlay: loopback gateway, fail-closed secrets/SHA, `APP_ENV=production`; **не** является operator deploy entry point, пока Make/CLI не параметризованы (PRD1D-B) |
 
 Имена project задаются только через `COMPOSE_PROJECT_NAME` / `--project-name`. Top-level Compose `name:` и `container_name` запрещены.
 
@@ -107,12 +107,20 @@ docker compose \
 
 **CHECK** rendered staging: services include gateway/api/worker/postgres/web/delivery/`storage-init`; единственная host-публикация gateway `127.0.0.1:8091→8080`; нет host ports у postgres/api/worker/web/delivery/storage-init; volume names `fetchnow-staging_*`; нет bind mounts и reload/watch. `storage-init` — oneshot без `sleep`, `network_mode: none`, без `DATABASE_URL`; worker и delivery ждут `service_completed_successfully` для local Compose. Release rollout не полагается на `depends_on` (`--no-deps`) и выполняет initializer явно.
 
+## Production overlay (PRD1D-A)
+
+Canonical file: `compose.production.yaml` with `--project-name fetchnow-production` and `.env.production` (example: `.env.production.example`). Gateway publish is loopback-only (`127.0.0.1:8091` default). `APP_ENV` is hard-coded `production`. Secrets and `FETCHNOW_RELEASE_REVISION` are fail-closed.
+
+This overlay is **not** a release deploy entry point. Make recipes and the release CLI remain staging-shaped until PRD1D-B. Do not `docker compose up` this overlay as a substitute for the transactional pipeline. The retired fail-open fragment `deploy/compose/compose.prod.yaml` no longer exists.
+
+**CHECK** rendered production: project `fetchnow-production`; volumes `fetchnow-production_*`; gateway loopback `127.0.0.1:8091→8080`; no host ports on postgres/api/worker/web/delivery/storage-init; `APP_ENV=production` on api/worker/delivery.
+
 ## Release identity (PRD1C1)
 
 Application images use one variable `FETCHNOW_RELEASE_REVISION`:
 
 - development: defaults to `local`
-- staging: fail-closed full 40-char lowercase SHA on image tags and build args
+- staging / production overlay: fail-closed full 40-char lowercase SHA on image tags and build args
 
 API and worker share `fetchnow-api:<revision>`. Web/gateway use the same revision. Postgres remains pinned. See [глава 24](24-release-preflight-health.md).
 

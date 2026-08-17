@@ -54,7 +54,7 @@ Internet
 
 **PRD1C3B2B2 (verified migration transaction):** journaled forward migration under rollout lock with B2B1 backup proof, retention holds, Alembic from target release image, atomic database-side `current.json` commit, and explicit recovery — without application activation. См. [главу 29](29-verified-migration-transaction.md).
 
-**Production release design (docs only):** planned production host/domain isolation, bootstrap vs routine release, migration/rollback/smoke/GO-NO-GO, and the future `PRD1D-prod-param` parameterization milestone are documented in [главе 30](30-production-release-runbook.md). This does **not** claim a production server exists or that Make/CLI already accept `fetchnow-production`.
+**Production release design:** planned production host/domain isolation, bootstrap vs routine release, migration/rollback/smoke/GO-NO-GO, and `PRD1D-prod-param` (PRD1D-A overlay/env contract landed; Make/CLI parameterization is PRD1D-B) are documented in [главе 30](30-production-release-runbook.md). This does **not** claim Make/CLI already accept `fetchnow-production`.
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
 
