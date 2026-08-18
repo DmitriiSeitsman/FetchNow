@@ -90,3 +90,23 @@ def test_production_prepare_make_omits_backup_root_deploy_plan_keeps_canonical()
     assert "--backup-root /srv/fetchnow-production/backups" in plan
     assert "--project-name fetchnow-production" in plan
     assert "fetchnow-staging" not in plan
+
+
+def test_production_bootstrap_db_wrapper_stays_production() -> None:
+    output = _make_n(
+        "production-release-bootstrap-db",
+        EXPECTED_REVISION=REVISION,
+        PROJECT_NAME="fetchnow-staging",
+        COMPOSE_OVERLAY="compose.staging.yaml",
+        DEPLOY_ROOT="/srv/fetchnow-staging",
+        ENV_FILE=".env.staging",
+        BACKUP_ROOT="/srv/fetchnow-staging/backups",
+    )
+    assert "bootstrap-db" in output
+    assert "--project-name fetchnow-production" in output
+    assert "--compose-file compose.production.yaml" in output
+    assert "--env-file /srv/fetchnow-production/env/.env.production" in output
+    assert "--deploy-root /srv/fetchnow-production" in output
+    assert "fetchnow-staging" not in output
+    assert "compose.staging.yaml" not in output
+    assert "--backup-root" not in output

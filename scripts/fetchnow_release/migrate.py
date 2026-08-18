@@ -415,6 +415,14 @@ def run_migration(inp: MigrationInput) -> MigrationResult:
                     "unresolved migration journal(s) block new migration: "
                     + ", ".join(unresolved_migrations)
                 )
+            from .bootstrap_journal import find_unresolved_bootstraps
+
+            unresolved_bootstraps = find_unresolved_bootstraps(deploy)
+            if unresolved_bootstraps:
+                raise MigrationError(
+                    "unresolved bootstrap journal(s) block migration: "
+                    + ", ".join(unresolved_bootstraps)
+                )
 
             plan_input = MigrationPlanInput(
                 project_name=inp.project_name,

@@ -5,8 +5,9 @@
 	release-rollout-test release-rollout release-recover release-rollout-integration \
 	release-deploy-plan-test release-deploy-plan-integration \
 	release-migration-test release-migrate release-migration-recover release-migration-integration \
+	release-bootstrap-db-integration \
 	production-release-preflight production-release-prepare production-release-verify \
-	production-release-deploy-plan production-release-migrate production-release-migration-recover \
+	production-release-deploy-plan production-release-bootstrap-db production-release-migrate production-release-migration-recover \
 	production-release-rollout production-release-recover production-release-health \
 	production-pg-backup-create production-pg-backup-verify
 
@@ -249,6 +250,9 @@ release-migration-recover:
 release-migration-integration:
 	$(PYTHON) scripts/release_migration_integration_test.py
 
+release-bootstrap-db-integration:
+	$(PYTHON) scripts/release_bootstrap_db_integration_test.py
+
 # Production wrappers hardcode the canonical production bundle as recipe
 # literals so command-line PROJECT_NAME/COMPOSE_OVERLAY/ENV_FILE/DEPLOY_ROOT
 # overrides cannot redirect a production-* target to staging.
@@ -292,6 +296,17 @@ production-release-deploy-plan:
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root /srv/fetchnow-production \
 		--backup-root /srv/fetchnow-production/backups
+
+production-release-bootstrap-db:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-bootstrap-db EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) bootstrap-db \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production
 
 production-release-migrate:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-migrate EXPECTED_REVISION=<40-char-sha>' && exit 1)

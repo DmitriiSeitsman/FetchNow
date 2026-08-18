@@ -84,6 +84,7 @@ def run_alembic_upgrade(
     target_heads: tuple[str, ...] | frozenset[str],
     migration_id: str,
     target_revision: str,
+    extra_env: dict[str, str] | None = None,
 ) -> AlembicMigrateResult:
     from datetime import UTC, datetime
 
@@ -100,6 +101,8 @@ def run_alembic_upgrade(
         f"COMPOSE_LABEL_{LABEL_MIGRATION_ID}": migration_id,
         f"COMPOSE_LABEL_{LABEL_MIGRATION_REVISION}": target_revision,
     }
+    if extra_env:
+        env.update(extra_env)
     proc = subprocess.run(
         argv,
         cwd=str(cwd),

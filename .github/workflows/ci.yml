@@ -331,6 +331,37 @@ jobs:
             --project-file "${RUNNER_TEMP}/fetchnow-migration-project.txt" \
             --repo-root "${GITHUB_WORKSPACE}"
 
+  release-bootstrap-db-integration:
+    name: Initial database bootstrap integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Initial DB bootstrap integration
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_bootstrap_db_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-bootstrap-project.txt" \
+            --dirty-project-file "${RUNNER_TEMP}/fetchnow-bootstrap-dirty-project.txt"
+      - name: Cleanup bootstrap integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/release_bootstrap_db_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-bootstrap-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+          python3 scripts/release_bootstrap_db_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-bootstrap-dirty-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   web:
     name: Web
     runs-on: ubuntu-latest

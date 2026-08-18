@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import STAGING_PROJECT, __version__
+from .bootstrap_db import BootstrapDbInput, run_bootstrap_db
 from .deploy_plan import DeployPlanInput, emit_deploy_plan, run_deploy_plan
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
@@ -42,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fetchnow_release",
         description=(
             "FetchNow release preflight, health, prepare, verify, "
-            "deploy-plan, application rollout & recover"
+            "deploy-plan, bootstrap-db, application rollout & recover"
         ),
     )
     parser.add_argument(
@@ -186,6 +187,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="http://127.0.0.1:8091",
     )
     mig.add_argument("--wait-lock", action="store_true")
+
+    boot = sub.add_parser(
+        "bootstrap-db",
+        help="Initial database bootstrap (schema only; no application activation)",
+    )
+    boot.add_argument("--project-name", default=STAGING_PROJECT)
+    boot.add_argument("--env-file", type=Path, required=True)
+    boot.add_argument(
+        "--compose-file", action="append", dest="compose_files", required=True
+    )
+    boot.add_argument("--expected-revision", required=True)
+    boot.add_argument("--deploy-root", type=Path, required=True)
+    boot.add_argument("--repo-root", type=Path, default=None)
+    boot.add_argument("--wait-lock", action="store_true")
 
     mrec = sub.add_parser(
         "recover-migration",
@@ -396,6 +411,24 @@ def main(argv: list[str] | None = None) -> int:
             print(line, file=sys.stdout if result.ok else sys.stderr)
         if result.already_migrated:
             print("OK: already migrated (read-only verify)")
+        return 0 if result.ok else 1
+
+    if args.command == "bootstrap-db":
+        result = run_bootstrap_db(
+            BootstrapDbInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                compose_files=_compose_files(args, repo),
+                expected_revision=args.expected_revision,
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                wait_lock=bool(args.wait_lock),
+            )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        if result.already_initialized:
+            print("OK: already initialized (exact-head verify)")
         return 0 if result.ok else 1
 
     if args.command == "recover-migration":

@@ -253,14 +253,15 @@ host prerequisites
   → filesystem + env
   → repository / release tooling checkout
   → production Make wrappers available (STOP if missing)
-  → database / storage bring-up
-  → gateway loopback + host Nginx + TLS
+  → gateway loopback + host Nginx + TLS (as required for later health)
   → preflight
   → prepare + verify (immutable SHA)
   → deploy-plan
-  → initial schema (migrate or approved empty-DB path)
-  → BOOTSTRAP application rollout
-  → health
+  → if initial_bootstrap:
+        production-release-bootstrap-db
+        verify exact DB heads
+        production-release-rollout BOOTSTRAP=1
+        production-release-health
   → production smoke
   → first verified backup
   → bootstrap report
@@ -280,10 +281,17 @@ host prerequisites
    (and the rest of `production-release-*`) hardcode `fetchnow-production`
    and `compose.production.yaml` ([§12](#12-production-parameterization-shipped-interface)).
    **STOP** if those targets are missing.
-5. **Database / storage.** Start PostgreSQL only for the production
-   project; confirm volume names are project-scoped
-   (`fetchnow-production_*`). Run storage-init as defined by the
-   release tooling (rollout runs it; do not invent a parallel path).
+5. **Do not** start PostgreSQL or run Alembic by hand. The official
+   `production-release-bootstrap-db` transaction starts **only** the
+   production postgres service from the immutable release snapshot,
+   waits until it is healthy, proves the database is **structurally
+   fresh** (missing `alembic_version` is not enough; unexpected user
+   tables/sequences/views fail closed), and applies Alembic to the
+   target release heads. Volume names stay
+   project-scoped (`fetchnow-production_*`). Storage-init still runs
+   during application bootstrap rollout — do not invent a parallel path.
+   Manual `docker compose up` / `docker compose run … alembic upgrade head`
+   is not part of production bootstrap.
 6. **Gateway / TLS.** Bring loopback gateway up enough for local
    health, then host Nginx + certificate (§2). Public DNS may wait
    until local smoke passes if cutover risk requires it — document the
@@ -292,21 +300,32 @@ host prerequisites
    expected SHA.
 8. **Prepare + verify.** Materialize immutable tree, build revision-tagged
    images, verify `release.json`.
-9. **Deploy-plan.** Confirm migration/backup requirements for the empty
-   or initial database.
-10. **Initial schema.** Use the verified migration transaction (or the
-    approved empty-DB first-migration path from
-    [chapter 29](29-verified-migration-transaction.md)). No ad-hoc SQL.
+9. **Deploy-plan.** On a proven-empty host this returns an initial
+   bootstrap plan (`initial_bootstrap=true`,
+   `initial_schema_required=true`, `migration_required=false`,
+   `verified_backup_required=false`). If the plan is an upgrade plan
+   instead, stop — this is not first deployment.
+10. **Initial schema.** Run `make production-release-bootstrap-db
+    EXPECTED_REVISION=<sha>`. Confirm live Alembic heads exactly equal
+    the target release heads. This command does **not** start
+    api/worker/web/delivery/gateway and does **not** publish
+    `current.json`. Do not use `production-release-migrate` here: that
+    transaction assumes an existing `current.json` and is an upgrade
+    path with verified backup.
 11. **Bootstrap rollout.** First application activation requires explicit
-    bootstrap acknowledgement (staging today: `BOOTSTRAP=1`). Refuses if
-    application containers or `current.json` already exist.
+    bootstrap acknowledgement: `make production-release-rollout
+    EXPECTED_REVISION=<sha> BOOTSTRAP=1`. Refuses if application
+    containers or `current.json` already exist. Requires healthy
+    postgres and exact DB heads. Publishes the first `current.json`
+    only after stabilized success.
 12. **Health.** Managed health gate (Compose state + loopback live/ready
     + image ID binding).
 13. **Smoke.** §8.
 14. **Backup.** Create + restore-verify a logical dump under
     `/srv/fetchnow-production/backups`.
-15. **Report.** SHA, image IDs, migration heads, deployment id, smoke
-    results, cert expiry, neighbour impact (if any), known deviations.
+15. **Report.** SHA, image IDs, migration heads, bootstrap id, deployment
+    id, smoke results, cert expiry, neighbour impact (if any), known
+    deviations.
 
 **DANGER:** Do not run bootstrap against staging paths. Do not use
 `docker compose down -v` on a database that has accepted data. Do not
@@ -362,6 +381,13 @@ make production-release-verify \
 make production-release-deploy-plan \
   EXPECTED_REVISION=$EXPECTED_REVISION
 
+# First deployment only, when deploy-plan prints initial_bootstrap=true:
+make production-release-bootstrap-db \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+make production-release-rollout \
+  EXPECTED_REVISION=$EXPECTED_REVISION BOOTSTRAP=1
+
+# Later deployments, when migration_required=true:
 make production-release-migrate \
   EXPECTED_REVISION=$EXPECTED_REVISION
 
@@ -698,7 +724,7 @@ Exact production commands are listed in §5.
 
 - Production host, DNS, host Nginx, TLS/Certbot.
 - Creating a real `.env.production` on that host (never in Git).
-- First production PostgreSQL / migrate / rollout.
+- First production application rollout after `production-release-bootstrap-db`.
 - Off-host backup copy.
 - Unified migrate→rollout orchestrator.
 
