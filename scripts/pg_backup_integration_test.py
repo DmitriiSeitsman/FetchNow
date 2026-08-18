@@ -18,8 +18,6 @@ import sys
 import tempfile
 import time
 import traceback
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -266,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
         print("OK: temporary restore database removed")
 
         # Corrupt a copy. Size/checksum checks must reject before any temp DB.
+        # Use the library session API directly: the operator CLI accepts only
+        # real environments (fetchnow-staging / fetchnow-production); ephemeral
+        # integration projects must go through the library path.
         corrupt_root = Path(tempfile.mkdtemp(prefix="fetchnow-pg-backup-corrupt-"))
         try:
             corrupt_dir = corrupt_root / backup_id
@@ -276,31 +277,23 @@ def main(argv: list[str] | None = None) -> int:
                 "EXPECTED: deliberately corrupted archive must be rejected "
                 "(size/checksum mismatch; not a job failure)"
             )
-            err = StringIO()
-            out = StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
-                bad = cli_main(
-                    [
-                        "verify",
-                        "--project-name",
-                        project,
-                        "--env-file",
-                        str(env_path),
-                        "--compose-file",
-                        str(ROOT / "compose.yaml"),
-                        "--backup-root",
-                        str(corrupt_root),
-                        "--backup-id",
-                        backup_id,
-                    ]
+            with open_backup_root_session(
+                backup_root=corrupt_root,
+                repo_root=ROOT,
+            ) as corrupt_session:
+                bad_result = corrupt_session.verify_backup(
+                    target=target,
+                    backup_dir=corrupt_dir,
+                    expected_alembic_heads=expected_heads,
+                    migrations_versions_dir=migrations_dir,
                 )
-            err_text = err.getvalue() + out.getvalue()
-            if bad == 0:
+            if bad_result.passed:
                 raise RuntimeError("corrupt backup was incorrectly accepted")
-            if "mismatch" not in err_text.lower() and "sha-256" not in err_text.lower():
+            reason = bad_result.failure_reason or ""
+            if "mismatch" not in reason.lower() and "sha-256" not in reason.lower():
                 raise RuntimeError(
                     "corrupt verify failed for unexpected reason "
-                    f"(expected size/checksum mismatch): {err_text!r}"
+                    f"(expected size/checksum mismatch): {reason!r}"
                 )
             print("OK: corrupted archive rejected as expected")
         finally:
@@ -331,28 +324,20 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("postgres container ID changed during verify")
         print("OK: source Postgres container ID unchanged")
 
-        wrong_heads_argv = [
-            "verify",
-            "--project-name",
-            project,
-            "--env-file",
-            str(env_path),
-            "--compose-file",
-            str(ROOT / "compose.yaml"),
-            "--backup-root",
-            str(backup_root),
-            "--backup-id",
-            backup_id,
-            "--expected-alembic-head",
-            "0000_nonexistent_head",
-            "--migrations-versions-dir",
-            str(migrations_dir),
-        ]
-        err = StringIO()
-        out = StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
-            wrong_rc = cli_main(wrong_heads_argv)
-        if wrong_rc == 0:
+        # Wrong-heads probe: verify must reject when the expected head list does
+        # not match the static migrations graph.  Use the library session API
+        # directly for the same reason as the corrupt-backup probe above.
+        with open_backup_root_session(
+            backup_root=backup_root,
+            repo_root=ROOT,
+        ) as wrong_heads_session:
+            wrong_result = wrong_heads_session.verify_backup(
+                target=target,
+                backup_dir=backup_root / backup_id,
+                expected_alembic_heads=("0000_nonexistent_head",),
+                migrations_versions_dir=migrations_dir,
+            )
+        if wrong_result.passed:
             raise RuntimeError("wrong expected heads were incorrectly accepted")
         attestation_files = list(
             (backup_root / backup_id / "verifications").glob("verify_*_passed*.json")
