@@ -70,10 +70,12 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source\|accept_target\|release_hold ...` | resolve `migration_requires_recovery` or release a stuck post-commit hold | deploy + backup root | нет* | high; explicit recovery only |
 | Release | `make release-migration-test` | migration journal + hold + Alembic helper unit tests | read-only | нет | low; pytest |
 | Release | `make release-migration-integration` | isolated migration transaction IT | unique test project only | нет* | high; `fetchnow-migration-test-*` only |
+| Release | `make release-bootstrap-db-integration` | isolated initial DB bootstrap IT | unique test project only | нет* | high; `fetchnow-bootstrap-test-*` only |
 | Release | `make production-release-preflight EXPECTED_REVISION=<sha>` | production preflight (canonical production bundle; not redirectable) | read-only | нет* | low; OK/FAIL |
 | Release | `make production-release-prepare EXPECTED_REVISION=<sha>` | production prepare from `compose.yaml` + `compose.production.yaml` | modifying deploy-root only | нет* | medium; publishes `releases/<sha>` |
 | Release | `make production-release-verify EXPECTED_REVISION=<sha>` | production verify under `/srv/fetchnow-production` | read-only | нет* | low; OK/FAIL |
 | Release | `make production-release-deploy-plan EXPECTED_REVISION=<sha>` | production deploy-plan | read-only | нет* | low; canonical JSON plan |
+| Release | `make production-release-bootstrap-db EXPECTED_REVISION=<sha>` | production initial schema bootstrap (postgres only; no `current.json`) | database | нет* | high; journaled commit or fail closed |
 | Release | `make production-release-migrate EXPECTED_REVISION=<sha>` | production verified DB migration | database + backup root | нет* | high; journaled commit or recovery |
 | Release | `make production-release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source\|accept_target` | production migration recovery | deploy + backup root | нет* | high; explicit recovery only |
 | Release | `make production-release-rollout EXPECTED_REVISION=<sha> [BOOTSTRAP=1]` | production application-only rollout | modifying app containers | нет* | high; stabilized commit or rollback |

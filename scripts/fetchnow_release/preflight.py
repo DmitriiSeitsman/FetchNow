@@ -10,6 +10,7 @@ from . import (
     MIN_FREE_BYTES,
 )
 from .compose_validate import ComposeContractError, validate_staging_rendered
+from .bootstrap_project import BootstrapProjectError, assert_bootstrap_project
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .docker_checks import (
     DockerCheckError,
@@ -47,16 +48,22 @@ def _assert_allowed_project(name: str) -> None:
         assert_rollout_project,
         assert_deploy_plan_project,
         assert_migration_project,
+        assert_bootstrap_project,
     ):
         try:
             checker(name)
             return
-        except (RolloutProjectError, DeployPlanProjectError, MigrationProjectError):
+        except (
+            RolloutProjectError,
+            DeployPlanProjectError,
+            MigrationProjectError,
+            BootstrapProjectError,
+        ):
             continue
     raise PreflightError(
         f"project name must be {STAGING.project!r}, {PRODUCTION.project!r}, "
         f"or a validated fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
-        f"fetchnow-migration-test-* name, got {name!r}"
+        f"fetchnow-migration-test-* / fetchnow-bootstrap-test-* name, got {name!r}"
     )
 
 

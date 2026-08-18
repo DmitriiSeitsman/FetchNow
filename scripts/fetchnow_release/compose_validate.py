@@ -10,6 +10,7 @@ from . import (
     EXPECTED_SERVICES,
     POSTGRES_IMAGE_PREFIX,
 )
+from .bootstrap_project import BootstrapProjectError, assert_bootstrap_project
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .environment import real_identity
 from .revision import validate_full_sha
@@ -138,6 +139,7 @@ def validate_staging_rendered(
             assert_rollout_project,
             assert_deploy_plan_project,
             assert_migration_project,
+            assert_bootstrap_project,
         ):
             try:
                 checker(expected_project)
@@ -147,13 +149,14 @@ def validate_staging_rendered(
                 RolloutProjectError,
                 DeployPlanProjectError,
                 MigrationProjectError,
+                BootstrapProjectError,
             ):
                 continue
         if not validated:
             raise ComposeContractError(
                 f"refusing unsafe project name {expected_project!r}; "
                 "expected fetchnow-rollout-test-*, fetchnow-deploy-plan-test-*, "
-                "or fetchnow-migration-test-*"
+                "fetchnow-migration-test-*, or fetchnow-bootstrap-test-*"
             )
         expected_gateway_port = int(published)
     else:

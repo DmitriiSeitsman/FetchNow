@@ -12,6 +12,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import PRODUCTION_PROJECT, STAGING_PROJECT
+from .bootstrap_freshness import (
+    CLASS_INITIALIZED,
+    BootstrapFreshnessError,
+    inspect_bootstrap_freshness,
+)
+from .bootstrap_journal import (
+    BootstrapIdentity,
+    BootstrapJournalError,
+    find_matching_committed_bootstrap,
+    find_unresolved_bootstraps,
+)
+from .bootstrap_project import BootstrapProjectError, assert_bootstrap_project
 from .c2_constants import SOURCE_DIRNAME
 from .c3b1_constants import COMPATIBILITY_REL_PATH, DEPLOY_PLAN_SCHEMA_VERSION
 from .db_heads import (
@@ -31,7 +43,7 @@ from .environment import (
 from .application_compatibility import DatabaseDriftError
 from .current_state import CurrentStateError, load_and_resolve_current_state
 from .image_identity import ImageIdentityError, assert_release_images_present
-from .journal import JournalError, sha256_file
+from .journal import JournalError, find_unresolved_deployments, sha256_file
 from .manifest import ManifestError, load_manifest, manifest_path
 from .migration_compatibility import (
     CompatibilityError,
@@ -39,6 +51,7 @@ from .migration_compatibility import (
     find_matching_transition,
     load_compatibility_contract,
 )
+from .migration_journal import find_unresolved_migrations
 from .password import PasswordError, validate_staging_password
 from .preflight import REQUIRED_ENV
 from .redact import redact
@@ -88,10 +101,16 @@ def _assert_allowed_project(name: str) -> None:
         return
     try:
         assert_deploy_plan_project(name)
-    except DeployPlanProjectError as exc:
+        return
+    except DeployPlanProjectError:
+        pass
+    try:
+        assert_bootstrap_project(name)
+    except BootstrapProjectError as exc:
         raise DeployPlanError(
             f"project name must be {STAGING_PROJECT!r}, {PRODUCTION_PROJECT!r}, "
-            f"or a validated fetchnow-deploy-plan-test-* name, got {name!r}"
+            f"a validated fetchnow-deploy-plan-test-* name, "
+            f"or a validated fetchnow-bootstrap-test-* name, got {name!r}"
         ) from exc
 
 
@@ -139,8 +158,6 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         deploy_root = validate_deploy_root(
             inp.deploy_root.expanduser().resolve(), repo_root=inp.repo_root
         )
-        from .migration_journal import find_unresolved_migrations
-
         unresolved_migrations = find_unresolved_migrations(deploy_root)
         if unresolved_migrations:
             raise DeployPlanError(
@@ -176,10 +193,13 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             deploy_root, repo_root=inp.repo_root
         )
         if current is None:
-            raise DeployPlanError(
-                "current.json is absent — initial deployment/bootstrap planning is "
-                "PRD1D; deploy-plan supports upgrade planning only when current "
-                "application state is already published"
+            return _plan_initial_bootstrap(
+                inp,
+                deploy_root=deploy_root,
+                target_revision=target_revision,
+                target_release=target_release,
+                target_manifest=target_manifest,
+                diagnostics=diagnostics,
             )
         current_revision = validate_full_sha(current.application.revision)
         current_release = release_dir(deploy_root, current_revision)
@@ -320,6 +340,8 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         DatabaseDriftError,
         AlembicGraphError,
         ReleaseVerifyError,
+        BootstrapFreshnessError,
+        BootstrapJournalError,
         OSError,
         ValueError,
     ) as exc:
@@ -328,6 +350,122 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             plan_json=None,
             messages=(f"FAIL: {redact(str(exc))}",),
         )
+
+
+def _plan_initial_bootstrap(
+    inp: DeployPlanInput,
+    *,
+    deploy_root: Path,
+    target_revision: str,
+    target_release: Path,
+    target_manifest: object,
+    diagnostics: list[str],
+) -> DeployPlanResult:
+    """Read-only initial-bootstrap plan when current.json is absent.
+
+    Does not treat missing current.json as proof of an empty database.
+    """
+    unresolved_deployments = find_unresolved_deployments(deploy_root)
+    if unresolved_deployments:
+        raise DeployPlanError(
+            "unresolved deployment journal(s) block initial planning: "
+            + ", ".join(unresolved_deployments)
+        )
+    unresolved_bootstraps = find_unresolved_bootstraps(deploy_root)
+    if unresolved_bootstraps:
+        raise DeployPlanError(
+            "unresolved bootstrap journal(s) block initial planning: "
+            + ", ".join(unresolved_bootstraps)
+        )
+
+    snapshot_files = snapshot_compose_files_for_release(
+        target_release,
+        project_name=inp.project_name,
+        manifest=target_manifest,
+    )
+    cwd = target_release / SOURCE_DIRNAME
+    freshness = inspect_bootstrap_freshness(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        compose_files=snapshot_files,
+        cwd=cwd,
+    )
+    if freshness.application_services:
+        raise DeployPlanError(freshness.reason)
+
+    target_heads = target_heads_from_release_source(target_release)
+    if not target_heads:
+        raise DeployPlanError("target release has no Alembic heads")
+    target_heads_sorted = list(sorted(target_heads))
+    contract_version = getattr(target_manifest, "source_contract_version", None)
+    if type(contract_version) is not int:
+        raise DeployPlanError("target release source_contract_version is required")
+    target_ids = assert_release_images_present(target_manifest)
+    man_hash = sha256_file(manifest_path(target_release))
+    identity = BootstrapIdentity(
+        project_name=inp.project_name,
+        target_revision=target_revision,
+        target_db_heads=tuple(target_heads_sorted),
+        release_manifest_sha256=man_hash,
+        target_api_image_id=target_ids["api"],
+        compose_overlay=snapshot_files[-1].name,
+        source_contract_version=contract_version,
+    )
+    committed = find_matching_committed_bootstrap(deploy_root, identity)
+
+    initial_schema_required = True
+    current_db_heads: list[str] = []
+    if freshness.classification == CLASS_INITIALIZED:
+        live = freshness.initialized_heads or frozenset()
+        if committed is None or frozenset(committed.target_db_heads) != live:
+            raise DeployPlanError(
+                "current.json is absent but the live database already has Alembic "
+                f"heads {sorted(live)}; this is not a proven-empty bootstrap"
+            )
+        if live != target_heads:
+            raise DeployPlanError(
+                "committed bootstrap journal heads "
+                f"{committed.target_db_heads} do not match target release heads "
+                f"{target_heads_sorted}"
+            )
+        initial_schema_required = False
+        current_db_heads = list(sorted(live))
+        diagnostics.append(
+            "OK: initial plan — schema already bootstrapped for this revision"
+        )
+    elif freshness.safe_for_initial_plan:
+        diagnostics.append("OK: initial plan — proven-empty bootstrap environment")
+    else:
+        raise DeployPlanError(
+            "current.json is absent but the environment is not a proven-empty "
+            "bootstrap: " + freshness.reason
+        )
+
+    contract_path = _compatibility_path(target_release)
+    contract = load_compatibility_contract(contract_path)
+    contract_hash = compatibility_contract_sha256(contract_path)
+    _ = contract
+
+    plan = {
+        "schema_version": DEPLOY_PLAN_SCHEMA_VERSION,
+        "project": inp.project_name,
+        "initial_bootstrap": True,
+        "current_revision": None,
+        "target_revision": target_revision,
+        "current_db_heads": current_db_heads,
+        "target_db_heads": target_heads_sorted,
+        "initial_schema_required": initial_schema_required,
+        "migration_required": False,
+        "included_revisions": [],
+        "compatibility_contract_sha256": contract_hash,
+        "verified_backup_required": False,
+        "previous_application_rollback_allowed": False,
+        "database_downgrade_allowed": False,
+        "application_rollout_required": True,
+    }
+    plan_json = _canonical_plan(plan)
+    diagnostics.append("OK: deploy plan computed")
+    return DeployPlanResult(ok=True, plan_json=plan_json, messages=tuple(diagnostics))
 
 
 def emit_deploy_plan(result: DeployPlanResult) -> int:

@@ -523,6 +523,14 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     + ", ".join(unresolved_migrations)
                     + "; use recover-migration …"
                 )
+            from .bootstrap_journal import find_unresolved_bootstraps
+
+            unresolved_bootstraps = find_unresolved_bootstraps(deploy)
+            if unresolved_bootstraps:
+                raise RolloutError(
+                    "unresolved bootstrap journal(s) block application rollout: "
+                    + ", ".join(unresolved_bootstraps)
+                )
 
             # Re-check current under lock for races.
             current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)

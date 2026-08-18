@@ -136,18 +136,48 @@ When current DB heads equal target release heads:
 
 ### Initial deployment boundary (PRD1D)
 
-`deploy-plan` requires an existing `state/current.json` and a verified current
-prepared release. When `current.json` is absent, planning fails with an
-explicit **PRD1D** diagnostic: initial database bootstrap and first staging
-deployment are out of scope for PRD1C3B1.
+When `state/current.json` is absent, `deploy-plan` no longer fails
+unconditionally. It emits a read-only **initial bootstrap plan** only when
+the environment can be proven safe:
 
-The planner also rejects:
+- target prepared release verifies;
+- no unresolved deployment, migration, or bootstrap journals;
+- no application containers;
+- no evidence of an already-established database that cannot be proven empty.
 
-- a missing `alembic_version` table (uninitialized database)
-- an empty `alembic_version` result without treating it as valid empty heads
-- live database heads that drift from saved `current.database.heads`
+`current.json` absence is **not** treated as proof of an empty database.
+Missing `alembic_version` is **not** treated as proof of a fresh database
+either: `bootstrap-db` and initial `deploy-plan` fail closed unless the
+target database is **structurally fresh** (no `alembic_version`, no
+unexpected user/application relations in non-system schemas; PostgreSQL
+catalogs and `information_schema` are ignored; extension-owned objects are
+not treated as application data; inspection failure refuses bootstrap).
 
-There is no `--bootstrap`, adoption bypass, or implicit empty-head baseline.
+A postgres volume or container that cannot be queried fail-closed and requires
+operator recovery.
+
+Idempotent acceptance after a successful `bootstrap-db` requires a
+**committed** bootstrap journal bound to the exact project identity, target
+revision, prepared-release identity (manifest SHA-256, API image ID, compose
+overlay, source contract version), target DB heads, and a successful
+terminal result. Revision text alone is not sufficient.
+
+Initial plan fields include `initial_bootstrap=true`,
+`initial_schema_required=true|false`, `migration_required=false`, and
+`verified_backup_required=false`. Initial schema creation is **not** an
+upgrade migration and does not require a verified backup.
+
+The mutating companion is `bootstrap-db` (Make:
+`production-release-bootstrap-db`). It starts **only** postgres from the
+immutable release snapshot with `--pull never` (it never pulls external
+images; the pinned `postgres:16.9-alpine` must already exist locally),
+applies Alembic to the target heads, and does
+**not** publish `current.json`. First application activation remains
+`rollout --bootstrap`.
+
+When `current.json` exists, upgrade planning is unchanged: live heads must
+match saved `current.database.heads`, missing `alembic_version` is still
+rejected, and there is no `--bootstrap` adoption bypass.
 
 ### Planner output is advisory
 
