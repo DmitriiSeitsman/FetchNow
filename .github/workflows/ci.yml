@@ -342,6 +342,11 @@ jobs:
         uses: docker/setup-buildx-action@v4
       - name: Verify Docker Compose v2
         run: docker compose version
+      - name: Pre-pull pinned Postgres image
+        run: |
+          set -euo pipefail
+          docker pull postgres:16.9-alpine
+          docker image inspect postgres:16.9-alpine >/dev/null
       - name: Initial DB bootstrap integration
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}

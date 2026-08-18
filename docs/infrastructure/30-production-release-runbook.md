@@ -145,6 +145,12 @@ sudo install -d -o <operator> -g <operator> -m 0700 /srv/fetchnow-production/{en
   and public smoke.
 - No staging env file, backup, or Compose project is mounted or named
   into this root.
+- Local Docker image store already contains `postgres:16.9-alpine`
+  (`docker image inspect postgres:16.9-alpine`). If absent, pull it
+  explicitly as a host prerequisite: `docker pull postgres:16.9-alpine`.
+  That pull is allowed. Manual `docker compose up` / Alembic remains
+  forbidden. `bootstrap-db` itself never pulls images (`--pull never`);
+  that behavior is intentional and must not change.
 
 ---
 
@@ -281,9 +287,14 @@ host prerequisites
    (and the rest of `production-release-*`) hardcode `fetchnow-production`
    and `compose.production.yaml` ([§12](#12-production-parameterization-shipped-interface)).
    **STOP** if those targets are missing.
-5. **Do not** start PostgreSQL or run Alembic by hand. The official
+5. **Do not** start PostgreSQL or run Alembic by hand. Before the first
+   `production-release-bootstrap-db`, ensure `postgres:16.9-alpine` exists
+   in the local Docker image store (`docker image inspect
+   postgres:16.9-alpine`). If it is absent, `docker pull
+   postgres:16.9-alpine` is an allowed operator prerequisite. The official
    `production-release-bootstrap-db` transaction starts **only** the
-   production postgres service from the immutable release snapshot,
+   production postgres service from the immutable release snapshot
+   (`--pull never`; it never pulls external images),
    waits until it is healthy, proves the database is **structurally
    fresh** (missing `alembic_version` is not enough; unexpected user
    tables/sequences/views fail closed), and applies Alembic to the

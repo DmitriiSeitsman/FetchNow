@@ -169,7 +169,9 @@ upgrade migration and does not require a verified backup.
 
 The mutating companion is `bootstrap-db` (Make:
 `production-release-bootstrap-db`). It starts **only** postgres from the
-immutable release snapshot, applies Alembic to the target heads, and does
+immutable release snapshot with `--pull never` (it never pulls external
+images; the pinned `postgres:16.9-alpine` must already exist locally),
+applies Alembic to the target heads, and does
 **not** publish `current.json`. First application activation remains
 `rollout --bootstrap`.
 
