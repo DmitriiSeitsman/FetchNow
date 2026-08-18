@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import STAGING_PROJECT
+from . import PRODUCTION_PROJECT, STAGING_PROJECT
 from .c2_constants import SOURCE_DIRNAME
 from .c3b1_constants import COMPATIBILITY_REL_PATH, DEPLOY_PLAN_SCHEMA_VERSION
 from .db_heads import (
@@ -22,6 +22,12 @@ from .db_heads import (
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
 from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .env_file import EnvFileError, load_env_file, require_keys
+from .environment import (
+    assert_real_environment_bundle,
+    real_identity,
+    resolve_runtime_overlay,
+    snapshot_compose_files_for_release,
+)
 from .application_compatibility import DatabaseDriftError
 from .current_state import CurrentStateError, load_and_resolve_current_state
 from .image_identity import ImageIdentityError, assert_release_images_present
@@ -78,14 +84,14 @@ class DeployPlanResult:
 
 
 def _assert_allowed_project(name: str) -> None:
-    if name == STAGING_PROJECT:
+    if name == STAGING_PROJECT or name == PRODUCTION_PROJECT:
         return
     try:
         assert_deploy_plan_project(name)
     except DeployPlanProjectError as exc:
         raise DeployPlanError(
-            f"project name must be {STAGING_PROJECT!r} or a validated "
-            f"fetchnow-deploy-plan-test-* name, got {name!r}"
+            f"project name must be {STAGING_PROJECT!r}, {PRODUCTION_PROJECT!r}, "
+            f"or a validated fetchnow-deploy-plan-test-* name, got {name!r}"
         ) from exc
 
 
@@ -119,6 +125,16 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
                 "expected revision does not match FETCHNOW_RELEASE_REVISION in env file"
             )
         validate_staging_password(env["POSTGRES_PASSWORD"])
+        assert_real_environment_bundle(
+            project_name=inp.project_name,
+            env=env,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            deploy_root=inp.deploy_root,
+            cli_backup_root=inp.backup_root,
+            require_cli_backup_root=False,
+            require_deploy_root=real_identity(inp.project_name) is not None,
+        )
 
         deploy_root = validate_deploy_root(
             inp.deploy_root.expanduser().resolve(), repo_root=inp.repo_root
@@ -148,6 +164,11 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
         target_manifest = load_manifest(manifest_path(target_release))
         try:
             assert_deploy_plan_target_contract(target_manifest.source_contract_version)
+            resolve_runtime_overlay(
+                project_name=inp.project_name,
+                source_contract_version=target_manifest.source_contract_version,
+                compose_overlay=target_manifest.compose_overlay,
+            )
         except ValueError as exc:
             raise DeployPlanError(str(exc)) from exc
 
@@ -193,10 +214,15 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             raise DeployPlanError(schema_verified.messages[0])
 
         cwd = target_release / SOURCE_DIRNAME
+        snapshot_files = snapshot_compose_files_for_release(
+            target_release,
+            project_name=inp.project_name,
+            manifest=target_manifest,
+        )
         database_heads = database_heads_via_postgres(
             project_name=inp.project_name,
             env_file=inp.env_file,
-            compose_files=inp.compose_files,
+            compose_files=snapshot_files,
             cwd=cwd,
         )
         saved_heads = frozenset(current.database.heads)

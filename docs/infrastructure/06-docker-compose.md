@@ -13,7 +13,7 @@ Compose interpolation (файл `.env` рядом с Compose / `--env-file`) п�
 | `compose.yaml` | нейтральная топология: gateway/api/worker/postgres/web/delivery/`storage-init`, network, logical volumes `pgdata`/`tmp`, healthchecks; **без** host ports и **без** top-level `name:` |
 | `compose.override.yaml` | local-only: gateway `8080`, api debug `8000`, `APP_ENV=development` |
 | `compose.staging.yaml` | staging-only: loopback gateway, fail-closed Postgres secrets, без override |
-| `compose.production.yaml` | canonical production overlay: loopback gateway, fail-closed secrets/SHA, `APP_ENV=production`; **не** является operator deploy entry point, пока Make/CLI не параметризованы (PRD1D-B) |
+| `compose.production.yaml` | canonical production overlay: loopback gateway, fail-closed secrets/SHA, `APP_ENV=production`; selected by `make production-release-*` and recorded on v3 prepared releases |
 
 Имена project задаются только через `COMPOSE_PROJECT_NAME` / `--project-name`. Top-level Compose `name:` и `container_name` запрещены.
 
@@ -111,7 +111,7 @@ docker compose \
 
 Canonical file: `compose.production.yaml` with `--project-name fetchnow-production` and `.env.production` (example: `.env.production.example`). Gateway publish is loopback-only (`127.0.0.1:8091` default). `APP_ENV` is hard-coded `production`. Secrets and `FETCHNOW_RELEASE_REVISION` are fail-closed.
 
-This overlay is **not** a release deploy entry point. Make recipes and the release CLI remain staging-shaped until PRD1D-B. Do not `docker compose up` this overlay as a substitute for the transactional pipeline. The retired fail-open fragment `deploy/compose/compose.prod.yaml` no longer exists.
+This overlay is the canonical production Compose file for the same transactional release pipeline used on staging (`make production-release-*`). Do not `docker compose up` it as a substitute for preflight → prepare → verify → deploy-plan → migrate-if-required → rollout → health. The retired fail-open fragment `deploy/compose/compose.prod.yaml` no longer exists. Host DNS/Nginx/TLS remain operator work and are not implied by this overlay.
 
 **CHECK** rendered production: project `fetchnow-production`; volumes `fetchnow-production_*`; gateway loopback `127.0.0.1:8091→8080`; no host ports on postgres/api/worker/web/delivery/storage-init; `APP_ENV=production` on api/worker/delivery.
 

@@ -9,9 +9,9 @@ from . import (
     DEFAULT_GATEWAY_PORT,
     EXPECTED_SERVICES,
     POSTGRES_IMAGE_PREFIX,
-    STAGING_PROJECT,
 )
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
+from .environment import real_identity
 from .revision import validate_full_sha
 from .migration_project import MigrationProjectError, assert_migration_project
 from .rollout_project import RolloutProjectError, assert_rollout_project
@@ -108,7 +108,7 @@ def validate_staging_rendered(
     unknown = sorted(set(services) - set(EXPECTED_SERVICES) - OPTIONAL_ONESHOT_SERVICES)
     if unknown:
         raise ComposeContractError(
-            f"unknown services in staging render: {', '.join(unknown)}"
+            f"unknown services in rendered compose: {', '.join(unknown)}"
         )
 
     if "storage-init" in services:
@@ -131,7 +131,8 @@ def validate_staging_rendered(
             f"gateway must bind loopback, got host_ip={host_ip!r}"
         )
     expected_gateway_port = DEFAULT_GATEWAY_PORT
-    if expected_project != STAGING_PROJECT:
+    identity = real_identity(expected_project)
+    if identity is None:
         validated = False
         for checker in (
             assert_rollout_project,
@@ -155,6 +156,14 @@ def validate_staging_rendered(
                 "or fetchnow-migration-test-*"
             )
         expected_gateway_port = int(published)
+    else:
+        for svc_name in ("api", "worker", "delivery"):
+            rendered_env = _service_environment(services[svc_name])
+            if rendered_env.get("APP_ENV") != identity.app_env:
+                raise ComposeContractError(
+                    f"{svc_name} APP_ENV must be {identity.app_env!r} for "
+                    f"{identity.project}, got {rendered_env.get('APP_ENV')!r}"
+                )
     if published not in {
         str(expected_gateway_port),
         f"{DEFAULT_GATEWAY_LOOPBACK}:{expected_gateway_port}",

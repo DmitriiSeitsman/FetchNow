@@ -15,6 +15,7 @@ from .c2_constants import (
     RELEASE_SCHEMA_VERSION,
     RELEASE_STATUS_PREPARED,
     SOURCE_CONTRACT_VERSION_V1,
+    SOURCE_CONTRACT_VERSION_V3,
     SUPPORTED_SOURCE_CONTRACT_VERSIONS,
 )
 from .revision import validate_full_sha
@@ -47,6 +48,32 @@ def validate_source_contract_version(version: int) -> None:
         raise ManifestError(f"unsupported source_contract_version: {version!r}")
 
 
+_CANONICAL_OVERLAYS = frozenset({"compose.staging.yaml", "compose.production.yaml"})
+
+
+def parse_compose_overlay(raw: object, *, source_contract_version: int) -> str | None:
+    """Parse additive compose_overlay. v1/v2 may omit it (staging overlay)."""
+    if raw is None:
+        if source_contract_version >= SOURCE_CONTRACT_VERSION_V3:
+            raise ManifestError("v3 compose_overlay is required")
+        return None
+    if type(raw) is not str:
+        raise ManifestError("compose_overlay must be a string")
+    if raw not in _CANONICAL_OVERLAYS:
+        raise ManifestError(
+            "compose_overlay must be compose.staging.yaml or "
+            f"compose.production.yaml, got {raw!r}"
+        )
+    if (
+        source_contract_version < SOURCE_CONTRACT_VERSION_V3
+        and raw != "compose.staging.yaml"
+    ):
+        raise ManifestError(
+            "legacy source contracts may only record compose.staging.yaml"
+        )
+    return raw
+
+
 @dataclass(frozen=True)
 class ImageRecord:
     service: str
@@ -72,10 +99,13 @@ class ReleaseManifest:
     contract_hashes: dict[str, str]
     tool_version: str
     status: str
+    compose_overlay: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["images"] = [asdict(img) for img in self.images]
+        if data.get("compose_overlay") is None:
+            data.pop("compose_overlay", None)
         return data
 
 
@@ -127,6 +157,10 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
     source_contract_version = parse_source_contract_version(
         raw.get("source_contract_version")
     )
+    compose_overlay = parse_compose_overlay(
+        raw.get("compose_overlay"),
+        source_contract_version=source_contract_version,
+    )
     if schema != RELEASE_SCHEMA_VERSION:
         raise ManifestError(f"unsupported schema_version: {schema}")
     if status != RELEASE_STATUS_PREPARED:
@@ -171,6 +205,7 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         contract_hashes={str(k): str(v) for k, v in hashes.items()},
         tool_version=tool_ver,
         status=status,
+        compose_overlay=compose_overlay,
     )
     validate_manifest(manifest)
     return manifest
@@ -187,6 +222,10 @@ def validate_manifest(manifest: ReleaseManifest) -> None:
     if manifest.schema_version != RELEASE_SCHEMA_VERSION:
         raise ManifestError("unsupported schema_version")
     validate_source_contract_version(manifest.source_contract_version)
+    parse_compose_overlay(
+        manifest.compose_overlay,
+        source_contract_version=manifest.source_contract_version,
+    )
     services = {img.service for img in manifest.images}
     expected = set(APPLICATION_BUILD_SERVICES)
     if services != expected:

@@ -4,15 +4,21 @@
 	release-build-test release-prepare release-verify release-build-integration \
 	release-rollout-test release-rollout release-recover release-rollout-integration \
 	release-deploy-plan-test release-deploy-plan-integration \
-	release-migration-test release-migrate release-migration-recover release-migration-integration
+	release-migration-test release-migrate release-migration-recover release-migration-integration \
+	production-release-preflight production-release-prepare production-release-verify \
+	production-release-deploy-plan production-release-migrate production-release-migration-recover \
+	production-release-rollout production-release-recover production-release-health \
+	production-pg-backup-create production-pg-backup-verify
 
 COMPOSE ?= docker compose
 BACKEND ?= backend
 WEB ?= web
+PROJECT_NAME ?= fetchnow-staging
+COMPOSE_OVERLAY ?= compose.staging.yaml
 ENV_FILE ?= .env.staging
 DEPLOY_ROOT ?= /srv/fetchnow-staging
 BACKUP_ROOT ?= $(DEPLOY_ROOT)/backups
-STAGING_COMPOSE ?= $(COMPOSE) --env-file "$(ENV_FILE)" --project-name fetchnow-staging -f compose.yaml -f compose.staging.yaml
+STAGING_COMPOSE ?= $(COMPOSE) --env-file "$(ENV_FILE)" --project-name "$(PROJECT_NAME)" -f compose.yaml -f "$(COMPOSE_OVERLAY)"
 PYTHON ?= python3.12
 PG_BACKUP ?= $(PYTHON) scripts/fetchnow_pg_backup_cli.py
 RELEASE ?= $(PYTHON) scripts/fetchnow_release_cli.py
@@ -72,10 +78,10 @@ pg-backup-create:
 	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	$(PG_BACKUP) create \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--backup-root "$(BACKUP_ROOT)"
 
 pg-backup-verify:
@@ -83,10 +89,10 @@ pg-backup-verify:
 	@test -n "$(BACKUP_ID)" || (echo 'Usage: make pg-backup-verify BACKUP_ROOT=... BACKUP_ID=...' && exit 1)
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	$(PG_BACKUP) verify \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--backup-root "$(BACKUP_ROOT)" \
 		--backup-id "$(BACKUP_ID)"
 
@@ -108,10 +114,10 @@ release-preflight:
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-preflight EXPECTED_REVISION=<40-char-sha>' && exit 1)
 	$(RELEASE) preflight \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
 		--backup-root "$(BACKUP_ROOT)"
@@ -120,10 +126,10 @@ release-health:
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-health EXPECTED_REVISION=<40-char-sha>' && exit 1)
 	$(RELEASE) health \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
 		--gateway-base-url "$${GATEWAY_BASE_URL:-http://127.0.0.1:8091}"
@@ -139,10 +145,10 @@ release-prepare:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	$(RELEASE) prepare \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)"
 
@@ -164,7 +170,7 @@ release-rollout:
 	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
 	$(RELEASE) rollout \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
@@ -176,7 +182,7 @@ release-recover:
 	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	$(RELEASE) recover \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
 		--deployment-id "$(DEPLOYMENT_ID)" \
@@ -193,10 +199,10 @@ release-deploy-plan:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-deploy-plan EXPECTED_REVISION=<40-char-sha> DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
 	$(RELEASE) deploy-plan \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)"
 
@@ -216,10 +222,10 @@ release-migrate:
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migrate EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	$(RELEASE) migrate \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
 		--backup-root "$(BACKUP_ROOT)"
@@ -231,10 +237,10 @@ release-migration-recover:
 	@test -n "$(DEPLOY_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	@test -n "$(BACKUP_ROOT)" || (echo 'Usage: make release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging BACKUP_ROOT=/srv/fetchnow-staging/backups' && exit 1)
 	$(RELEASE) recover-migration \
-		--project-name fetchnow-staging \
+		--project-name "$(PROJECT_NAME)" \
 		--env-file "$(ENV_FILE)" \
 		--compose-file compose.yaml \
-		--compose-file compose.staging.yaml \
+		--compose-file "$(COMPOSE_OVERLAY)" \
 		--deploy-root "$(DEPLOY_ROOT)" \
 		--backup-root "$(BACKUP_ROOT)" \
 		--migration-id "$(MIGRATION_ID)" \
@@ -242,6 +248,129 @@ release-migration-recover:
 
 release-migration-integration:
 	$(PYTHON) scripts/release_migration_integration_test.py
+
+# Production wrappers hardcode the canonical production bundle as recipe
+# literals so command-line PROJECT_NAME/COMPOSE_OVERLAY/ENV_FILE/DEPLOY_ROOT
+# overrides cannot redirect a production-* target to staging.
+production-release-preflight:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-preflight EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) preflight \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		--backup-root /srv/fetchnow-production/backups
+
+production-release-prepare:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-prepare EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) prepare \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production
+
+production-release-verify:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-verify EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	$(RELEASE) verify-release \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production
+
+production-release-deploy-plan:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-deploy-plan EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) deploy-plan \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		--backup-root /srv/fetchnow-production/backups
+
+production-release-migrate:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-migrate EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) migrate \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		--backup-root /srv/fetchnow-production/backups
+
+production-release-migration-recover:
+	@test -n "$(MIGRATION_ID)" || (echo 'Usage: make production-release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target' && exit 1)
+	@test -n "$(ACTION)" || (echo 'Usage: make production-release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source|accept_target' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) recover-migration \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--deploy-root /srv/fetchnow-production \
+		--backup-root /srv/fetchnow-production/backups \
+		--migration-id "$(MIGRATION_ID)" \
+		--action "$(ACTION)"
+
+production-release-rollout:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-rollout EXPECTED_REVISION=<40-char-sha> [BOOTSTRAP=1]' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) rollout \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		$(if $(filter 1,$(BOOTSTRAP)),--bootstrap)
+
+production-release-recover:
+	@test -n "$(DEPLOYMENT_ID)" || (echo 'Usage: make production-release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target' && exit 1)
+	@test -n "$(ACTION)" || (echo 'Usage: make production-release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) recover \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--deploy-root /srv/fetchnow-production \
+		--deployment-id "$(DEPLOYMENT_ID)" \
+		--action "$(ACTION)"
+
+production-release-health:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-health EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) health \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		--gateway-base-url "$${GATEWAY_BASE_URL:-http://127.0.0.1:8091}"
+
+production-pg-backup-create:
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(PG_BACKUP) create \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--backup-root /srv/fetchnow-production/backups
+
+production-pg-backup-verify:
+	@test -n "$(BACKUP_ID)" || (echo 'Usage: make production-pg-backup-verify BACKUP_ID=<id>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(PG_BACKUP) verify \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--compose-file compose.yaml \
+		--compose-file compose.production.yaml \
+		--backup-root /srv/fetchnow-production/backups \
+		--backup-id "$(BACKUP_ID)"
 
 staging-config:
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE — copy from .env.staging.example" && exit 1)

@@ -76,7 +76,15 @@ No migration Python is imported or executed.
 
 ## Read-only deploy planner
 
-Production command:
+Operator commands:
+
+```bash
+make release-deploy-plan EXPECTED_REVISION=<sha>
+
+make production-release-deploy-plan EXPECTED_REVISION=<sha>
+```
+
+CLI equivalent (staging-shaped example):
 
 ```bash
 fetchnow_release deploy-plan \
@@ -86,12 +94,6 @@ fetchnow_release deploy-plan \
   --compose-file compose.staging.yaml \
   --expected-revision <40-char-sha> \
   --deploy-root /srv/fetchnow-staging
-```
-
-Make target:
-
-```bash
-make release-deploy-plan EXPECTED_REVISION=<sha> DEPLOY_ROOT=/srv/fetchnow-staging
 ```
 
 ### Planner sequence

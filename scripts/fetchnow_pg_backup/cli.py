@@ -126,6 +126,31 @@ def _target_from_args(args: argparse.Namespace, repo_root: Path) -> ComposeTarge
     if not env_file.is_file():
         raise SystemExit(f"ERROR: env file not found: {env_file}")
     files = normalize_compose_files(args.compose_files, repo_root=repo_root)
+    from fetchnow_release.env_file import EnvFileError, load_env_file
+    from fetchnow_release.environment import (
+        EnvironmentError,
+        assert_real_environment_bundle,
+        real_identity,
+    )
+
+    if real_identity(args.project_name.strip()) is None:
+        raise SystemExit(
+            "ERROR: operator backup create/verify requires "
+            "fetchnow-staging or fetchnow-production"
+        )
+    try:
+        env = load_env_file(env_file)
+        assert_real_environment_bundle(
+            project_name=args.project_name.strip(),
+            env=env,
+            env_file=env_file,
+            compose_files=files,
+            cli_backup_root=args.backup_root,
+            require_cli_backup_root=True,
+            require_deploy_root=False,
+        )
+    except (EnvFileError, EnvironmentError, ValueError) as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
     return ComposeTarget(
         project_name=args.project_name.strip(),
         env_file=env_file.resolve(),

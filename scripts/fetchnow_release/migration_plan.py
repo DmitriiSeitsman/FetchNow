@@ -12,7 +12,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import STAGING_PROJECT
 from .application_compatibility import (
     CompatibilityError,
     DatabaseDriftError,
@@ -40,6 +39,14 @@ from .db_heads import (
 )
 from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .env_file import EnvFileError, load_env_file, require_keys
+from .environment import (
+    PRODUCTION,
+    STAGING,
+    assert_real_environment_bundle,
+    real_identity,
+    resolve_runtime_overlay,
+    snapshot_compose_files_for_release,
+)
 from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import JournalError, sha256_file, utc_now
 from .manifest import ManifestError, load_manifest, manifest_path
@@ -101,11 +108,11 @@ class MigrationPlanComputed:
 
 def _assert_allowed_project(name: str) -> None:
     try:
-        assert_migration_project(name, allow_staging=True)
+        assert_migration_project(name, allow_real=True)
     except MigrationProjectError as exc:
         raise MigrationPlanError(
-            f"project name must be {STAGING_PROJECT!r} or a validated "
-            f"fetchnow-migration-test-* name, got {name!r}"
+            f"project name must be {STAGING.project!r}, {PRODUCTION.project!r}, "
+            f"or a validated fetchnow-migration-test-* name, got {name!r}"
         ) from exc
 
 
@@ -184,6 +191,16 @@ def compute_migration_plan(inp: MigrationPlanInput) -> MigrationPlanComputed:
                 "expected revision does not match FETCHNOW_RELEASE_REVISION in env file"
             )
         validate_staging_password(env["POSTGRES_PASSWORD"])
+        assert_real_environment_bundle(
+            project_name=inp.project_name,
+            env=env,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            deploy_root=inp.deploy_root,
+            cli_backup_root=inp.backup_root,
+            require_cli_backup_root=False,
+            require_deploy_root=real_identity(inp.project_name) is not None,
+        )
 
         deploy_root = validate_deploy_root(
             inp.deploy_root.expanduser().resolve(), repo_root=inp.repo_root
@@ -206,6 +223,11 @@ def compute_migration_plan(inp: MigrationPlanInput) -> MigrationPlanComputed:
         target_manifest = load_manifest(manifest_path(target_release))
         try:
             assert_deploy_plan_target_contract(target_manifest.source_contract_version)
+            resolve_runtime_overlay(
+                project_name=inp.project_name,
+                source_contract_version=target_manifest.source_contract_version,
+                compose_overlay=target_manifest.compose_overlay,
+            )
         except ValueError as exc:
             raise MigrationPlanError(str(exc)) from exc
         target_ids = assert_release_images_present(target_manifest)
@@ -259,10 +281,15 @@ def compute_migration_plan(inp: MigrationPlanInput) -> MigrationPlanComputed:
             raise MigrationPlanError(schema_verified.messages[0])
 
         cwd = current_release / SOURCE_DIRNAME
+        snapshot_files = snapshot_compose_files_for_release(
+            current_release,
+            project_name=inp.project_name,
+            manifest=current_manifest,
+        )
         database_heads = database_heads_via_postgres(
             project_name=inp.project_name,
             env_file=inp.env_file,
-            compose_files=inp.compose_files,
+            compose_files=snapshot_files,
             cwd=cwd,
         )
         saved_heads = frozenset(current.database.heads)

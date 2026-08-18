@@ -33,6 +33,7 @@ from .current_state import (
 from .db_heads import DbHeadsError, database_heads_via_postgres
 from .deploy_root import release_dir, validate_deploy_root
 from .env_file import load_env_file
+from .environment import assert_real_environment_bundle, real_identity
 from .health import HealthError, HealthInput, run_health
 from .journal import find_unresolved_deployments, utc_now
 from .migration_journal import (
@@ -168,6 +169,16 @@ def recover_migration(inp: MigrationRecoverInput) -> MigrationRecoverResult:
             )
 
         env = load_env_file(inp.env_file)
+        assert_real_environment_bundle(
+            project_name=inp.project_name,
+            env=env,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            deploy_root=inp.deploy_root,
+            cli_backup_root=inp.backup_root,
+            require_cli_backup_root=real_identity(inp.project_name) is not None,
+            require_deploy_root=real_identity(inp.project_name) is not None,
+        )
         backup_root = Path(
             inp.backup_root or env["FETCHNOW_BACKUP_ROOT"]
         ).expanduser().resolve()

@@ -7,8 +7,8 @@ import re
 import secrets
 from pathlib import Path
 
-from . import STAGING_PROJECT
 from .c3_constants import ROLLOUT_TEST_PROJECT_PREFIX
+from .environment import real_identity
 
 PROJECT_RE = re.compile(r"^fetchnow-rollout-test-[a-z0-9]{8,32}$")
 FORBIDDEN = frozenset(
@@ -28,8 +28,10 @@ class RolloutProjectError(ValueError):
     """Unsafe rollout project name."""
 
 
-def assert_rollout_project(name: str, *, allow_staging: bool = False) -> str:
-    if allow_staging and name == STAGING_PROJECT:
+def assert_rollout_project(
+    name: str, *, allow_real: bool = False, allow_staging: bool = False
+) -> str:
+    if (allow_real or allow_staging) and real_identity(name) is not None:
         return name
     if name in FORBIDDEN:
         raise RolloutProjectError(f"refusing forbidden project name: {name!r}")

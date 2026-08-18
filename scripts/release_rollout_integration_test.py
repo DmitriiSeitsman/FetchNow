@@ -115,10 +115,19 @@ def assert_prepared_release_v2_policy(
 ) -> None:
     release = release_dir(deploy_root, revision)
     manifest = load_manifest(manifest_path(release))
-    if manifest.source_contract_version != SOURCE_CONTRACT_VERSION_V2:
+    if manifest.source_contract_version < SOURCE_CONTRACT_VERSION_V2:
         raise RuntimeError(
-            f"prepared release {revision} must declare source_contract_version=2, "
+            f"prepared release {revision} must declare source_contract_version>=2, "
             f"got {manifest.source_contract_version!r}"
+        )
+    if "compose.production.yaml" not in manifest.contract_hashes:
+        raise RuntimeError(
+            f"prepared release {revision} must hash-protect compose.production.yaml"
+        )
+    production_overlay = release / SOURCE_DIRNAME / "compose.production.yaml"
+    if not production_overlay.is_file():
+        raise RuntimeError(
+            f"prepared release {revision} missing compose.production.yaml in snapshot"
         )
     policy_path = release / SOURCE_DIRNAME / COMPATIBILITY_REL_PATH
     if policy_path.is_symlink() or policy_path.is_dir() or not policy_path.is_file():
@@ -892,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
         if managed_health.returncode != 0:
             detail = managed_health.stderr.strip() or managed_health.stdout.strip()
             raise RuntimeError(f"managed standalone health CLI failed: {detail}")
-        if "OK: staging health gate passed" not in managed_health.stdout:
+        if "OK: health gate passed" not in managed_health.stdout:
             raise RuntimeError("managed standalone health CLI omitted success proof")
         print("OK: managed standalone health CLI passed from current.json authority")
 

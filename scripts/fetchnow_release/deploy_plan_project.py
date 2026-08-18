@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 
+from .environment import real_identity
 from .rollout_project import FORBIDDEN as _ROLLOUT_FORBIDDEN
 
 DEPLOY_PLAN_TEST_PROJECT_RE = re.compile(
@@ -18,10 +19,10 @@ class DeployPlanProjectError(ValueError):
     """Unsafe or invalid deploy-plan test project name."""
 
 
-def assert_deploy_plan_project(name: str, *, allow_staging: bool = False) -> None:
-    from . import STAGING_PROJECT
-
-    if allow_staging and name == STAGING_PROJECT:
+def assert_deploy_plan_project(
+    name: str, *, allow_real: bool = False, allow_staging: bool = False
+) -> None:
+    if (allow_real or allow_staging) and real_identity(name) is not None:
         return
     if name in FORBIDDEN or not DEPLOY_PLAN_TEST_PROJECT_RE.fullmatch(name):
         raise DeployPlanProjectError(

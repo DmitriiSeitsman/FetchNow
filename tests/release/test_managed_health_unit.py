@@ -117,7 +117,7 @@ def _patch_healthy_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     running_ids: dict[str, str] | None = None,
-    project_name: str = PROJECT,
+    project_name: str = HEALTH_TEST_PROJECT,
 ) -> None:
     ids = running_ids or _image_ids()
     monkeypatch.setattr("fetchnow_release.health.require_compose_v2", lambda: None)
@@ -184,7 +184,7 @@ def _run_managed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _patch_healthy_runtime(monkeypatch)
     return run_health(
         HealthInput(
-            project_name=PROJECT,
+            project_name=HEALTH_TEST_PROJECT,
             env_file=env,
             compose_files=(repo / "compose.yaml",),
             expected_revision=REVISION,
@@ -213,7 +213,7 @@ def test_managed_current_revision_mismatch_fails(
     current_path.write_text(json.dumps(current), encoding="utf-8")
     _patch_healthy_runtime(monkeypatch)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert "revision does not match" in result.messages[0]
@@ -229,7 +229,7 @@ def test_managed_current_manifest_image_id_mismatch_fails(
     current_path.write_text(json.dumps(current), encoding="utf-8")
     _patch_healthy_runtime(monkeypatch)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert "do not match release manifest" in result.messages[0]
@@ -245,7 +245,7 @@ def test_managed_manifest_hash_mismatch_fails(
     current_path.write_text(json.dumps(current), encoding="utf-8")
     _patch_healthy_runtime(monkeypatch)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert "release-manifest hash mismatch" in result.messages[0]
@@ -283,7 +283,7 @@ def test_managed_missing_invalid_or_legacy_current_fails(
         )
     _patch_healthy_runtime(monkeypatch)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert result.messages[0].startswith("FAIL:")
@@ -300,7 +300,7 @@ def test_managed_local_image_oci_mismatch_fails(
 
     monkeypatch.setattr("fetchnow_release.health.assert_release_images_present", fail_oci)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert "OCI revision mismatch" in result.messages[0]
@@ -314,7 +314,7 @@ def test_managed_running_image_id_mismatch_fails(
     wrong["gateway"] = "sha256:" + ("5" * 64)
     _patch_healthy_runtime(monkeypatch, running_ids=wrong)
     result = run_health(
-        HealthInput(PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
+        HealthInput(HEALTH_TEST_PROJECT, env, (repo / "compose.yaml",), REVISION, repo, deploy_root=deploy)
     )
     assert not result.ok
     assert "gateway image ID" in result.messages[0]
@@ -426,7 +426,7 @@ def test_cli_managed_mode_uses_current_state_authority(
         [
             "health",
             "--project-name",
-            PROJECT,
+            HEALTH_TEST_PROJECT,
             "--env-file",
             str(env),
             "--compose-file",
@@ -443,7 +443,7 @@ def test_cli_managed_mode_uses_current_state_authority(
     )
     captured = capsys.readouterr()
     assert rc == 0, captured.err
-    assert "OK: staging health gate passed" in captured.out
+    assert "OK: health gate passed" in captured.out
 
 
 def test_managed_health_allows_tooling_revision_skew(
@@ -456,7 +456,7 @@ def test_managed_health_allows_tooling_revision_skew(
     _patch_healthy_runtime(monkeypatch)
     result = run_health(
         HealthInput(
-            PROJECT,
+            HEALTH_TEST_PROJECT,
             env,
             (repo / "compose.yaml",),
             REVISION,
@@ -477,7 +477,7 @@ def test_internal_expected_image_ids_path_still_allows_staging_without_deploy_ro
     env = tmp_path / "env"
     env.write_text("X=1\n", encoding="utf-8")
     ids = _image_ids()
-    _patch_healthy_runtime(monkeypatch, running_ids=ids)
+    _patch_healthy_runtime(monkeypatch, running_ids=ids, project_name=PROJECT)
     result = run_health(
         HealthInput(
             PROJECT,

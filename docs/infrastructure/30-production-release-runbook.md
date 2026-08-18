@@ -2,23 +2,19 @@
 
 **INFO:** This chapter is a production-grade **design and operator runbook**.
 It does **not** claim that a production host exists, that production is
-deployed, or that production Make/CLI targets are already available.
+deployed, or that DNS/Nginx/TLS have been cut over.
 
-Staging today uses a verified release pipeline
+Staging uses a verified release pipeline
 (`preflight → prepare → verify → deploy-plan → migrate-if-required →
-rollout → health`). Production must reuse those same primitives on a
-**separate** host, with independent env, database, volumes, secrets,
-release state, and backups.
+rollout → health`). Production reuses those same primitives as a second
+canonical real environment (`fetchnow-production`) through
+`make production-release-*` / `make production-pg-backup-*`.
 
-**Current tooling boundary (stop-gate):** Make recipes and the release CLI
-allowlist are still staging-shaped (`fetchnow-staging`,
-`compose.staging.yaml`). Passing `--project-name fetchnow-production`
-is **not** supported until the parameterization milestone in
-[§12](#12-future-milestone-production-parameterization) (PRD1D-B) lands.
 The canonical overlay `compose.production.yaml` and
-`.env.production.example` exist (PRD1D-A) but are **not** a substitute
-for that pipeline. Do not improvise production deploys with the staging
-project name, staging deploy root, or ad-hoc `docker compose up`.
+`.env.production.example` exist. A real `.env.production` with secrets is
+created only on the production host and must never be committed. Do not
+improvise production deploys with the staging project name, staging deploy
+root, or ad-hoc `docker compose up`.
 
 ## Target topology (planned)
 
@@ -183,8 +179,8 @@ and the operator intentionally publishes the domain.
 
 - Container gateway never terminates public TLS.
 - Canonical overlay is repo-root `compose.production.yaml` (loopback
-  gateway, fail-closed secrets/SHA, `APP_ENV=production`). It is **not**
-  on the release Make/CLI path until PRD1D-B. The retired fragment
+  gateway, fail-closed secrets/SHA, `APP_ENV=production`). Release Make
+  selects it via `make production-release-*`. The retired fragment
   `deploy/compose/compose.prod.yaml` (host `:80`) no longer exists and
   must not be reintroduced.
 
@@ -200,8 +196,8 @@ and the operator intentionally publishes the domain.
 - Path: `/srv/fetchnow-production/env/.env.production`
 - Mode: `600`, owner = operator account
 - Start from `.env.production.example` (placeholders only; never commit
-  a real `.env.production`). Release preflight/Make still do not consume
-  this file until PRD1D-B.
+  a real `.env.production`). `make production-release-*` reads
+  `/srv/fetchnow-production/env/.env.production` on the production host.
 
 ### Classes of values that must differ from staging
 
@@ -256,7 +252,7 @@ activation are separate gates.
 host prerequisites
   → filesystem + env
   → repository / release tooling checkout
-  → parameterization milestone available (STOP if not)
+  → production Make wrappers available (STOP if missing)
   → database / storage bring-up
   → gateway loopback + host Nginx + TLS
   → preflight
@@ -280,9 +276,10 @@ host prerequisites
    `/srv/fetchnow-production/app` at the exact accepted SHA (or keep
    `main` and check out that SHA before prepare). Working tree must be
    clean for preflight rules that require it.
-4. **Parameterization gate.** Confirm Make/CLI accept
-   `fetchnow-production` and a production compose overlay (§12).
-   **STOP** if they still hard-require `fetchnow-staging`.
+4. **Production wrappers.** Confirm `make production-release-preflight`
+   (and the rest of `production-release-*`) hardcode `fetchnow-production`
+   and `compose.production.yaml` ([§12](#12-production-parameterization-shipped-interface)).
+   **STOP** if those targets are missing.
 5. **Database / storage.** Start PostgreSQL only for the production
    project; confirm volume names are project-scoped
    (`fetchnow-production_*`). Run storage-init as defined by the
@@ -326,8 +323,7 @@ public smoke remains open.
 - **The same exact SHA** completed staging acceptance for this release:
   staging `prepare`/`rollout`/`health` and staging smoke for that SHA
   are green, and the operator records the staging deployment id / report.
-- Production parameterization milestone is merged and available on the
-  production host checkout.
+- Production Make wrappers are present on the production host checkout.
 - No unresolved application or migration journals on production.
 - Working tree on the production app checkout is clean at the target SHA.
 - `.env.production` has `FETCHNOW_RELEASE_REVISION` pinned to that SHA
@@ -347,31 +343,59 @@ preflight
   → release report
 ```
 
-### Intended operator commands (after §12)
+### Operator commands
 
-Command shapes mirror staging; only project, env, and deploy root change.
-Exact Make variable names must match the parameterization PR — until then
-these are **design targets**, not runnable recipes:
+After a real production env exists on the production host:
 
 ```bash
-# On the production host, at /srv/fetchnow-production/app @ <sha>
 export EXPECTED_REVISION=<40-char-sha>   # same SHA that passed staging
-export ENV_FILE=/srv/fetchnow-production/env/.env.production
-export DEPLOY_ROOT=/srv/fetchnow-production
-export BACKUP_ROOT=/srv/fetchnow-production/backups
 
-# 1) pin FETCHNOW_RELEASE_REVISION in ENV_FILE to EXPECTED_REVISION (mode 600)
-# 2) preflight → prepare → verify → deploy-plan
-# 3) if plan.migration_required: release-migrate (creates verified backup)
-# 4) release-rollout
-# 5) release-health
-# 6) production smoke (§8)
+make production-release-preflight \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-prepare \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-verify \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-deploy-plan \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-migrate \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-rollout \
+  EXPECTED_REVISION=$EXPECTED_REVISION
+
+make production-release-health \
+  EXPECTED_REVISION=$EXPECTED_REVISION
 ```
 
-Until §12 ships, **STOP** rather than redirecting staging Make targets
-with a different `DEPLOY_ROOT` — project name and compose overlay remain
-hard-coded to staging inside those recipes and inside prepared release
-runtime compose selection.
+Recovery:
+
+```bash
+make production-release-recover \
+  DEPLOYMENT_ID=<uuid> \
+  ACTION=rollback|accept-target
+
+make production-release-migration-recover \
+  MIGRATION_ID=<uuid> \
+  ACTION=accept_source|accept_target
+```
+
+Backup:
+
+```bash
+make production-pg-backup-create
+
+make production-pg-backup-verify \
+  BACKUP_ID=<id>
+```
+
+Do **not** redirect staging `release-*` recipes with a different
+`DEPLOY_ROOT` and call that production. Staging recipes keep staging-safe
+defaults; production wrappers hardcode the canonical production bundle.
 
 ### Promotion rule
 
@@ -625,79 +649,58 @@ volumes to the production project.
 
 ---
 
-## 12. Future milestone: production parameterization
+## 12. Production parameterization (shipped interface)
 
-### Why
+PRD1D-B parameterized the staging-proven transactional pipeline for a
+second real environment. This is **not** a production deployment.
 
-Release transaction machinery is real and staging-proven, but operator
-entry points and the prepared-release source contract still assume
-staging. Production cannot honestly reuse them until those assumptions
-are parameterized. Shipping unverifiable “production” Make targets now
-would create false confidence.
+### Canonical identities
 
-### Scope (implement later — not in this documentation PR)
+| Item | Staging | Production |
+|---|---|---|
+| Compose project | `fetchnow-staging` | `fetchnow-production` |
+| Overlay | `compose.staging.yaml` | `compose.production.yaml` |
+| Env filename | `.env.staging` | `.env.production` |
+| Deploy root | `/srv/fetchnow-staging` | `/srv/fetchnow-production` |
+| Backup root | `/srv/fetchnow-staging/backups` | `/srv/fetchnow-production/backups` |
+| `APP_ENV` | `staging` | `production` |
+| `PUBLIC_SITE_URL` | `https://staging.fetchnow.online` | `https://fetchnow.online` |
 
-1. Allowlist / accept Compose project `fetchnow-production` (today
-   non-staging projects are rejected; `fetchnow-prod` is explicitly
-   forbidden in test naming and is **not** an allowlisted env).
-2. Introduce a production compose overlay that matches the release
-   safety model: fail-closed secrets/revision interpolation, loopback
-   gateway publish, `APP_ENV=production`. **Done in PRD1D-A**
-   (`compose.production.yaml`; `deploy/compose/compose.prod.yaml`
-   retired). Overlay is still unused by release Make/CLI until PRD1D-B.
-3. Parameterize Make defaults or add explicit production targets so
-   `--project-name`, `--compose-file` list, `ENV_FILE`, `DEPLOY_ROOT`,
-   and `BACKUP_ROOT` are not hard-coded to staging.
-4. Extend the release source contract / runtime compose selection so
-   prepared releases and rollout/migrate/recover use the production
-   overlay when the project is production (today they always select
-   `compose.staging.yaml` from the snapshot).
-5. Add `.env.production.example` (placeholders only) documenting the
-   production contract. **Done in PRD1D-A**; not consumed by Make/CLI
-   until PRD1D-B.
-6. Keep gateway health URL loopback-only; document production public
-   HTTPS as operator smoke, not CLI health authority.
-7. Update chapters 06/21/24–29 cross-links once Make target names are
-   real.
+`fetchnow-prod` is forbidden and is not an alias. Ephemeral
+`fetchnow-*-test-*` projects may use either overlay as a *shape* and
+must never become aliases of real environments. Test cleanup refuses
+the real names even if invoked directly.
 
-### Staging-specific assumptions to remove
+### Source contract v3
 
-| Assumption | Where today |
-|---|---|
-| `--project-name fetchnow-staging` in Make release recipes | `Makefile` |
-| Default `ENV_FILE=.env.staging`, `DEPLOY_ROOT=/srv/fetchnow-staging` | `Makefile` |
-| CLI default / allowlist `fetchnow-staging` only | `scripts/fetchnow_release/*` |
-| Required source file `compose.staging.yaml` | release source contract (C2) |
-| Runtime compose always `compose.yaml` + `compose.staging.yaml` | rollout / migrate / recover |
-| Preflight password helper / messaging named “staging” | preflight helpers |
+New prepare emits `source_contract_version=3` and hashes
+`compose.production.yaml` in addition to the v2 set. Manifest field
+`compose_overlay` is required on v3 (`compose.staging.yaml` or
+`compose.production.yaml`). Legacy v1/v2 releases remain valid; they
+omit the field and mean the staging overlay. Production cannot activate
+a v1/v2 snapshot.
 
-### Out of scope for that milestone
+Runtime overlay selection after prepare uses the immutable snapshot plus
+`release.json`, never the live Git checkout. Image tags remain the
+exact 40-character SHA (`latest` / branch tags are forbidden).
 
-- Buying or booting the production server.
-- DNS/TLS cutover.
-- Creating real `.env.production` secrets.
-- Automatic off-host backup upload.
-- Unified migrate→rollout orchestration (still PRD1C3B2C if pursued).
-- Provider feature work.
+### Make interface
 
-### Acceptance criteria
+Existing `release-*` / `pg-backup-*` recipes keep staging-safe defaults
+and work without new arguments. `production-*` wrappers hardcode the
+canonical production bundle as recipe literals so command-line
+`PROJECT_NAME` / `COMPOSE_OVERLAY` / `ENV_FILE` / `DEPLOY_ROOT` /
+`BACKUP_ROOT` overrides cannot turn them into staging operations.
 
-- Operator can run the §5 sequence on a disposable integration project
-  **and** on documentation-described production names without editing
-  Python allowlists by hand.
-- Prepared release for production contains the production overlay;
-  rollout activates from that overlay + immutable image IDs.
-- Staging path remains green and unchanged in behaviour.
-- CI forbids targeting real `fetchnow-staging` / `fetchnow-production`
-  from ephemeral tests (unique `fetchnow-*-test-*` only).
-- This chapter’s command shapes match the shipped Make interface.
-- No secrets in Git; `.env.production.example` uses placeholders only.
+Exact production commands are listed in §5.
 
-### Suggested label
+### Remaining operator bootstrap (not this milestone)
 
-`PRD1D-prod-param` (production parameterization of existing release
-primitives) — prerequisite to real production bootstrap, not a
-substitute for host/Nginx/TLS operator work.
+- Production host, DNS, host Nginx, TLS/Certbot.
+- Creating a real `.env.production` on that host (never in Git).
+- First production PostgreSQL / migrate / rollout.
+- Off-host backup copy.
+- Unified migrate→rollout orchestrator.
 
 ---
 
@@ -708,14 +711,11 @@ substitute for host/Nginx/TLS operator work.
 3. TLS certificate not issued.
 4. `.env.production` with real secrets not created (and must not be
    created in Git).
-5. Release Make/CLI still staging-shaped (§12 / PRD1D-B).
-6. Production overlay exists (`compose.production.yaml`) but is **not**
-   yet selected by the prepared-release source contract or runtime
-   rollout/migrate/recover (PRD1D-B).
-7. Staging acceptance process for each SHA must remain the promotion
+5. Staging acceptance process for each SHA must remain the promotion
    gate once production exists.
-8. Off-host backup copy still planned (same residual risk as staging
+6. Off-host backup copy still planned (same residual risk as staging
    PRD1B).
 
-Until items 1–6 are cleared, treat any production deploy attempt as
-**NO-GO**.
+Until items 1–4 are cleared, treat any production deploy attempt as
+**NO-GO**. Release parameterization is implemented in-repo; it does not
+replace host/Nginx/TLS operator work.

@@ -7,7 +7,7 @@ import re
 import secrets
 from pathlib import Path
 
-from . import STAGING_PROJECT
+from .environment import real_identity
 from .c3b2b2_constants import MIGRATION_TEST_PROJECT_PREFIX
 
 PROJECT_RE = re.compile(r"^fetchnow-migration-test-[a-z0-9]{8,32}$")
@@ -27,8 +27,10 @@ class MigrationProjectError(ValueError):
     """Unsafe migration project name."""
 
 
-def assert_migration_project(name: str, *, allow_staging: bool = False) -> str:
-    if allow_staging and name == STAGING_PROJECT:
+def assert_migration_project(
+    name: str, *, allow_real: bool = False, allow_staging: bool = False
+) -> str:
+    if (allow_real or allow_staging) and real_identity(name) is not None:
         return name
     if name in FORBIDDEN:
         raise MigrationProjectError(f"refusing forbidden project name: {name!r}")

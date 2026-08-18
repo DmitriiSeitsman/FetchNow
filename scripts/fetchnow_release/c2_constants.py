@@ -33,25 +33,41 @@ REQUIRED_SOURCE_FILES_V2 = REQUIRED_SOURCE_FILES_V1 + (
     "deploy/migrations/compatibility.json",
 )
 
-SUPPORTED_SOURCE_CONTRACT_VERSIONS = frozenset(
-    {SOURCE_CONTRACT_VERSION_V1, SOURCE_CONTRACT_VERSION_V2}
+# PRD1D-B environment-aware overlays (new prepares only).
+SOURCE_CONTRACT_VERSION_V3 = 3
+REQUIRED_SOURCE_FILES_V3 = REQUIRED_SOURCE_FILES_V2 + (
+    "compose.production.yaml",
 )
-CURRENT_PREPARE_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V2
+
+SUPPORTED_SOURCE_CONTRACT_VERSIONS = frozenset(
+    {
+        SOURCE_CONTRACT_VERSION_V1,
+        SOURCE_CONTRACT_VERSION_V2,
+        SOURCE_CONTRACT_VERSION_V3,
+    }
+)
+CURRENT_PREPARE_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V3
 DEPLOY_PLAN_MIN_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V2
 
-# Backward-compatible alias for callers that mean "current prepare contract".
-REQUIRED_SOURCE_FILES = REQUIRED_SOURCE_FILES_V2
-CONTRACT_HASH_FILES = (
+# Pinned v1/v2 hash set. Do not treat this as "current prepare contract".
+CONTRACT_HASH_FILES_V1 = (
     "compose.yaml",
     "compose.staging.yaml",
     "backend/Dockerfile",
     "web/Dockerfile",
     "deploy/nginx/Dockerfile",
 )
+CONTRACT_HASH_FILES_V2 = CONTRACT_HASH_FILES_V1
+CONTRACT_HASH_FILES_V3 = CONTRACT_HASH_FILES_V2 + ("compose.production.yaml",)
+
+# Backward-compatible aliases (legacy v2 prepare contract).
+REQUIRED_SOURCE_FILES = REQUIRED_SOURCE_FILES_V2
+CONTRACT_HASH_FILES = CONTRACT_HASH_FILES_V1
 FORBIDDEN_SOURCE_PATHS = (
     ".git",
     ".env",
     ".env.staging",
+    ".env.production",
     "backend/.env",
     "web/.env",
 )

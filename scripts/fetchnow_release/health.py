@@ -12,6 +12,13 @@ from . import EXPECTED_SERVICES, OCI_REVISION_LABEL
 from .current_state import CurrentStateError, CurrentStateV2, load_parsed_current_state
 from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .docker_checks import DockerCheckError, require_compose_v2, require_docker_daemon
+from .env_file import EnvFileError, load_env_file
+from .environment import (
+    EnvironmentError,
+    assert_real_environment_bundle,
+    real_identity,
+    resolve_runtime_overlay,
+)
 from .health_project import HealthProjectError, assert_isolated_tag_health_project
 from .http_health import HttpCheckResult, HttpHealthError, check_endpoint
 from .image_identity import ImageIdentityError, assert_release_images_present
@@ -144,6 +151,11 @@ def _managed_image_ids(inp: HealthInput, revision: str) -> dict[str, str]:
     manifest = load_manifest(man_path)
     if manifest.revision != revision:
         raise HealthError("managed release manifest revision mismatch")
+    resolve_runtime_overlay(
+        project_name=inp.project_name,
+        source_contract_version=manifest.source_contract_version,
+        compose_overlay=manifest.compose_overlay,
+    )
     manifest_ids = image_ids_from_manifest(manifest)
     if manifest_ids != application.image_ids:
         raise HealthError("current application image IDs do not match release manifest")
@@ -164,6 +176,18 @@ def run_health(inp: HealthInput) -> HealthResult:
 
         expected_ids = inp.expected_image_ids
         if inp.deploy_root is not None:
+            identity = real_identity(inp.project_name)
+            if identity is not None:
+                env = load_env_file(inp.env_file)
+                assert_real_environment_bundle(
+                    project_name=inp.project_name,
+                    env=env,
+                    env_file=inp.env_file,
+                    compose_files=inp.compose_files,
+                    deploy_root=inp.deploy_root,
+                    require_cli_backup_root=False,
+                    require_deploy_root=True,
+                )
             expected_ids = _managed_image_ids(inp, rev)
         elif expected_ids is None:
             # Standalone CLI/tag path: never allow protected managed projects to
@@ -337,12 +361,14 @@ def run_health(inp: HealthInput) -> HealthResult:
                 )
             messages.append(f"OK: HTTP {path} status=ok attempts={result.attempts}")
 
-        messages.append("OK: staging health gate passed")
+        messages.append("OK: health gate passed")
         return HealthResult(ok=True, messages=tuple(messages), http=tuple(http_results))
     except (
         HealthError,
         CurrentStateError,
         DeployRootError,
+        EnvFileError,
+        EnvironmentError,
         HealthProjectError,
         HttpHealthError,
         ImageIdentityError,

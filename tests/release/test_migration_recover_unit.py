@@ -33,6 +33,9 @@ from fetchnow_release.migration_recover import (  # noqa: E402
 )
 
 
+MIGRATION_TEST_PROJECT = "fetchnow-migration-test-abcdef12"
+
+
 def _plan(migration_id: str) -> MigrationPlanDocument:
     api = "sha256:" + ("a" * 64)
     return MigrationPlanDocument(
@@ -58,8 +61,8 @@ def _plan(migration_id: str) -> MigrationPlanDocument:
         target_api_image_id=api,
         backup_root_identity_sha256="6" * 64,
         expected_post_migration_state_sha256="7" * 64,
-        project_name="fetchnow-staging",
-        compose_files=["compose.yaml"],
+        project_name=MIGRATION_TEST_PROJECT,
+        compose_files=["compose.yaml", "compose.staging.yaml"],
         created_at_utc="2026-01-01T00:00:00Z",
     )
 
@@ -89,13 +92,17 @@ def test_recover_rejects_partial_heads(tmp_path: Path) -> None:
             recorded_at_utc="2026-01-01T00:00:00Z",
         ),
     )
-    env = tmp_path / ".env"
+    compose = tmp_path / "compose.yaml"
+    overlay = tmp_path / "compose.staging.yaml"
+    compose.write_text("services: {}\n")
+    overlay.write_text("services: {}\n")
+    env = tmp_path / ".env.release-test"
     env.write_text(
         "\n".join(
             [
-                "COMPOSE_PROJECT_NAME=fetchnow-staging",
+                f"COMPOSE_PROJECT_NAME={MIGRATION_TEST_PROJECT}",
                 f"FETCHNOW_RELEASE_REVISION={'b' * 40}",
-                "GATEWAY_PORT=8091",
+                "GATEWAY_PORT=127.0.0.1:8091",
                 "APP_ENV=test",
                 "PUBLIC_SITE_URL=http://127.0.0.1",
                 "POSTGRES_DB=fetchnow",
@@ -163,11 +170,9 @@ def test_recover_rejects_partial_heads(tmp_path: Path) -> None:
                                         ):
                                             result = recover_migration(
                                                 MigrationRecoverInput(
-                                                    project_name="fetchnow-staging",
+                                                    project_name=MIGRATION_TEST_PROJECT,
                                                     env_file=env,
-                                                    compose_files=(
-                                                        tmp_path / "compose.yaml",
-                                                    ),
+                                                    compose_files=(compose, overlay),
                                                     repo_root=tmp_path,
                                                     deploy_root=deploy,
                                                     backup_root=tmp_path / "backups",
@@ -198,7 +203,7 @@ def test_recover_release_hold_requires_committed_result(tmp_path: Path) -> None:
     ):
         result = recover_migration(
             MigrationRecoverInput(
-                project_name="fetchnow-staging",
+                project_name=MIGRATION_TEST_PROJECT,
                 env_file=env,
                 compose_files=(tmp_path / "compose.yaml",),
                 repo_root=tmp_path,
