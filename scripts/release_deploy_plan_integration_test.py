@@ -279,6 +279,7 @@ def shape_legacy_v1_release(release_path: Path) -> None:
     _chmod_writable(man_path)
     data = json.loads(man_path.read_text(encoding="utf-8"))
     data.pop("source_contract_version", None)
+    data.pop("compose_overlay", None)
     data["contract_hashes"] = contract_hashes
     man_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _chmod_tree_readonly(source)
@@ -437,8 +438,10 @@ def main(argv: list[str] | None = None) -> int:
             project=project,
         )
         migrate_manifest = load_manifest(manifest_path(release_dir(deploy_root, migrate_rev)))
-        if migrate_manifest.source_contract_version != 2:
-            raise RuntimeError("target release must be source_contract_version=2")
+        if migrate_manifest.source_contract_version < 2:
+            raise RuntimeError("target release must be source_contract_version>=2")
+        if "compose.production.yaml" not in migrate_manifest.contract_hashes:
+            raise RuntimeError("v3 target must hash-protect compose.production.yaml")
 
         ok3, plan_json3, _ = invoke_plan(
             project=project,

@@ -12,14 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .c2_constants import (
-    CONTRACT_HASH_FILES,
     CURRENT_PREPARE_SOURCE_CONTRACT_VERSION,
     FORBIDDEN_SOURCE_PATHS,
     LFS_POINTER_PREFIX,
     SOURCE_DIRNAME,
 )
 from .revision import validate_full_sha
-from .source_contract import required_source_files_for_version
+from .source_contract import (
+    contract_hash_files_for_version,
+    required_source_files_for_version,
+)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -271,7 +273,7 @@ def verify_required_files(
         if (source_dir / rel).exists():
             raise ArchiveError(f"forbidden path present in snapshot: {rel}")
     hashes: dict[str, str] = {}
-    for rel in CONTRACT_HASH_FILES:
+    for rel in contract_hash_files_for_version(source_contract_version):
         path = source_dir / rel
         if path.is_symlink():
             raise ArchiveError(f"contract hash path must not be a symlink: {rel}")

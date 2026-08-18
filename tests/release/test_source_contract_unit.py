@@ -21,8 +21,10 @@ from fetchnow_release.archive import (  # noqa: E402
 from fetchnow_release.c2_constants import (  # noqa: E402
     REQUIRED_SOURCE_FILES_V1,
     REQUIRED_SOURCE_FILES_V2,
+    REQUIRED_SOURCE_FILES_V3,
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_CONTRACT_VERSION_V2,
+    SOURCE_CONTRACT_VERSION_V3,
 )
 from fetchnow_release.manifest import (  # noqa: E402
     ImageRecord,
@@ -33,7 +35,9 @@ from fetchnow_release.manifest import (  # noqa: E402
 )
 from fetchnow_release.source_contract import (  # noqa: E402
     assert_deploy_plan_target_contract,
+    contract_hash_files_for_version,
     prepare_source_contract_version,
+    required_source_files_for_version,
 )
 from fetchnow_release.verify_release import verify_prepared_release  # noqa: E402
 
@@ -208,8 +212,90 @@ def test_source_contract_version_string_rejected() -> None:
         parse_source_contract_version("2")
 
 
-def test_new_prepare_emits_v2_contract() -> None:
-    assert prepare_source_contract_version() == SOURCE_CONTRACT_VERSION_V2
+def test_new_prepare_emits_v3_contract() -> None:
+    assert prepare_source_contract_version() == SOURCE_CONTRACT_VERSION_V3
+
+
+def test_v3_requires_and_hashes_production_overlay(tmp_path: Path) -> None:
+    src = tmp_path / "source"
+    _write_tree(src, REQUIRED_SOURCE_FILES_V2)
+    with pytest.raises(ArchiveError, match="required source path missing"):
+        verify_required_files(src, source_contract_version=SOURCE_CONTRACT_VERSION_V3)
+    _write_tree(src, ("compose.production.yaml",))
+    hashes = verify_required_files(
+        src, source_contract_version=SOURCE_CONTRACT_VERSION_V3
+    )
+    assert "compose.production.yaml" in hashes
+    assert "compose.production.yaml" in contract_hash_files_for_version(3)
+    assert "compose.production.yaml" not in contract_hash_files_for_version(2)
+
+
+def test_v3_manifest_requires_compose_overlay() -> None:
+    rev = "a" * 40
+    raw = _sample_manifest(source_contract_version=3, rev=rev)
+    with pytest.raises(ManifestError, match="compose_overlay"):
+        parse_manifest(raw)
+    raw["compose_overlay"] = "compose.production.yaml"
+    raw["contract_hashes"]["compose.production.yaml"] = "a" * 64
+    manifest = parse_manifest(raw)
+    assert manifest.compose_overlay == "compose.production.yaml"
+    assert manifest.source_contract_version == SOURCE_CONTRACT_VERSION_V3
+
+
+def test_v1_not_reinterpreted_as_v3_when_production_yaml_present(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "source"
+    _write_tree(src, REQUIRED_SOURCE_FILES_V1 + ("compose.production.yaml",))
+    hashes = verify_required_files(
+        src, source_contract_version=SOURCE_CONTRACT_VERSION_V1
+    )
+    assert "compose.production.yaml" not in hashes
+
+
+def test_tampered_v3_production_overlay_fails_verify(tmp_path: Path) -> None:
+    rev = "a" * 40
+    release = tmp_path / rev
+    source = release / "source"
+    _write_tree(source, REQUIRED_SOURCE_FILES_V3)
+    hashes = verify_required_files(
+        source, source_contract_version=SOURCE_CONTRACT_VERSION_V3
+    )
+    raw = _sample_manifest(source_contract_version=3, rev=rev)
+    raw["compose_overlay"] = "compose.production.yaml"
+    raw["contract_hashes"] = hashes
+    manifest = parse_manifest(raw)
+    (release / "release.json").write_text(
+        json.dumps(manifest.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    (source / "compose.production.yaml").write_text("tampered\n", encoding="utf-8")
+    with (
+        patch("fetchnow_release.verify_release._assert_readonly_tree"),
+        patch("fetchnow_release.verify_release.image_exists", return_value=True),
+        patch(
+            "fetchnow_release.verify_release.inspect_image",
+            side_effect=lambda ref: {
+                "Id": {
+                    f"fetchnow-api:{rev}": "sha256:" + ("1" * 64),
+                    f"fetchnow-web:{rev}": "sha256:" + ("2" * 64),
+                    f"fetchnow-gateway:{rev}": "sha256:" + ("3" * 64),
+                }[ref],
+                "Config": {"Labels": {"org.opencontainers.image.revision": rev}},
+            },
+        ),
+    ):
+        result = verify_prepared_release(release, expected_revision=rev)
+    assert not result.ok
+    assert "hash" in result.messages[0]
+
+
+def test_unknown_future_contract_v4_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        required_source_files_for_version(4)
+    with pytest.raises(ValueError, match="unsupported"):
+        contract_hash_files_for_version(4)
+    with pytest.raises(ManifestError, match="unsupported source_contract_version"):
+        parse_source_contract_version(4)
 
 
 def test_deploy_plan_rejects_v1_target() -> None:

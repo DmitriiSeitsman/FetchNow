@@ -57,19 +57,19 @@ After `migration_started`, failures enter **`migration_requires_recovery`** (not
 ## Commands
 
 ```bash
-# Production (staging project fixed in Makefile)
 make release-migrate \
-  EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging \
-  BACKUP_ROOT=/srv/fetchnow-backups
+  EXPECTED_REVISION=<40-char-sha>
 
 make release-migration-recover \
   MIGRATION_ID=<uuid> \
-  ACTION=accept_source|accept_target \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging \
-  BACKUP_ROOT=/srv/fetchnow-backups
+  ACTION=accept_source|accept_target
+
+make production-release-migrate \
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-migration-recover \
+  MIGRATION_ID=<uuid> \
+  ACTION=accept_source|accept_target
 ```
 
 CLI equivalents:

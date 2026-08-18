@@ -32,11 +32,20 @@ def _good_cfg(rev: str) -> dict:
     return {
         "name": "fetchnow-staging",
         "services": {
-            "api": {"image": f"fetchnow-api:{rev}", "volumes": []},
-            "worker": {"image": f"fetchnow-api:{rev}", "command": ["fetchnow-worker"]},
+            "api": {
+                "image": f"fetchnow-api:{rev}",
+                "volumes": [],
+                "environment": {"APP_ENV": "staging"},
+            },
+            "worker": {
+                "image": f"fetchnow-api:{rev}",
+                "command": ["fetchnow-worker"],
+                "environment": {"APP_ENV": "staging"},
+            },
             "delivery": {
                 "image": f"fetchnow-api:{rev}",
                 "command": ["fetchnow-delivery"],
+                "environment": {"APP_ENV": "staging"},
             },
             "web": {"image": f"fetchnow-web:{rev}"},
             "gateway": {
@@ -210,6 +219,23 @@ def test_staging_render_image_and_ports() -> None:
         validate_staging_rendered(
             reload, expected_revision=rev, expected_project="fetchnow-staging"
         )
+
+
+def test_production_render_requires_matching_app_env() -> None:
+    rev = "b" * 40
+    cfg = _good_cfg(rev)
+    cfg["name"] = "fetchnow-production"
+    cfg["volumes"]["pgdata"]["name"] = "fetchnow-production_pgdata"
+    cfg["volumes"]["tmp"]["name"] = "fetchnow-production_tmp"
+    with pytest.raises(ComposeContractError, match="APP_ENV"):
+        validate_staging_rendered(
+            cfg, expected_revision=rev, expected_project="fetchnow-production"
+        )
+    for svc in ("api", "worker", "delivery"):
+        cfg["services"][svc]["environment"]["APP_ENV"] = "production"
+    validate_staging_rendered(
+        cfg, expected_revision=rev, expected_project="fetchnow-production"
+    )
 
 
 def test_pr9_render_accepts_storage_init_and_rejects_unknown() -> None:

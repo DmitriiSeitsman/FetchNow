@@ -242,7 +242,7 @@ def build_application_images(
     source_dir: Path,
     env_file: Path,
     revision: str,
-    compose_files: tuple[str, ...] = ("compose.yaml", "compose.staging.yaml"),
+    compose_files: tuple[str, ...],
 ) -> BuiltImages:
     rev = validate_full_sha(revision)
     warnings = list(assert_tag_collision_safe(rev, allow_unused_retag=True))

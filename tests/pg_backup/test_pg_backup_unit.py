@@ -345,6 +345,40 @@ def test_integration_project_name_safety() -> None:
     assert make_project_name() != good
 
 
+def test_operator_backup_cli_rejects_ephemeral_and_forbidden_names(
+    tmp_path: Path,
+) -> None:
+    from fetchnow_pg_backup.cli import main as backup_main
+
+    env = tmp_path / ".env.release-test"
+    env.write_text("X=1\n", encoding="utf-8")
+    compose = tmp_path / "compose.yaml"
+    overlay = tmp_path / "compose.staging.yaml"
+    compose.write_text("services: {}\n")
+    overlay.write_text("services: {}\n")
+    for name in (
+        "fetchnow-backup-test-abcd1234",
+        "fetchnow-prod",
+        "fetchnow-rollout-test-abcd1234",
+    ):
+        with pytest.raises(SystemExit, match="fetchnow-staging or fetchnow-production"):
+            backup_main(
+                [
+                    "create",
+                    "--project-name",
+                    name,
+                    "--env-file",
+                    str(env),
+                    "--compose-file",
+                    str(compose),
+                    "--compose-file",
+                    str(overlay),
+                    "--backup-root",
+                    str(tmp_path / "backups"),
+                ]
+            )
+
+
 def test_project_file_cleanup_validation(tmp_path: Path) -> None:
     from fetchnow_pg_backup.integration_project import (
         ProjectNameError,

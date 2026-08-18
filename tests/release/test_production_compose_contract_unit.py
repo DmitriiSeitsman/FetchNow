@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from fetchnow_release.password import PasswordError, validate_staging_password  # noqa: E402
 
 _FORBIDDEN_SHORT_NAME = re.compile(r"(?<![A-Za-z0-9-])fetchnow-prod(?![A-Za-z0-9-])")
 
@@ -57,3 +64,10 @@ def test_production_env_example_is_placeholder_only() -> None:
         if line and not line.startswith("#") and "=" in line
     }
     assert staging_keys == production_keys
+
+
+def test_production_example_password_is_rejected_by_policy() -> None:
+    with pytest.raises(PasswordError):
+        validate_staging_password(
+            "replace-with-32plus-url-safe-production-password"
+        )

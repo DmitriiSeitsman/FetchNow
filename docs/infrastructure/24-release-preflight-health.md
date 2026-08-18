@@ -1,6 +1,6 @@
 # 24. Release identity, preflight & health gate (PRD1C1)
 
-**INFO:** This chapter documents repository tooling for immutable release identity, read-only staging preflight, and a Compose+HTTP health gate. It does **not** claim staging has been deployed. Exact-revision materialization and image build are in [глава 25](25-release-materialization-build.md) (PRD1C2). Container deploy/rollback (PRD1C3) remain out of scope.
+**INFO:** This chapter documents repository tooling for immutable release identity, read-only preflight, and a Compose+HTTP health gate for the two real environments (`fetchnow-staging`, `fetchnow-production`). It does **not** claim staging or production has been deployed.
 
 ## Scope (PRD1C1)
 
@@ -30,6 +30,7 @@ One variable: `FETCHNOW_RELEASE_REVISION`.
 |---|---|
 | Development | defaults to `local` (`${FETCHNOW_RELEASE_REVISION:-local}`) |
 | Staging | required full SHA via `${FETCHNOW_RELEASE_REVISION:?…}` — fails closed if absent |
+| Production | same full-SHA rule via `${FETCHNOW_RELEASE_REVISION:?…}` |
 
 Rules:
 
@@ -65,9 +66,10 @@ python3.12 scripts/fetchnow_release_cli.py preflight \
 
 # or:
 make release-preflight \
-  EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=/srv/fetchnow-staging/env/.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-preflight \
+  EXPECTED_REVISION=<40-char-sha>
 ```
 
 Validates (non-exhaustive): project name, env file existence/regular file/not symlink/mode ≤0600, required keys once, password policy, full SHA equals env, **revision already contained in local `refs/remotes/origin/main`** (`git merge-base --is-ancestor "$EXPECTED" refs/remotes/origin/main` — feature-branch descendants are **rejected**), clean worktree, Docker CLI + Compose v2 + daemon, rendered Compose staging contract (loopback gateway, no leaked ports, revision tags, shared API/worker image, pinned Postgres, no binds/reload), deploy/backup root safety (reuses PRD1B path policy), free-space margin ≥ 1 GiB.
@@ -115,7 +117,8 @@ Protected managed projects (`fetchnow-staging`, `fetchnow-production`, `fetchnow
 any other non-matching name) fail closed without `--deploy-root` so operators
 cannot accidentally obtain a misleading tag-mode result against ID-pinned
 containers. Protected staging use through `make release-health` always passes
-`DEPLOY_ROOT` and therefore always uses managed mode.
+`DEPLOY_ROOT` and therefore always uses managed mode. Production uses
+`make production-release-health` with the canonical production deploy root.
 
 Managed health validates the **deployed** revision through
 `state/current.json` and `<deploy-root>/releases/<expected-revision>/`. The
@@ -123,11 +126,7 @@ tooling worktree `HEAD` may be a newer merged `main` than the deployed revision;
 no rebuild, retag, or container restart is required for a post-merge recheck of
 an already-healthy ID-pinned deployment.
 
-`ENV_FILE`, `DEPLOY_ROOT`, and `BACKUP_ROOT` are overridable Make variables. Their
-developer defaults remain `.env.staging`, `/srv/fetchnow-staging`, and
-`$(DEPLOY_ROOT)/backups`. An operator may point `ENV_FILE` directly at the protected
-external file; copying or symlinking secrets into the repository is neither needed
-nor recommended. Paths are quoted and env values are never printed.
+`ENV_FILE`, `DEPLOY_ROOT`, `BACKUP_ROOT`, `PROJECT_NAME`, and `COMPOSE_OVERLAY` are overridable Make variables on the staging `release-*` / `pg-backup-*` recipes. Their developer defaults remain `.env.staging`, `/srv/fetchnow-staging`, `$(DEPLOY_ROOT)/backups`, `fetchnow-staging`, and `compose.staging.yaml`. Production operators must use `make production-release-*` / `make production-pg-backup-*`, which hardcode the canonical production bundle and ignore those overrides.
 
 **Worker exception (temporary):** Compose disables the worker healthcheck today (`healthcheck.disable: true`) because the worker is still an idle heartbeat without a queue. The health gate therefore requires worker `running` only. This is temporary until queue health exists; do not treat it as a permanent policy.
 

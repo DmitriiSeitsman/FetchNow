@@ -7,7 +7,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import STAGING_PROJECT
 from .alembic_migrate import AlembicMigrateError, run_alembic_upgrade
 from .application_compatibility import (
     CompatibilityError,
@@ -16,6 +15,13 @@ from .application_compatibility import (
     assert_live_matches_saved_database_heads,
 )
 from .c2_constants import SOURCE_DIRNAME
+from .environment import (
+    PRODUCTION,
+    STAGING,
+    assert_real_environment_bundle,
+    real_identity,
+    snapshot_compose_files_for_release,
+)
 from .c3_constants import OVERRIDES_DIRNAME
 from .c3b2b2_constants import (
     MIGRATION_PLAN_NAME,
@@ -117,19 +123,22 @@ class MigrationResult:
 
 def _assert_allowed_project(name: str) -> None:
     try:
-        assert_migration_project(name, allow_staging=True)
+        assert_migration_project(name, allow_real=True)
     except MigrationProjectError as exc:
         raise MigrationError(
-            f"project name must be {STAGING_PROJECT!r} or a validated "
-            f"fetchnow-migration-test-* name, got {name!r}"
+            f"project name must be {STAGING.project!r}, {PRODUCTION.project!r}, "
+            f"or a validated fetchnow-migration-test-* name, got {name!r}"
         ) from exc
 
 
-def _release_compose_files(release_directory: Path) -> tuple[Path, ...]:
-    source = release_directory / SOURCE_DIRNAME
-    return (
-        (source / "compose.yaml").resolve(),
-        (source / "compose.staging.yaml").resolve(),
+def _release_compose_files(
+    release_directory: Path, *, project_name: str
+) -> tuple[Path, ...]:
+    from .manifest import load_manifest, manifest_path
+
+    manifest = load_manifest(manifest_path(release_directory))
+    return snapshot_compose_files_for_release(
+        release_directory, project_name=project_name, manifest=manifest
     )
 
 
@@ -371,6 +380,20 @@ def run_migration(inp: MigrationInput) -> MigrationResult:
         _assert_allowed_project(inp.project_name)
         if not inp.compose_files:
             raise MigrationError("at least one Compose file is required")
+        if real_identity(inp.project_name) is not None:
+            from .env_file import load_env_file
+
+            env = load_env_file(inp.env_file)
+            assert_real_environment_bundle(
+                project_name=inp.project_name,
+                env=env,
+                env_file=inp.env_file,
+                compose_files=inp.compose_files,
+                deploy_root=inp.deploy_root,
+                cli_backup_root=inp.backup_root,
+                require_cli_backup_root=True,
+                require_deploy_root=True,
+            )
 
         rev = validate_full_sha(inp.expected_revision)
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
@@ -547,13 +570,13 @@ def run_migration(inp: MigrationInput) -> MigrationResult:
                 mig_dir / OVERRIDES_DIRNAME,
                 target_ids,
                 include_delivery=compose_files_include_delivery(
-                    _release_compose_files(target_release)
+                    _release_compose_files(target_release, project_name=inp.project_name)
                 ),
                 include_storage_init=compose_files_include_storage_init(
-                    _release_compose_files(target_release)
+                    _release_compose_files(target_release, project_name=inp.project_name)
                 ),
             )
-            alembic_compose = (*_release_compose_files(target_release), override)
+            alembic_compose = (*_release_compose_files(target_release, project_name=inp.project_name), override)
             alembic_cwd = target_release / SOURCE_DIRNAME
 
             append_migration_event(mig_dir, STATUS_MIGRATION_STARTED, "alembic upgrade")

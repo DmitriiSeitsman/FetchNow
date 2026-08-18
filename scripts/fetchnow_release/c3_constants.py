@@ -123,4 +123,5 @@ BOOTSTRAP_FAILURE_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 ROLLOUT_PROJECT_PROTECTED = "fetchnow-staging"
+PRODUCTION_PROJECT_PROTECTED = "fetchnow-production"
 ROLLOUT_TEST_PROJECT_PREFIX = "fetchnow-rollout-test-"

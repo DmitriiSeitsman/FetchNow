@@ -5,6 +5,7 @@ from __future__ import annotations
 __version__ = "1.2.0"
 
 STAGING_PROJECT = "fetchnow-staging"
+PRODUCTION_PROJECT = "fetchnow-production"
 EXPECTED_SERVICES = ("gateway", "api", "worker", "delivery", "postgres", "web")
 POSTGRES_IMAGE_PREFIX = "postgres:16.9"
 OCI_REVISION_LABEL = "org.opencontainers.image.revision"

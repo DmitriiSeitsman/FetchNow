@@ -26,6 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "tests" / "release"))
 
 from fetchnow_release.prepare import PrepareInput, _chmod_tree_readonly, prepare_release  # noqa: E402
+from fetchnow_release.rollout_project import make_rollout_project_name  # noqa: E402
 from fetchnow_release.verify_release import verify_prepared_release  # noqa: E402
 from password_fixture import valid_test_password  # noqa: E402
 
@@ -88,10 +89,11 @@ def main() -> int:
             raise RuntimeError("sentinel leaked into clean clone")
 
         env_path = env_dir / ".env.release-test"
+        project = make_rollout_project_name()
         env_path.write_text(
             "\n".join(
                 [
-                    "COMPOSE_PROJECT_NAME=fetchnow-staging",
+                    f"COMPOSE_PROJECT_NAME={project}",
                     f"FETCHNOW_RELEASE_REVISION={rev}",
                     "GATEWAY_PORT=127.0.0.1:8091",
                     "APP_ENV=test",
@@ -122,7 +124,7 @@ def main() -> int:
         )
         first = prepare_release(
             PrepareInput(
-                project_name="fetchnow-staging",
+                project_name=project,
                 env_file=env_path,
                 compose_files=compose,
                 expected_revision=rev,
@@ -145,11 +147,20 @@ def main() -> int:
         man = json.loads((release_path / "release.json").read_text(encoding="utf-8"))
         if man["revision"] != rev:
             raise RuntimeError("manifest revision mismatch")
-        if man.get("source_contract_version") != 2:
+        if man.get("source_contract_version") != 3:
             raise RuntimeError(
-                f"new prepare must emit source_contract_version=2, got {man.get('source_contract_version')!r}"
+                f"new prepare must emit source_contract_version=3, got {man.get('source_contract_version')!r}"
             )
-        print("OK: manifest revision and source_contract_version=2")
+        if man.get("compose_overlay") != "compose.staging.yaml":
+            raise RuntimeError(
+                f"staging-shaped prepare must record compose.staging.yaml, got {man.get('compose_overlay')!r}"
+            )
+        hashes = man.get("contract_hashes") or {}
+        if "compose.production.yaml" not in hashes:
+            raise RuntimeError("v3 contract_hashes must include compose.production.yaml")
+        if not (release_path / "source" / "compose.production.yaml").is_file():
+            raise RuntimeError("v3 snapshot must contain compose.production.yaml")
+        print("OK: manifest revision, source_contract_version=3, production overlay hashed")
 
         for svc, ref in (
             ("api", f"fetchnow-api:{rev}"),
@@ -190,7 +201,7 @@ def main() -> int:
 
         second = prepare_release(
             PrepareInput(
-                project_name="fetchnow-staging",
+                project_name=project,
                 env_file=env_path,
                 compose_files=compose,
                 expected_revision=rev,
@@ -249,6 +260,7 @@ def main() -> int:
             _chmod_writable(legacy_man_path)
             legacy_data = json.loads(legacy_man_path.read_text(encoding="utf-8"))
             legacy_data.pop("source_contract_version", None)
+            legacy_data.pop("compose_overlay", None)
             legacy_data["contract_hashes"] = legacy_hashes
             legacy_man_path.write_text(
                 json.dumps(legacy_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"

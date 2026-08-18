@@ -37,7 +37,13 @@ from .current_state import (
 )
 from .db_heads import assert_heads_equal, database_heads_via_postgres, target_heads_from_release_source
 from .deploy_root import release_dir, validate_deploy_root
+from .env_file import load_env_file
 from .health import HealthInput
+from .environment import (
+    assert_real_environment_bundle,
+    real_identity,
+    snapshot_compose_files_for_release,
+)
 from .image_identity import assert_release_images_present
 from .journal import (
     JournalError,
@@ -101,16 +107,22 @@ class RecoverResult:
     recovery_id: str | None = None
 
 
-def _release_compose_files(release_directory: Path) -> tuple[Path, ...]:
-    source = release_directory / SOURCE_DIRNAME
-    return (
-        (source / "compose.yaml").resolve(),
-        (source / "compose.staging.yaml").resolve(),
+def _release_compose_files(
+    release_directory: Path, *, project_name: str
+) -> tuple[Path, ...]:
+    manifest = load_manifest(manifest_path(release_directory))
+    return snapshot_compose_files_for_release(
+        release_directory, project_name=project_name, manifest=manifest
     )
 
 
-def _compose_with_override(release_directory: Path, override: Path) -> tuple[Path, ...]:
-    return (*_release_compose_files(release_directory), override.resolve())
+def _compose_with_override(
+    release_directory: Path, override: Path, *, project_name: str
+) -> tuple[Path, ...]:
+    return (
+        *_release_compose_files(release_directory, project_name=project_name),
+        override.resolve(),
+    )
 
 
 def _idempotent_if_resolved(dep_dir: Path) -> RecoverResult | None:
@@ -148,10 +160,7 @@ def _execute_accept_target(
         raise RecoverError("target release manifest hash does not match plan.json")
     assert_release_images_present(load_manifest(manifest_path(release)))
     source = release / SOURCE_DIRNAME
-    base_compose = (
-        (source / "compose.yaml").resolve(),
-        (source / "compose.staging.yaml").resolve(),
-    )
+    base_compose = _release_compose_files(release, project_name=inp.project_name)
     cwd = source
     db_heads = database_heads_via_postgres(
         project_name=inp.project_name,
@@ -197,13 +206,15 @@ def _execute_accept_target(
         deployment_id=plan.deployment_id,
         release_revision=plan.target_revision,
         include_delivery=compose_files_include_delivery(
-            _release_compose_files(release)
+            _release_compose_files(release, project_name=inp.project_name)
         ),
         include_storage_init=compose_files_include_storage_init(
-            _release_compose_files(release)
+            _release_compose_files(release, project_name=inp.project_name)
         ),
     )
-    compose_files = _compose_with_override(release, override)
+    compose_files = _compose_with_override(
+        release, override, project_name=inp.project_name
+    )
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -259,9 +270,8 @@ def _execute_rollback(
             )
     # Compatibility gate before any container mutation.
     pre_heads = target_heads_from_release_source(prev_release)
-    pre_compose = (
-        (prev_release / SOURCE_DIRNAME / "compose.yaml").resolve(),
-        (prev_release / SOURCE_DIRNAME / "compose.staging.yaml").resolve(),
+    pre_compose = _release_compose_files(
+        prev_release, project_name=inp.project_name
     )
     pre_live = database_heads_via_postgres(
         project_name=inp.project_name,
@@ -289,15 +299,17 @@ def _execute_rollback(
         deployment_id=plan.deployment_id,
         release_revision=prev,
         include_delivery=compose_files_include_delivery(
-            _release_compose_files(prev_release)
+            _release_compose_files(prev_release, project_name=inp.project_name)
         ),
         include_storage_init=compose_files_include_storage_init(
-            _release_compose_files(prev_release)
+            _release_compose_files(prev_release, project_name=inp.project_name)
         ),
     )
-    compose_files = _compose_with_override(prev_release, override)
+    compose_files = _compose_with_override(
+        prev_release, override, project_name=inp.project_name
+    )
     cwd = prev_release / SOURCE_DIRNAME
-    if compose_files_include_storage_init(_release_compose_files(prev_release)):
+    if compose_files_include_storage_init(_release_compose_files(prev_release, project_name=inp.project_name)):
         run_storage_init(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -335,10 +347,7 @@ def _execute_rollback(
     )
     stabilize_full_health(health_inp, policy=inp.policy)
     prev_heads = target_heads_from_release_source(prev_release)
-    base_compose = (
-        (prev_release / SOURCE_DIRNAME / "compose.yaml").resolve(),
-        (prev_release / SOURCE_DIRNAME / "compose.staging.yaml").resolve(),
-    )
+    base_compose = _release_compose_files(prev_release, project_name=inp.project_name)
     live_heads = database_heads_via_postgres(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -382,6 +391,16 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
     try:
         if inp.action not in {"accept-target", "rollback"}:
             raise RecoverError("action must be accept-target or rollback")
+        if real_identity(inp.project_name) is not None:
+            env = load_env_file(inp.env_file)
+            assert_real_environment_bundle(
+                project_name=inp.project_name,
+                env=env,
+                env_file=inp.env_file,
+                deploy_root=inp.deploy_root,
+                require_cli_backup_root=False,
+                require_deploy_root=True,
+            )
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
         ensure_rollout_layout(deploy)
         with RolloutLock(deploy, wait=inp.wait_lock):

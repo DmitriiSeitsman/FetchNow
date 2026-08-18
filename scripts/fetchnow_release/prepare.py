@@ -24,6 +24,7 @@ from .git_checks import (
     assert_clean_worktree,
     assert_revision_in_origin_main,
 )
+from .environment import overlay_from_compose_files
 from .image_build import (
     ImageBuildError,
     build_application_images,
@@ -159,10 +160,12 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                 )
                 messages.append(f"OK: source materialized tree={source.tree_oid}")
 
+                overlay = overlay_from_compose_files(inp.compose_files)
                 built = build_application_images(
                     source_dir=source.source_dir,
                     env_file=inp.env_file,
                     revision=rev,
+                    compose_files=("compose.yaml", overlay),
                 )
                 for w in built.warnings:
                     messages.append(f"NOTE: {w}")
@@ -189,6 +192,7 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                     contract_hashes=dict(source.contract_hashes),
                     tool_version=__version__,
                     status=RELEASE_STATUS_PREPARED,
+                    compose_overlay=overlay,
                 )
                 write_manifest(manifest_path(incomplete), manifest)
                 _chmod_tree_readonly(incomplete / SOURCE_DIRNAME)

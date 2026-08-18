@@ -64,13 +64,16 @@ Manifest and source identity are verified on the incomplete directory **before**
 
 ```bash
 make release-prepare \
-  EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-prepare \
+  EXPECTED_REVISION=<40-char-sha>
 
 make release-verify \
-  EXPECTED_REVISION=<40-char-sha> \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-verify \
+  EXPECTED_REVISION=<40-char-sha>
 ```
 
 Second prepare for the same SHA verifies and returns already prepared (no rebuild). Drift (manifest/source/image ID/OCI mismatch) fails closed.
@@ -80,9 +83,10 @@ Second prepare for the same SHA verifies and returns already prepared (no rebuil
 | `source_contract_version` | Required snapshot paths |
 |---------------------------|------------------------|
 | **1** (legacy; field omitted on old manifests) | PRD1C2 pinned list — no `deploy/migrations/compatibility.json` |
-| **2** (new prepare) | v1 list + `deploy/migrations/compatibility.json` |
+| **2** (legacy prepare) | v1 list + `deploy/migrations/compatibility.json` |
+| **3** (new prepare) | v2 list + `compose.production.yaml`; manifest `compose_overlay` required |
 
-Legacy finalized releases verify under v1 forever. New prepare emits v2. Contract version is declared in the manifest, not inferred from file presence. Re-prepare never upgrades an existing release manifest in place.
+Legacy finalized releases verify under their declared contract forever. New prepare emits v3 and records which canonical overlay (`compose.staging.yaml` or `compose.production.yaml`) was used for image build. Contract version is declared in the manifest, not inferred from file presence. Re-prepare never upgrades an existing release manifest in place. Production cannot activate a v1/v2 snapshot: the production overlay was not part of those hashed contracts.
 
 ## Boundaries
 

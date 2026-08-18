@@ -8,7 +8,6 @@ from pathlib import Path
 
 from . import (
     MIN_FREE_BYTES,
-    STAGING_PROJECT,
 )
 from .compose_validate import ComposeContractError, validate_staging_rendered
 from .deploy_plan_project import DeployPlanProjectError, assert_deploy_plan_project
@@ -19,6 +18,14 @@ from .docker_checks import (
     require_docker_daemon,
 )
 from .env_file import EnvFileError, load_env_file, require_keys
+from .environment import (
+    EnvironmentError,
+    PRODUCTION,
+    STAGING,
+    assert_loopback_gateway_port,
+    assert_real_environment_bundle,
+    real_identity,
+)
 from .git_checks import (
     GitCheckError,
     assert_clean_worktree,
@@ -33,13 +40,13 @@ from .roots import RootPathError, validate_operator_root
 
 
 def _assert_allowed_project(name: str) -> None:
-    """Allow production staging or validated integration test projects."""
-    if name == STAGING_PROJECT:
+    """Allow real staging/production or validated integration test projects."""
+    if real_identity(name) is not None:
         return
-    for checker, label in (
-        (assert_rollout_project, "fetchnow-rollout-test-*"),
-        (assert_deploy_plan_project, "fetchnow-deploy-plan-test-*"),
-        (assert_migration_project, "fetchnow-migration-test-*"),
+    for checker in (
+        assert_rollout_project,
+        assert_deploy_plan_project,
+        assert_migration_project,
     ):
         try:
             checker(name)
@@ -47,8 +54,8 @@ def _assert_allowed_project(name: str) -> None:
         except (RolloutProjectError, DeployPlanProjectError, MigrationProjectError):
             continue
     raise PreflightError(
-        f"project name must be {STAGING_PROJECT!r} or a validated "
-        f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
+        f"project name must be {STAGING.project!r}, {PRODUCTION.project!r}, "
+        f"or a validated fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
         f"fetchnow-migration-test-* name, got {name!r}"
     )
 
@@ -111,9 +118,19 @@ def run_preflight(inp: PreflightInput) -> PreflightResult:
 
         validate_staging_password(env["POSTGRES_PASSWORD"])
 
-        gw = env.get("GATEWAY_PORT", "")
-        if not gw.startswith("127.0.0.1:"):
-            raise PreflightError("GATEWAY_PORT must be loopback (127.0.0.1:<port>)")
+        assert_loopback_gateway_port(env.get("GATEWAY_PORT", ""))
+        identity = real_identity(inp.project_name)
+        require_deploy = identity is not None
+        assert_real_environment_bundle(
+            project_name=inp.project_name,
+            env=env,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            deploy_root=inp.deploy_root,
+            cli_backup_root=inp.backup_root,
+            require_cli_backup_root=False,
+            require_deploy_root=require_deploy,
+        )
 
         assert_clean_worktree(inp.repo_root)
         assert_revision_in_origin_main(inp.repo_root, expected)
@@ -123,6 +140,9 @@ def run_preflight(inp: PreflightInput) -> PreflightResult:
 
         deploy_root = Path(inp.deploy_root or env["FETCHNOW_DEPLOY_ROOT"])
         backup_root = Path(inp.backup_root or env["FETCHNOW_BACKUP_ROOT"])
+        if identity is not None:
+            deploy_root = identity.deploy_root
+            backup_root = identity.backup_root
         validate_operator_root(
             deploy_root, repo_root=inp.repo_root, label="deploy root"
         )
@@ -152,7 +172,7 @@ def run_preflight(inp: PreflightInput) -> PreflightResult:
         validate_staging_rendered(
             cfg, expected_revision=expected, expected_project=inp.project_name
         )
-        messages.append("OK: staging deployment preflight passed")
+        messages.append("OK: deployment preflight passed")
         messages.append(f"revision={expected}")
         return PreflightResult(ok=True, messages=tuple(messages))
     except (
@@ -163,6 +183,7 @@ def run_preflight(inp: PreflightInput) -> PreflightResult:
         GitCheckError,
         DockerCheckError,
         RootPathError,
+        EnvironmentError,
         ComposeContractError,
         OSError,
         ValueError,

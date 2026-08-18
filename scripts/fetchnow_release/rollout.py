@@ -6,7 +6,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import STAGING_PROJECT
 from .activate import (
     ActivateError,
     activate_app_tier,
@@ -56,6 +55,14 @@ from .db_heads import (
 )
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput
+from .env_file import load_env_file
+from .environment import (
+    PRODUCTION,
+    STAGING,
+    assert_real_environment_bundle,
+    real_identity,
+    snapshot_compose_files_for_release,
+)
 from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import (
     JournalError,
@@ -119,18 +126,22 @@ class RolloutResult:
     status: str | None = None
 
 
-def _release_compose_files(release_directory: Path) -> tuple[Path, ...]:
-    source = release_directory / SOURCE_DIRNAME
-    return (
-        (source / "compose.yaml").resolve(),
-        (source / "compose.staging.yaml").resolve(),
+def _release_compose_files(
+    release_directory: Path, *, project_name: str
+) -> tuple[Path, ...]:
+    manifest = load_manifest(manifest_path(release_directory))
+    return snapshot_compose_files_for_release(
+        release_directory, project_name=project_name, manifest=manifest
     )
 
 
 def _compose_with_override(
-    release_directory: Path, override_path: Path
+    release_directory: Path, override_path: Path, *, project_name: str
 ) -> tuple[Path, ...]:
-    return (*_release_compose_files(release_directory), override_path.resolve())
+    return (
+        *_release_compose_files(release_directory, project_name=project_name),
+        override_path.resolve(),
+    )
 
 
 def _app_containers_present(
@@ -219,7 +230,7 @@ def _perform_rollback(
             raise RolloutError(
                 "automatic rollback requires resolved current.json with database state"
             )
-        base_compose = _release_compose_files(prev_release)
+        base_compose = _release_compose_files(prev_release, project_name=inp.project_name)
         live_heads = database_heads_via_postgres(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -244,15 +255,15 @@ def _perform_rollback(
             deployment_id=deployment_id,
             release_revision=previous_revision,
             include_delivery=compose_files_include_delivery(
-                _release_compose_files(prev_release)
+                _release_compose_files(prev_release, project_name=inp.project_name)
             ),
             include_storage_init=compose_files_include_storage_init(
-                _release_compose_files(prev_release)
+                _release_compose_files(prev_release, project_name=inp.project_name)
             ),
         )
-        compose_files = _compose_with_override(prev_release, override)
+        compose_files = _compose_with_override(prev_release, override, project_name=inp.project_name)
         cwd = prev_release / SOURCE_DIRNAME
-        if compose_files_include_storage_init(_release_compose_files(prev_release)):
+        if compose_files_include_storage_init(_release_compose_files(prev_release, project_name=inp.project_name)):
             run_storage_init(
                 project_name=inp.project_name,
                 env_file=inp.env_file,
@@ -355,7 +366,7 @@ def _verify_already_active(
     )
     if not verified.ok:
         raise RolloutError(verified.messages[0])
-    base_compose = _release_compose_files(target_release)
+    base_compose = _release_compose_files(target_release, project_name=inp.project_name)
     cwd = target_release / SOURCE_DIRNAME
     live_heads = database_heads_via_postgres(
         project_name=inp.project_name,
@@ -382,13 +393,13 @@ def _verify_already_active(
             health_dep / OVERRIDES_DIRNAME,
             override_ids,
             include_delivery=compose_files_include_delivery(
-                _release_compose_files(target_release)
+                _release_compose_files(target_release, project_name=inp.project_name)
             ),
             include_storage_init=compose_files_include_storage_init(
-                _release_compose_files(target_release)
+                _release_compose_files(target_release, project_name=inp.project_name)
             ),
         )
-    compose_files = _compose_with_override(target_release, override)
+    compose_files = _compose_with_override(target_release, override, project_name=inp.project_name)
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -422,9 +433,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
     dep_dir: Path | None = None
     mutation_began = False
     try:
-        if inp.project_name == STAGING_PROJECT:
-            pass
-        else:
+        if real_identity(inp.project_name) is None:
             from .deploy_plan_project import (
                 DeployPlanProjectError,
                 assert_deploy_plan_project,
@@ -448,10 +457,21 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     continue
             else:
                 raise RolloutError(
-                    f"project name must be {STAGING_PROJECT!r} or a validated "
+                    f"project name must be {STAGING.project!r}, "
+                    f"{PRODUCTION.project!r}, or a validated "
                     f"fetchnow-rollout-test-* / fetchnow-deploy-plan-test-* / "
                     f"fetchnow-migration-test-* name, got {inp.project_name!r}"
                 )
+        else:
+            env = load_env_file(inp.env_file)
+            assert_real_environment_bundle(
+                project_name=inp.project_name,
+                env=env,
+                env_file=inp.env_file,
+                deploy_root=inp.deploy_root,
+                require_cli_backup_root=False,
+                require_deploy_root=True,
+            )
 
         rev = validate_full_sha(inp.expected_revision)
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
@@ -513,7 +533,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
             target_ids = assert_release_images_present(target_manifest)
             man_hash = sha256_file(manifest_path(target_release))
 
-            base_compose = _release_compose_files(target_release)
+            base_compose = _release_compose_files(target_release, project_name=inp.project_name)
             cwd = target_release / SOURCE_DIRNAME
 
             if inp.bootstrap:
@@ -592,18 +612,18 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 deployment_id=deployment_id,
                 release_revision=rev,
                 include_delivery=compose_files_include_delivery(
-                    _release_compose_files(target_release)
+                    _release_compose_files(target_release, project_name=inp.project_name)
                 ),
                 include_storage_init=compose_files_include_storage_init(
-                    _release_compose_files(target_release)
+                    _release_compose_files(target_release, project_name=inp.project_name)
                 ),
             )
-            compose_files = _compose_with_override(target_release, override)
+            compose_files = _compose_with_override(target_release, override, project_name=inp.project_name)
             messages.append(f"OK: plan published deployment_id={deployment_id}")
 
             try:
                 if compose_files_include_storage_init(
-                    _release_compose_files(target_release)
+                    _release_compose_files(target_release, project_name=inp.project_name)
                 ):
                     append_event(
                         dep_dir,

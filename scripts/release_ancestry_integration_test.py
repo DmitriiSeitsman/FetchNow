@@ -26,6 +26,7 @@ from fetchnow_release.git_checks import (  # noqa: E402
     assert_revision_contained_in_trusted_main,
 )
 from fetchnow_release.preflight import PreflightInput, run_preflight  # noqa: E402
+from fetchnow_release.rollout_project import make_rollout_project_name  # noqa: E402
 from git_graph_fixture import build_trusted_main_graph  # noqa: E402
 
 
@@ -69,12 +70,13 @@ def main() -> int:
         # Positive end-to-end preflight against temporary repo only.
         # Compose files come from the real worktree as absolute paths; Git trust
         # checks use the temporary repository (never the developer's refs).
-        env_path = env_dir / ".env.staging"
+        project = make_rollout_project_name()
+        env_path = env_dir / ".env.ancestry-test"
         password = "ancestry-test-url-safe-password-xxxx"
         env_path.write_text(
             "\n".join(
                 [
-                    "COMPOSE_PROJECT_NAME=fetchnow-staging",
+                    f"COMPOSE_PROJECT_NAME={project}",
                     f"FETCHNOW_RELEASE_REVISION={g.main_tip}",
                     "GATEWAY_PORT=127.0.0.1:8091",
                     "PUBLIC_SITE_URL=https://staging.example.test",
@@ -96,7 +98,7 @@ def main() -> int:
         )
         result = run_preflight(
             PreflightInput(
-                project_name="fetchnow-staging",
+                project_name=project,
                 env_file=env_path,
                 compose_files=compose_files,
                 expected_revision=g.main_tip,
@@ -112,7 +114,7 @@ def main() -> int:
         print("OK: positive preflight against temporary trusted main")
 
         # Negative: preflight with feature tip must fail closed.
-        env_bad = env_dir / ".env.staging-feature"
+        env_bad = env_dir / ".env.ancestry-test-feature"
         env_bad.write_text(
             env_path.read_text(encoding="utf-8").replace(g.main_tip, g.feature_tip),
             encoding="utf-8",
@@ -120,7 +122,7 @@ def main() -> int:
         os.chmod(env_bad, 0o600)
         bad = run_preflight(
             PreflightInput(
-                project_name="fetchnow-staging",
+                project_name=project,
                 env_file=env_bad,
                 compose_files=compose_files,
                 expected_revision=g.feature_tip,

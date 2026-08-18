@@ -19,21 +19,23 @@ First prepare the exact trusted revision, then roll it out:
 
 ```bash
 make release-prepare \
-  EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  EXPECTED_REVISION=<40-char-sha>
 
 make release-rollout \
-  EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-prepare \
+  EXPECTED_REVISION=<40-char-sha>
+
+make production-release-rollout \
+  EXPECTED_REVISION=<40-char-sha>
 ```
 
-The Make target fixes `--project-name fetchnow-staging`; it cannot be redirected to another project. Image tags are not the activation authority: the generated Compose override pins the inspected immutable image IDs from `release.json`.
+Staging `release-*` recipes default to `--project-name fetchnow-staging` and `compose.staging.yaml` and remain usable without new arguments. They can be pointed at another overlay/project only by explicit Make variables; that is not a production path. `make production-release-*` hardcodes the canonical production bundle and cannot be redirected to staging via command-line overrides. Image tags are not the activation authority: the generated Compose override pins the inspected immutable image IDs from `release.json`. Runtime Compose files come from the immutable prepared snapshot (`compose.yaml` + the overlay recorded in `release.json`), never from the live checkout after prepare.
 
-After a committed rollout, standalone staging health uses the same identity model:
-`make release-health ENV_FILE=/srv/fetchnow-staging/env/.env.staging
-DEPLOY_ROOT=/srv/fetchnow-staging EXPECTED_REVISION=<sha>` reads schema-v2
+After a committed rollout, standalone health uses the same identity model:
+`make release-health EXPECTED_REVISION=<sha>` (staging defaults) or
+`make production-release-health EXPECTED_REVISION=<sha>` reads schema-v2
 `state/current.json`, verifies its prepared manifest binding, and checks running
 containers by exact image ID. The external env file is consumed in place; do not
 copy or symlink it into the repository.
@@ -45,8 +47,6 @@ The first application rollout requires an explicit acknowledgement:
 ```bash
 make release-rollout \
   EXPECTED_REVISION=<40-char-sha> \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging \
   BOOTSTRAP=1
 ```
 
@@ -78,9 +78,11 @@ If automatic rollback itself cannot complete, inspect the deployment journal and
 ```bash
 make release-recover \
   DEPLOYMENT_ID=<journal-uuid> \
-  ACTION=rollback \
-  ENV_FILE=.env.staging \
-  DEPLOY_ROOT=/srv/fetchnow-staging
+  ACTION=rollback
+
+make production-release-recover \
+  DEPLOYMENT_ID=<journal-uuid> \
+  ACTION=rollback
 ```
 
 `ACTION=accept-target` is only for an operator who has verified that the target is healthy and should become current. Recovery does not introduce a database migration path.
@@ -93,7 +95,7 @@ make release-recover \
 | PRD1C3B2A | Dual application/database `current.json` + compatibility envelope (no DB mutation) |
 | PRD1C3B2B2 | verified forward migration transaction (database state only; no application activation) — см. [главу 29](29-verified-migration-transaction.md) |
 | PRD1C3B2C | unified migrate→rollout orchestration |
-| PRD1D | host Nginx/TLS/public publish and production operationalization |
-| PRD1D-prod-param | parameterize release Make/CLI/source contract for `fetchnow-production` — see [chapter 30](30-production-release-runbook.md) §12 |
+| PRD1D | host Nginx/TLS/public publish (not claimed by release parameterization) |
+| PRD1D-B | production parameterization of the existing release pipeline — see [chapter 30](30-production-release-runbook.md) |
 
 Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, `fetchnow-production`, or `fetchnow-prod`.
