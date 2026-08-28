@@ -32,5 +32,13 @@
 - **PR6:** durable download execution foundation (`POST …/downloads`, `GET /download-jobs/{id}`), private worker artifacts, exact format rebinding. Feature default off; **no client file delivery** in PR6.
 - **PR7:** authenticated private artifact delivery (`GET|HEAD …/download-jobs/{id}/content`) via dedicated `delivery` service with read-only artifact mount. Feature default off (`MEDIA_DELIVERY_ENABLED=false`). Shared backend image still contains yt-dlp; delivery never invokes it and has no configured path. DB credential is not an enforced read-only role.
 - **PR8:** browser orchestration of the existing APIs into a streaming save. UI flag `PUBLIC_MEDIA_FLOW_ENABLED` defaults false and does not enable server-side jobs/inspection/downloads/delivery. Save requires the File System Access API; no Blob fallback; no progress percentage; no resume UI.
-- **PR9:** bounded server-side stream-copy muxing for split video/audio (Yandex Preview → VK). Feature default off (`MEDIA_MUXING_ENABLED=false`). No transcoding. Public `MediaFormat` schema unchanged.
-- Payments and Turbo entitlements arrive in subsequent PRs.
+- **PR9 / PRD1E-B1:** bounded server-side stream-copy muxing for split
+  video/audio is base Free functionality. Feature default off
+  (`MEDIA_MUXING_ENABLED=false`) pending operator activation. No transcoding;
+  public `MediaFormat` schema unchanged; separate audio/video products are not
+  exposed.
+- **PRD1E-B2 (separate):** database-backed anonymous Free quota with atomic
+  admission and successful-`ready` accounting.
+- **PRD1E-B3 (separate):** configurable Free throttling at artifact delivery,
+  preserving Range requests and worker throughput.
+- Payments and Premium entitlements arrive in subsequent PRs.

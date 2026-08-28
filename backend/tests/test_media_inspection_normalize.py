@@ -8,6 +8,10 @@ from itertools import permutations
 
 import pytest
 
+from fetchnow.downloads.selection import (
+    DirectDownloadSelection,
+    resolve_selection_from_draft,
+)
 from fetchnow.media_inspection.errors import InspectionError, InspectionErrorKind
 from fetchnow.media_inspection.models import (
     CodecFamily,
@@ -88,10 +92,8 @@ def test_vk_fixture_normalization() -> None:
     heights = [f.height for f in progressive]
     assert heights == sorted(heights, reverse=True)
     for fmt in meta.formats:
-        if fmt.height and fmt.height > 720 and fmt.has_video and fmt.has_audio:
-            assert fmt.free_tier_eligible is False
         if fmt.free_tier_eligible:
-            assert fmt.height is not None and fmt.height <= 720
+            assert fmt.height is not None
             assert fmt.has_video and fmt.has_audio
     blob = repr(meta) + "".join(repr(f) for f in meta.formats)
     assert "example.invalid" not in blob
@@ -375,6 +377,90 @@ def test_muxing_enabled_derives_executable_options() -> None:
     blob = repr(meta) + "".join(repr(f) for f in meta.formats)
     assert "format_id" not in blob
     assert "example.invalid" not in blob
+
+
+def test_free_progressive_does_not_suppress_1080_muxed_quality() -> None:
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["formats"] = [
+        {
+            "format_id": "direct-360",
+            "ext": "mp4",
+            "width": 640,
+            "height": 360,
+            "vcodec": "avc1",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/direct-360",
+        },
+        {
+            "format_id": "video-1080",
+            "ext": "mp4",
+            "width": 1920,
+            "height": 1080,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "protocol": "https",
+            "url": "https://example.invalid/video-1080",
+        },
+        {
+            "format_id": "audio-aac",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/audio-aac",
+        },
+    ]
+    meta = _project(_parse(payload), MEDIA_MUXING_ENABLED=True)
+
+    assert meta.muxing_required is False
+    assert {fmt.height for fmt in meta.formats} == {360, 1080}
+    assert all(fmt.has_video and fmt.has_audio for fmt in meta.formats)
+
+
+def test_direct_progressive_suppresses_same_quality_mux_option() -> None:
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["formats"] = [
+        {
+            "format_id": "direct-720",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "vcodec": "avc1",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/direct-720",
+        },
+        {
+            "format_id": "video-720",
+            "ext": "mp4",
+            "width": 1280,
+            "height": 720,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "protocol": "https",
+            "url": "https://example.invalid/video-720",
+        },
+        {
+            "format_id": "audio-aac",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "protocol": "https",
+            "url": "https://example.invalid/audio-aac",
+        },
+    ]
+    draft = _parse(payload)
+    meta = _project(draft, MEDIA_MUXING_ENABLED=True)
+
+    assert len(meta.formats) == 1
+    selection = resolve_selection_from_draft(
+        draft,
+        settings(MEDIA_MUXING_ENABLED=True),
+        meta.formats[0].format_option_id,
+        meta.formats[0],
+    )
+    assert isinstance(selection, DirectDownloadSelection)
 
 
 def test_generic_extractor_rejected() -> None:

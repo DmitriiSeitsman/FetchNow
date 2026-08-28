@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted (PR9). The feature is **disabled by default**
+Accepted (PR9), amended by PRD1E-B1. The feature is **disabled by default**
 (`MEDIA_MUXING_ENABLED=false`). Progressive direct download is unchanged.
-ffmpeg/ffprobe paths are worker-only.
+ffmpeg/ffprobe paths are worker-only. Muxing is a base Free download-engine
+capability, not a Premium entitlement.
 
 ## Context
 
@@ -19,13 +20,17 @@ then blocked every quality with “muxing is not offered yet.”
    finished progressive artifact (`hasVideo`, `hasAudio`,
    `freeTierEligible`, final container/quality). Source tokens and URLs stay
    on the internal binding model only.
-2. Derive mux options only when muxing is enabled **and** no free-tier
-   progressive format exists. Pairing is deterministic, order-invariant, and
-   limited to stream-copy combinations:
+2. When muxing is enabled, derive options for compatible split-stream
+   qualities not already represented by a free-tier progressive file. A direct
+   progressive file remains preferred for the same quality, while a lower
+   direct quality does not suppress a better compatible split-stream quality.
+   Pairing is deterministic, order-invariant, and limited to stream-copy
+   combinations:
    - MP4: H.264/AVC + AAC → `mp4`
    - WebM: VP8/VP9/AV1 + Opus/Vorbis → `webm`
-   Unknown/HEVC/MP3, DRM, non-HTTP protocols, and heights above 720p are
-   rejected. No transcoding.
+   Unknown/HEVC/MP3, DRM, and non-HTTP protocols are rejected. Resolution is
+   bounded by the configured inspection policy, not a Free-tier 720p product
+   cap. No transcoding.
 3. `muxingRequired` is false iff at least one executable free option exists
    (direct progressive **or** a derived mux option while the feature is on).
    Otherwise true.
@@ -65,6 +70,8 @@ then blocked every quality with “muxing is not offered yet.”
   bookworm `ffmpeg` package) and set absolute paths only on the worker.
 - Enabling muxing does not enable transcoding, cookies, plugins, or
   client-controlled argv.
+- Free users receive only finished combined video+audio choices. Separate
+  audio-only and video-only products remain future Premium scope.
 - Video-only / audio-only rows are used internally for pairing only. They are
   never projected as public `MediaFormat` download choices.
 

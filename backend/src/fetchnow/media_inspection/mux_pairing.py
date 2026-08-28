@@ -25,8 +25,6 @@ from fetchnow.media_inspection.size_estimate import sum_approx_bytes
 if TYPE_CHECKING:
     from fetchnow.core.config import Settings
 
-_FREE_TIER_MAX_HEIGHT = 720
-
 _MP4_VIDEO = frozenset({CodecFamily.AVC})
 _MP4_AUDIO = frozenset({CodecFamily.AAC})
 _WEBM_VIDEO = frozenset({CodecFamily.VP8, CodecFamily.VP9, CodecFamily.AV1})
@@ -136,7 +134,7 @@ def _usable_video(candidate: InternalFormatCandidate) -> bool:
         return False
     if not candidate.provider_format_token:
         return False
-    if candidate.height is None or candidate.height > _FREE_TIER_MAX_HEIGHT:
+    if candidate.height is None:
         return False
     if candidate.container == "mp4":
         return candidate.video_codec in _MP4_VIDEO

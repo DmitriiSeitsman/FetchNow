@@ -609,7 +609,7 @@ describe("contracts", () => {
     ).toBe(false);
   });
 
-  it("defaults to the highest eligible quality at or below 720p", () => {
+  it("defaults to the highest server-eligible quality", () => {
     const fmt = (height: number, eligible: boolean, id: string) => ({
       ...progressiveFormat,
       formatOptionId: id,
@@ -626,13 +626,13 @@ describe("contracts", () => {
     expect(
       pickHighestEligibleFormat([
         fmt(144, true, id144),
-        fmt(1080, false, id1080),
+        fmt(1080, true, id1080),
         fmt(240, true, id240),
         fmt(720, true, id720),
         fmt(360, true, id360),
         fmt(480, true, id480),
       ]),
-    ).toBe(id720);
+    ).toBe(id1080);
   });
 
   it("requires PR12 size, percent, and filename coherence", () => {

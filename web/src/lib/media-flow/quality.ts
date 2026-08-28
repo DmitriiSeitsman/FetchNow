@@ -242,7 +242,7 @@ export function groupQualityOptions(
 }
 
 /**
- * Highest eligible representative at or below the free 720p limit.
+ * Highest eligible representative within the server-projected policy.
  * Shares the ranking with {@link groupQualityOptions}, so the default selection
  * is always one of the rows the user can see.
  */
@@ -251,7 +251,7 @@ export function pickHighestEligibleFormat(
   options: QualityGroupingOptions = {},
 ): string | null {
   const eligible = groupQualityOptions(formats, options).filter(
-    (option) => option.eligible && (option.representative.height ?? 0) <= 720,
+    (option) => option.eligible,
   );
   if (eligible.length === 0) {
     return null;

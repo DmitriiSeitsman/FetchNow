@@ -61,7 +61,7 @@ function postPr9Formats(): MediaFormat[] {
     width: height === 1080 ? 1920 : Math.round((height * 16) / 9),
     height,
     qualityLabel: `p${height}`,
-    freeTierEligible: height <= 720,
+    freeTierEligible: true,
   }));
 }
 
@@ -110,9 +110,9 @@ describe("PR10 loader, format, and contrast UX", () => {
     expect(startOver?.textContent).toMatch(/Start over/);
   });
 
-  it("makes every post-PR9 eligible quality selectable and defaults visually to 720p", () => {
+  it("makes every combined quality selectable and defaults visually to 1080p", () => {
     const formats = postPr9Formats();
-    const selected = formats.find((item) => item.height === 720)?.formatOptionId ?? null;
+    const selected = formats.find((item) => item.height === 1080)?.formatOptionId ?? null;
     document.body.innerHTML = `
       <div data-flow-formats></div>
       <p data-flow-mux>Combined video+audio files are required; muxing is not offered yet</p>
@@ -144,16 +144,14 @@ describe("PR10 loader, format, and contrast UX", () => {
     ];
     expect(radios).toHaveLength(6);
     const enabled = radios.filter((radio) => !radio.disabled);
-    expect(enabled).toHaveLength(5);
+    expect(enabled).toHaveLength(6);
     const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
     expect(mux?.hidden).toBe(true);
     expect(document.querySelector("[data-flow-formats]")?.textContent ?? "").not.toMatch(
       /muxing is not offered/i,
     );
     const selectedLabel = document.querySelector(".format-selected .format-label");
-    expect(selectedLabel?.textContent).toBe("Высокое (720p)");
-    const disabledReason = document.querySelector(".format-reason");
-    expect(disabledReason?.textContent).toMatch(/лимита бесплатного режима 720p/i);
+    expect(selectedLabel?.textContent).toBe("Высокое (1080p)");
   });
 
   it("keeps Start over local and uses Cancel task for server jobs", async () => {

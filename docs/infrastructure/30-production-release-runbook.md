@@ -498,6 +498,25 @@ but public progressive options for those providers require muxing
 as a live download smoke path. VK and RUTUBE are the real-download
 fixtures for this activation.
 
+#### Later PRD1E-B1 muxing activation (not performed by this PR)
+
+After the PRD1E-B1 revision has passed staging and been explicitly accepted for
+production, the controlled production env delta is:
+
+```env
+MEDIA_MUXING_ENABLED=true
+MEDIA_MUXING_FFMPEG_PATH=/usr/bin/ffmpeg
+MEDIA_MUXING_FFPROBE_PATH=/usr/bin/ffprobe
+PUBLIC_SEARCH_INDEXING_ENABLED=false
+```
+
+Verify the two absolute executables in the immutable worker image before
+rollout. This activation adds stream-copy muxing only; it does not authorize a
+database migration, transcoding, quota, delivery throttling, Premium, payment,
+SEO, or host configuration changes. Roll back by restoring
+`MEDIA_MUXING_ENABLED=false` and rolling out the accepted revision; existing
+direct progressive downloads remain available.
+
 ### Post-merge operator sequence
 
 Use only `make production-release-*`. No manual `docker compose up`, no

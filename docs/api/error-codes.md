@@ -145,9 +145,10 @@ See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-bound
 ## Bounded muxing (PR9)
 
 Stream-copy muxing is **disabled by default** (`MEDIA_MUXING_ENABLED=false`).
-When inspection cannot offer an executable free option (no progressive file
-and muxing off or no compatible pair), download create returns
-`MUXING_UNAVAILABLE`. ffmpeg/ffprobe paths are worker-only.
+It is a base Free engine capability, not a Premium restriction. When inspection
+cannot offer an executable combined option (muxing off or no compatible
+stream-copy pair), download create returns `MUXING_UNAVAILABLE`.
+ffmpeg/ffprobe paths are worker-only.
 
 See [ADR 0013](../adr/0013-bounded-media-muxing.md).
 

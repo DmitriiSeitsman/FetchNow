@@ -148,7 +148,7 @@ describe("quality grouping", () => {
     const formats = [
       format({ formatOptionId: MP4_480, height: 480, qualityLabel: "p480" }),
       format({ formatOptionId: ODD_LABEL, height: null, qualityLabel: "source" }),
-      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: false }),
+      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: true }),
       format({ formatOptionId: MP4_720 }),
     ];
     expect(representativeIds(formats)).toEqual([MP4_1080, MP4_720, MP4_480, ODD_LABEL]);
@@ -158,14 +158,14 @@ describe("quality grouping", () => {
     const formats = [
       format({ formatOptionId: WEBM_720, container: "webm" }),
       format({ formatOptionId: MP4_720 }),
-      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: false }),
+      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: true }),
       format({ formatOptionId: MP4_480, height: 480, qualityLabel: "p480" }),
     ];
     const expected = representativeIds(formats);
     expect(expected).toEqual([MP4_1080, MP4_720, MP4_480]);
     for (const permutation of permutations(formats)) {
       expect(representativeIds(permutation)).toEqual(expected);
-      expect(pickHighestEligibleFormat(permutation)).toBe(MP4_720);
+      expect(pickHighestEligibleFormat(permutation)).toBe(MP4_1080);
     }
   });
 
@@ -243,10 +243,10 @@ describe("quality grouping", () => {
       format({ formatOptionId: WEBM_720, container: "webm" }),
       format({ formatOptionId: MP4_720 }),
       format({ formatOptionId: MP4_480, height: 480, qualityLabel: "p480" }),
-      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: false }),
+      format({ formatOptionId: MP4_1080, height: 1080, freeTierEligible: true }),
     ];
     const picked = pickHighestEligibleFormat(formats);
     expect(representativeIds(formats)).toContain(picked);
-    expect(picked).toBe(MP4_720);
+    expect(picked).toBe(MP4_1080);
   });
 });
