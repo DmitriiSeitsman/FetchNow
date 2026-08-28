@@ -505,6 +505,8 @@ def test_production_prepare_build_argv_excludes_staging_overlay(
         )
     assert captured
     argv = captured[0]
+    assert "--env-file" in argv
+    assert str(env) in argv
     assert "compose.production.yaml" in " ".join(argv)
     assert "compose.staging.yaml" not in argv
 

@@ -84,6 +84,8 @@ Risk: low — чтение; medium — контролируемое измене
 | Backup | `make production-pg-backup-create` | production logical dump | modifying file | нет* | medium; backup id/sha |
 | Backup | `make production-pg-backup-verify BACKUP_ID=<id>` | production restore-verify | modifying temp DB | нет* | medium; typed passed/failed |
 
+Downloader activation after merge uses the same `production-release-*` wrappers with the host env bundle in [глава 30 §5.1](30-production-release-runbook.md#51-production-media-flow-activation). `PUBLIC_MEDIA_FLOW_ENABLED` is a web build arg consumed at `production-release-prepare`; do not enable indexing or muxing as part of that bundle.
+
 **`release_hold` recovery action:** use only when migration `result.json` is
 already `committed` but the B2B1 retention hold is still active (for example
 after a post-commit hold-release WARN). Requires matching migration journal,

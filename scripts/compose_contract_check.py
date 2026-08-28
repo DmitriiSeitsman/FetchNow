@@ -492,6 +492,34 @@ def check_production_config() -> None:
         services["gateway"].get("image") == f"fetchnow-gateway:{revision}",
         "production: gateway image must use full SHA tag",
     )
+    web_args = _web_build_args(services["web"])
+    _assert(
+        str(web_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "true")).lower() == "false",
+        "production example: PUBLIC_MEDIA_FLOW_ENABLED must stay false",
+    )
+    _assert(
+        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower()
+        == "false",
+        "production example: PUBLIC_SEARCH_INDEXING_ENABLED must stay false",
+    )
+    worker_env = _service_environment(services["worker"])
+    for key in (
+        "MEDIA_INSPECTION_ENABLED",
+        "MEDIA_JOBS_ENABLED",
+        "MEDIA_DOWNLOADS_ENABLED",
+        "MEDIA_MUXING_ENABLED",
+        "MEDIA_BROWSER_DELIVERY_ENABLED",
+    ):
+        _assert(
+            str(worker_env.get(key, "true")).lower() in {"false", "0"},
+            f"production example: {key} must stay false, got {worker_env.get(key)!r}",
+        )
+    delivery_env = _service_environment(services["delivery"])
+    _assert(
+        str(delivery_env.get("MEDIA_DELIVERY_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "production example: MEDIA_DELIVERY_ENABLED must stay false",
+    )
     _assert(
         str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
         "production: postgres image must remain pinned",
@@ -1026,7 +1054,141 @@ def check_media_flow_flag() -> None:
         == "false",
         "staging: PUBLIC_MEDIA_FLOW_ENABLED must default false",
     )
+    production = _run_compose(
+        ["-f", "compose.yaml", "-f", "compose.production.yaml"],
+        env={
+            "COMPOSE_PROJECT_NAME": "fetchnow-production",
+            "POSTGRES_PASSWORD": "production-contract-check-password-xxxx",
+            "POSTGRES_USER": "fetchnow",
+            "POSTGRES_DB": "fetchnow",
+            "FETCHNOW_RELEASE_REVISION": "b" * 40,
+            "PUBLIC_SITE_URL": "https://fetchnow.online",
+        },
+    )
+    production_args = _web_build_args(_services(production)["web"])
+    _assert(
+        str(production_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "true")).lower()
+        == "false",
+        "production: PUBLIC_MEDIA_FLOW_ENABLED must default false",
+    )
     print("OK: media flow UI flag defaults false (web build arg)")
+
+
+def check_production_media_activation_interpolation() -> None:
+    """Operator activation env must bake UI on and keep indexing/muxing off."""
+    revision = "b" * 40
+    example = ROOT / ".env.production.example"
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = Path(tmp) / ".env.production"
+        text = example.read_text(encoding="utf-8")
+        text = text.replace(
+            "replace-with-32plus-url-safe-production-password",
+            "production-contract-check-password-xxxx",
+        )
+        text = text.replace(
+            "0000000000000000000000000000000000000000",
+            revision,
+        )
+        replacements = {
+            "\nPUBLIC_MEDIA_FLOW_ENABLED=false\n": "\nPUBLIC_MEDIA_FLOW_ENABLED=true\n",
+            "\nMEDIA_INSPECTION_ENABLED=false\n": "\nMEDIA_INSPECTION_ENABLED=true\n",
+            "\nMEDIA_INSPECTION_YTDLP_PATH=\n": (
+                "\nMEDIA_INSPECTION_YTDLP_PATH=/opt/venv/bin/yt-dlp\n"
+            ),
+            "\nMEDIA_JOBS_ENABLED=false\n": "\nMEDIA_JOBS_ENABLED=true\n",
+            "\nMEDIA_DOWNLOADS_ENABLED=false\n": "\nMEDIA_DOWNLOADS_ENABLED=true\n",
+            "\nMEDIA_DELIVERY_ENABLED=false\n": "\nMEDIA_DELIVERY_ENABLED=true\n",
+            "\nMEDIA_BROWSER_DELIVERY_ENABLED=false\n": (
+                "\nMEDIA_BROWSER_DELIVERY_ENABLED=true\n"
+            ),
+        }
+        for old, new in replacements.items():
+            _assert(old in text, f"activation fixture missing {old}")
+            text = text.replace(old, new, 1)
+        env_path.write_text(text, encoding="utf-8")
+        production = _run_compose(
+            [
+                "--env-file",
+                str(env_path),
+                "--project-name",
+                "fetchnow-production",
+                "-f",
+                "compose.yaml",
+                "-f",
+                "compose.production.yaml",
+            ],
+            env={
+                "COMPOSE_PROJECT_NAME": "fetchnow-production",
+                "GATEWAY_PORT": "127.0.0.1:8091",
+            },
+        )
+    services = _services(production)
+    web_args = _web_build_args(services["web"])
+    _assert(
+        str(web_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "")).lower() == "true",
+        "activation: web build arg PUBLIC_MEDIA_FLOW_ENABLED must interpolate true",
+    )
+    _assert(
+        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower()
+        == "false",
+        "activation: PUBLIC_SEARCH_INDEXING_ENABLED must stay false",
+    )
+    _assert_loopback_gateway(services["gateway"], label="activation")
+    api_env = _service_environment(services["api"])
+    worker_env = _service_environment(services["worker"])
+    delivery_env = _service_environment(services["delivery"])
+    _assert(
+        "MEDIA_INSPECTION_YTDLP_PATH" not in api_env,
+        "activation: api must still not receive MEDIA_INSPECTION_YTDLP_PATH",
+    )
+    _assert(
+        str(api_env.get("MEDIA_JOBS_ENABLED", "")).lower() == "true",
+        "activation: api MEDIA_JOBS_ENABLED must interpolate true",
+    )
+    _assert(
+        str(api_env.get("MEDIA_DOWNLOADS_ENABLED", "")).lower() == "true",
+        "activation: api MEDIA_DOWNLOADS_ENABLED must interpolate true",
+    )
+    _assert(
+        str(api_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "")).lower() == "true",
+        "activation: api MEDIA_BROWSER_DELIVERY_ENABLED must interpolate true",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_INSPECTION_ENABLED", "")).lower() == "true",
+        "activation: worker MEDIA_INSPECTION_ENABLED must interpolate true",
+    )
+    _assert(
+        worker_env.get("MEDIA_INSPECTION_YTDLP_PATH") == "/opt/venv/bin/yt-dlp",
+        "activation: worker yt-dlp path must be the canonical absolute path",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_JOBS_ENABLED", "")).lower() == "true",
+        "activation: worker MEDIA_JOBS_ENABLED must interpolate true",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_DOWNLOADS_ENABLED", "")).lower() == "true",
+        "activation: worker MEDIA_DOWNLOADS_ENABLED must interpolate true",
+    )
+    _assert(
+        str(worker_env.get("MEDIA_MUXING_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "activation: MEDIA_MUXING_ENABLED must stay false",
+    )
+    _assert(
+        str(delivery_env.get("MEDIA_DELIVERY_ENABLED", "")).lower() == "true",
+        "activation: delivery MEDIA_DELIVERY_ENABLED must interpolate true",
+    )
+    delivery_root = str(delivery_env.get("MEDIA_DELIVERY_ROOT", ""))
+    _assert(
+        delivery_root.startswith("/"),
+        f"activation: delivery root must be absolute, got {delivery_root!r}",
+    )
+    _assert(
+        str(delivery_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "")).lower()
+        == "true",
+        "activation: delivery MEDIA_BROWSER_DELIVERY_ENABLED must interpolate true",
+    )
+    print("OK: production media activation interpolates UI on, indexing/muxing off")
 
 
 def check_search_indexing_flag() -> None:
@@ -1195,6 +1357,7 @@ def main() -> int:
     check_media_jobs_env_split()
     check_muxing_and_storage_init()
     check_media_flow_flag()
+    check_production_media_activation_interpolation()
     check_search_indexing_flag()
     check_gateway_nginx_config()
     check_browser_grant_uuid4_route()

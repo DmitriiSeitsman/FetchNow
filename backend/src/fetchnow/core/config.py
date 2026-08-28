@@ -519,12 +519,15 @@ class Settings(BaseSettings):
             or self.wrapper_resolution_max_depth > 8
         ):
             raise ValueError("WRAPPER_RESOLUTION_MAX_DEPTH must be between 1 and 8")
-        if self.media_inspection_enabled and not (
-            self.media_inspection_ytdlp_path.strip()
-        ):
+        ytdlp_path = self.media_inspection_ytdlp_path.strip()
+        if self.media_inspection_enabled and not ytdlp_path:
             raise ValueError(
                 "MEDIA_INSPECTION_YTDLP_PATH is required when "
                 "MEDIA_INSPECTION_ENABLED is true"
+            )
+        if ytdlp_path and not os.path.isabs(ytdlp_path):
+            raise ValueError(
+                "MEDIA_INSPECTION_YTDLP_PATH must be absolute when set"
             )
         if self.media_inspection_socket_timeout_seconds > (
             self.media_inspection_timeout_seconds

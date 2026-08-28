@@ -27,6 +27,23 @@ def test_enabled_requires_executable_path() -> None:
         )
 
 
+def test_enabled_requires_absolute_executable_path() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL="postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow",
+            MEDIA_INSPECTION_ENABLED=True,
+            MEDIA_INSPECTION_YTDLP_PATH="yt-dlp",
+        )
+    s = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow",
+        MEDIA_INSPECTION_ENABLED=True,
+        MEDIA_INSPECTION_YTDLP_PATH="/opt/venv/bin/yt-dlp",
+    )
+    assert s.media_inspection_ytdlp_path == "/opt/venv/bin/yt-dlp"
+
+
 def test_socket_timeout_must_not_exceed_hard_timeout() -> None:
     with pytest.raises(ValidationError):
         Settings(
