@@ -190,7 +190,7 @@ describe("render", () => {
   it("shows the unavailable hint only when no executable option exists", () => {
     document.body.innerHTML = `
       <div data-flow-formats></div>
-      <p data-flow-mux>This media is not available in the current free download mode.</p>
+      <p data-flow-mux>Could not prepare a compatible combined file.</p>
     `;
     renderFlow(document, snapshot({ muxingBlocked: true, downloadEligible: false }));
     const radio = document.querySelector<HTMLInputElement>("input[type=radio]");

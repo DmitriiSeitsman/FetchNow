@@ -98,9 +98,11 @@ def _snap() -> DownloadClaimSnapshot:
 class _MuxRunner:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self.kwargs: list[dict[str, object]] = []
 
     async def run(self, argv: list[str], **kwargs: object) -> ProcessResult:
         self.calls.append(list(argv))
+        self.kwargs.append(dict(kwargs))
         started = kwargs.get("started")
         setter = getattr(started, "set", None)
         if callable(setter):
@@ -218,6 +220,8 @@ async def test_muxed_success_reaches_ready(
     assert "+" not in "".join(video_argv)
     assert "+" not in "".join(audio_argv)
     assert ffmpeg_argv[ffmpeg_argv.index("-c") + 1] == "copy"
+    assert runner.kwargs[2]["timeout_seconds"] == settings.media_muxing_timeout_seconds
+    assert runner.kwargs[3]["timeout_seconds"] == settings.media_muxing_timeout_seconds
     assert "-map_metadata:s" in ffmpeg_argv
     assert "--no-part" in video_argv
     assert "--no-part" in audio_argv

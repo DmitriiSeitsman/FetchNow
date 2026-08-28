@@ -208,9 +208,7 @@ async def test_direct_vk_success(tmp_path: Path) -> None:
     assert result.canonical_provider_url == "https://vk.com/video-123_456239017"
     assert "?" not in result.canonical_provider_url
     assert any(f.free_tier_eligible for f in result.formats)
-    assert any(
-        not f.free_tier_eligible and (f.height or 0) > 720 for f in result.formats
-    )
+    assert any(f.free_tier_eligible and (f.height or 0) > 720 for f in result.formats)
     assert runner.calls
     assert "--skip-download" in runner.calls[0]["argv"]
     assert "https://vk.com/video-123_456239017" in runner.calls[0]["argv"]

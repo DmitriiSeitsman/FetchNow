@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from fetchnow.core.config import Settings
@@ -80,10 +82,7 @@ def _persisted(candidate: InternalFormatCandidate) -> MediaFormat:
         approx_bytes=candidate.approx_bytes,
         quality_label=label,
         free_tier_eligible=bool(
-            candidate.has_video
-            and candidate.has_audio
-            and candidate.height is not None
-            and candidate.height <= 720
+            candidate.has_video and candidate.has_audio and candidate.height is not None
         ),
     )
 
@@ -147,7 +146,7 @@ def test_property_drift_fails() -> None:
 
 def test_ineligible_fails() -> None:
     candidate = _candidate(height=1080)
-    persisted = _persisted(candidate)
+    persisted = replace(_persisted(candidate), free_tier_eligible=False)
     assert persisted.free_tier_eligible is False
     with pytest.raises(DownloadError) as exc:
         resolve_selection_from_draft(

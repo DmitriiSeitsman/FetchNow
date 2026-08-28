@@ -117,7 +117,7 @@ def test_permutation_invariant_derived_ids() -> None:
     assert len(only) == 3
 
 
-def test_free_tier_caps_at_720() -> None:
+def test_free_tier_includes_compatible_1080() -> None:
     derived = derive_mux_options(
         (
             _video(height=360, width=640, token="v360"),
@@ -128,11 +128,22 @@ def test_free_tier_caps_at_720() -> None:
         _mux_settings(),
     )
     heights = {item.public.height for item in derived}
-    assert 1080 not in heights
-    assert heights <= {360, 720}
+    assert heights == {360, 720, 1080}
     assert all(item.public.free_tier_eligible for item in derived)
     assert all(item.public.has_video and item.public.has_audio for item in derived)
     assert all(item.public.category is FormatCategory.PROGRESSIVE for item in derived)
+
+
+def test_compatible_1080_still_respects_source_size_ceiling() -> None:
+    derived = derive_mux_options(
+        (
+            _video(height=1080, width=1920, approx=900_000_000),
+            _audio(approx=200_000_000),
+        ),
+        _mux_settings(MAX_SOURCE_FILE_BYTES=1_000_000_000),
+    )
+
+    assert derived == ()
 
 
 def test_incompatible_and_unknown_codecs_not_paired() -> None:
@@ -291,7 +302,7 @@ def test_yandex_vk_split_fixture_derives_free_options() -> None:
         and fmt.has_audio
     ]
     assert executable
-    assert all((fmt.height or 0) <= 720 for fmt in executable)
+    assert any((fmt.height or 0) > 720 for fmt in executable)
     assert {fmt.format_option_id for fmt in executable} == {
         fmt.format_option_id
         for fmt in meta_rev.formats

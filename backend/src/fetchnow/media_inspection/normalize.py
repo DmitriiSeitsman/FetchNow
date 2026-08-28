@@ -25,7 +25,6 @@ from fetchnow.media_inspection.mux_pairing import derive_mux_options
 if TYPE_CHECKING:
     from fetchnow.core.config import Settings
 
-_FREE_TIER_MAX_HEIGHT = 720
 _CONTAINER_RE = re.compile(r"^[a-z0-9]{1,8}$")
 
 _VIDEO_CODEC_MAP: dict[str, CodecFamily] = {
@@ -181,11 +180,7 @@ def project_metadata(
         label = quality_label_for(height, has_video=candidate.has_video)
         option_id = format_option_id_for(candidate, label)
         category = _category_for(candidate.has_video, candidate.has_audio)
-        free_ok = (
-            category is FormatCategory.PROGRESSIVE
-            and height is not None
-            and height <= _FREE_TIER_MAX_HEIGHT
-        )
+        free_ok = category is FormatCategory.PROGRESSIVE and height is not None
         fmt = MediaFormat(
             format_option_id=option_id,
             container=candidate.container,
@@ -229,13 +224,24 @@ def project_metadata(
     if len(projected) > max_formats:
         projected = projected[:max_formats]
 
-    has_free_progressive = any(
-        f.category is FormatCategory.PROGRESSIVE and f.free_tier_eligible
-        for f in projected
-    )
-    if settings.media_muxing_enabled and not has_free_progressive:
+    if settings.media_muxing_enabled:
+        # A direct progressive file remains the preferred execution path for a
+        # quality it already satisfies. Derive muxed options for other
+        # qualities as ordinary finished A/V choices; a low-quality direct
+        # file must not suppress a better compatible split-stream option.
+        direct_free_heights = {
+            f.height
+            for f in projected
+            if f.category is FormatCategory.PROGRESSIVE
+            and f.free_tier_eligible
+            and f.has_video
+            and f.has_audio
+            and f.height is not None
+        }
         derived = derive_mux_options(draft.candidates, settings)
         for item in derived:
+            if item.public.height in direct_free_heights:
+                continue
             existing = by_option.get(item.public.format_option_id)
             if existing is None:
                 by_option[item.public.format_option_id] = item.public

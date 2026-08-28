@@ -24,7 +24,6 @@ from fetchnow.media_inspection.normalize import (
 if TYPE_CHECKING:
     from fetchnow.core.config import Settings
 
-_FREE_TIER_MAX_HEIGHT = 720
 _CONTAINER_RE = re.compile(r"^[a-z0-9]{1,8}$")
 
 
@@ -116,11 +115,7 @@ def _category_for(has_video: bool, has_audio: bool) -> FormatCategory:
 
 def _free_tier_eligible(candidate: InternalFormatCandidate) -> bool:
     category = _category_for(candidate.has_video, candidate.has_audio)
-    return (
-        category is FormatCategory.PROGRESSIVE
-        and candidate.height is not None
-        and candidate.height <= _FREE_TIER_MAX_HEIGHT
-    )
+    return category is FormatCategory.PROGRESSIVE and candidate.height is not None
 
 
 def _props_match(candidate: InternalFormatCandidate, persisted: MediaFormat) -> bool:

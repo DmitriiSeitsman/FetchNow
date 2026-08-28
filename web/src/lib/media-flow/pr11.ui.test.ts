@@ -385,7 +385,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(radios).toHaveLength(2);
     expect(radios[0].disabled).toBe(true);
     expect(radios[1].disabled).toBe(false);
-    expect(el(".format-reason").textContent).toBe("Выше лимита бесплатного режима 720p.");
+    expect(el(".format-reason").textContent).toBe(
+      "Этот вариант недоступен по текущей политике скачивания.",
+    );
     expect(el(".format-disabled")).not.toBeNull();
   });
 

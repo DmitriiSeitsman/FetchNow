@@ -15,12 +15,12 @@ function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: 
     return "Это медиа недоступно как единый файл с видео и звуком.";
   }
   if (!format.freeTierEligible) {
-    return "Выше лимита бесплатного режима 720p.";
+    return "Этот вариант недоступен по текущей политике скачивания.";
   }
   if (!format.hasVideo || !format.hasAudio || format.category !== "progressive") {
     return "Нужен единый файл с видео и звуком.";
   }
-  return "Недоступно в текущем бесплатном режиме.";
+  return "Этот вариант технически недоступен.";
 }
 
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
