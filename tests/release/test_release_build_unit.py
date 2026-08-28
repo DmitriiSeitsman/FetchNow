@@ -346,6 +346,8 @@ def test_compose_build_env_excludes_secrets() -> None:
     assert "DATABASE_URL" not in env
     assert env["FETCHNOW_RELEASE_REVISION"] == "a" * 40
     assert env.get("DOCKER_HOST") == "unix:///var/run/docker.sock"
+    assert "PUBLIC_MEDIA_FLOW_ENABLED" not in env
+    assert "PUBLIC_SEARCH_INDEXING_ENABLED" not in env
 
 
 def test_manifest_rejects_bad_image_id() -> None:

@@ -145,6 +145,25 @@ describe("provider landing wiring", () => {
     expect(providerSupport).not.toMatch(/Yandex Preview/i);
   });
 
+  it("keeps disabled downloader copy only on the fail-closed branch", () => {
+    const index = readFileSync(join(here, "../../pages/index.astro"), "utf8");
+    const landing = readFileSync(
+      join(here, "../../components/ProviderLanding.astro"),
+      "utf8",
+    );
+    const mediaFlow = readFileSync(
+      join(here, "../../components/MediaFlow.astro"),
+      "utf8",
+    );
+    expect(index).toContain("<MediaFlow />");
+    expect(index).toContain("isMediaFlowEnabled");
+    expect(index).toContain("Скачивание появится в следующем релизе");
+    expect(landing).toContain("Скачивание появится в следующем релизе");
+    expect(mediaFlow).toContain('data-flow-url');
+    expect(mediaFlow).toContain("disabled={!enabled}");
+    expect(mediaFlow).not.toContain("Скачивание появится в следующем релизе");
+  });
+
   it("keeps provider navigation once under the downloader, not under the trust line", () => {
     const index = readFileSync(join(here, "../../pages/index.astro"), "utf8");
     expect(index).toContain("ProviderSupport");

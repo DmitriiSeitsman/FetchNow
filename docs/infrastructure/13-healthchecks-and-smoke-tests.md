@@ -73,3 +73,24 @@ sudo ss -lntp | grep -E ':(8000|8080|8091)\b'
 Live fail → process/gateway logs. Live OK + ready fail → PostgreSQL. Local OK + public fail → host Nginx/TLS/DNS. Validate fail → input/provider/DNS policy. Probe fail при health OK → outbound policy или provider. HTTP endpoints соседей репозиторий не документирует: использовать их собственный runbook.
 
 Проверки read-only с точки зрения FetchNow state, но probe создаёт внешний запрос. **DANGER:** не использовать реальные secret URLs, destructive payloads и не отключать TLS validation.
+
+## Уровень 5: media-flow smoke (только при включённых флагах)
+
+Не часть liveness. Запускать после controlled production/staging activation
+(`PUBLIC_MEDIA_FLOW_ENABLED=true` в web image + runtime `MEDIA_*` bundle).
+Indexing и muxing остаются выключенными. YouTube/Instagram не использовать.
+
+Последовательность существующего потока (placeholders — безопасные public
+URL, уже согласованные для operator smoke; в Git не коммитить):
+
+1. `POST /api/v1/media/validate` — VK и RUTUBE → 200; unknown/private/credentials → fail closed (уровень 3).
+2. `POST /api/v1/media/jobs` + poll до `inspected` — inspection.
+3. `POST /api/v1/media/jobs/{id}/downloads` + poll до `ready` — worker download (`MEDIA_MUXING_ENABLED=false`).
+4. `POST /api/v1/media/download-jobs/{id}/browser-grants` — grant.
+5. `GET /api/v1/media/browser-grants/{uuid}/content` — artifact (cookie, HTTPS).
+
+Публичный UI: поле URL активно, нет копирайта «Скачивание появится в следующем релизе», `X-Robots-Tag: noindex, nofollow`.
+
+OK.ru и Dzen: landing + `providerCapabilities` по матрице. Реальный progressive download с этих площадок зависит от muxing и **не** входит в smoke при `MEDIA_MUXING_ENABLED=false`. Не выводить поддержку только из ссылок в навигации.
+
+Подробности browser flow: [docs/api/browser-download-flow.md](../api/browser-download-flow.md). Production activation: [глава 30 §5.1](30-production-release-runbook.md#51-production-media-flow-activation).

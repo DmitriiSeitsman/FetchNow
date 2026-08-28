@@ -51,6 +51,16 @@ def test_production_env_example_is_placeholder_only() -> None:
     assert "POSTGRES_PASSWORD=replace-with-32plus-url-safe-production-password" in text
     assert "PUBLIC_SEARCH_INDEXING_ENABLED=false" in text
     assert "PUBLIC_MEDIA_FLOW_ENABLED=false" in text
+    assert "MEDIA_INSPECTION_ENABLED=false" in text
+    assert "MEDIA_JOBS_ENABLED=false" in text
+    assert "MEDIA_DOWNLOADS_ENABLED=false" in text
+    assert "MEDIA_DELIVERY_ENABLED=false" in text
+    assert "MEDIA_BROWSER_DELIVERY_ENABLED=false" in text
+    assert "MEDIA_MUXING_ENABLED=false" in text
+    assert "MEDIA_INSPECTION_YTDLP_PATH=/opt/venv/bin/yt-dlp" in text
+    assert "PUBLIC_MEDIA_FLOW_ENABLED=true" in text
+    assert text.count("PUBLIC_MEDIA_FLOW_ENABLED=false") == 1
+    assert text.count("PUBLIC_SEARCH_INDEXING_ENABLED=false") >= 1
     assert _FORBIDDEN_SHORT_NAME.search(text) is None
     staging = (ROOT / ".env.staging.example").read_text(encoding="utf-8")
     staging_keys = {

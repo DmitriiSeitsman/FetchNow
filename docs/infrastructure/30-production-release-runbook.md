@@ -1,8 +1,10 @@
 # 30. Production release runbook / design
 
-**INFO:** This chapter is a production-grade **design and operator runbook**.
-It does **not** claim that a production host exists, that production is
-deployed, or that DNS/Nginx/TLS have been cut over.
+**INFO:** This chapter is the production operator runbook. Production at
+`https://fetchnow.online` is an accepted environment; do not improvise
+deploys with the staging project name, staging deploy root, or ad-hoc
+`docker compose up`. DNS/Nginx/TLS cutover is complete for that host and
+is not changed by media-flow activation (§5.1).
 
 Staging uses a verified release pipeline
 (`preflight → prepare → verify → deploy-plan → migrate-if-required →
@@ -11,12 +13,10 @@ canonical real environment (`fetchnow-production`) through
 `make production-release-*` / `make production-pg-backup-*`.
 
 The canonical overlay `compose.production.yaml` and
-`.env.production.example` exist. A real `.env.production` with secrets is
-created only on the production host and must never be committed. Do not
-improvise production deploys with the staging project name, staging deploy
-root, or ad-hoc `docker compose up`.
+`.env.production.example` exist. A real `.env.production` with secrets
+lives only on the production host and must never be committed.
 
-## Target topology (planned)
+## Target topology
 
 ```text
 Internet
@@ -31,14 +31,15 @@ Internet
       |         `-> postgres :5432 (Compose network only)
 ```
 
-Do **not** bind this runbook to a concrete production IP. The production
-host is provisioned later; DNS and TLS are operator actions on that host.
+Do **not** bind this runbook to a concrete production IP. Gateway remains
+loopback-only (`127.0.0.1:8091` on the current host). Host Nginx owns
+public `:443`.
 
 Staging remains on its own host and domain (`staging.fetchnow.online`).
 No production operation may touch staging resources, and the reverse is
 also forbidden.
 
-## Naming contract (planned)
+## Naming contract
 
 | Item | Production value | Staging (reference only) |
 |---|---|---|
@@ -215,9 +216,9 @@ and the operator intentionally publishes the domain.
 | Gateway | `GATEWAY_PORT=127.0.0.1:<port>` (loopback) |
 | Database | Unique `POSTGRES_PASSWORD` (≥32 URL-safe chars); dedicated DB volume via project name |
 | Release pin | `FETCHNOW_RELEASE_REVISION=<full-40-char-sha>` matching the staged/accepted release |
-| Media flags | Explicit operator choice; do not inherit staging enablement blindly |
-| UI flag | `PUBLIC_MEDIA_FLOW_ENABLED` independent of staging |
-| Search indexing | `PUBLIC_SEARCH_INDEXING_ENABLED=true` only at official launch; staging Compose hard-codes `false` |
+| Media flags | Explicit operator choice; runtime for api/worker/delivery; do not inherit staging enablement blindly |
+| UI flag | `PUBLIC_MEDIA_FLOW_ENABLED` is a **web build arg** (independent of staging). Changing it requires a new SHA `prepare`; runtime env alone cannot enable the baked Astro UI |
+| Search indexing | `PUBLIC_SEARCH_INDEXING_ENABLED=true` only at official launch after payments; keep `false` for downloader activation. Staging Compose hard-codes `false` |
 
 ### Secrets handling
 
@@ -447,6 +448,85 @@ acceptance. Never “hotfix only on production.”
 
 ---
 
+## 5.1 Production media-flow activation
+
+This is a **controlled enablement of the existing downloader**, not a
+new product surface. SEO/indexing, payments, Premium, muxing/transcoding,
+and extra providers are out of scope.
+
+`.env.production.example` stays fail-closed. A fresh production install
+must not start downloading until the operator copies the activation
+bundle below into the host env and ships a **new** immutable revision.
+
+### Why a new revision is required
+
+`PUBLIC_MEDIA_FLOW_ENABLED` is baked into the web image at prepare
+(Compose build arg → Astro `import.meta.env`). Backend/worker
+`MEDIA_*` flags are runtime. The currently accepted production SHA was
+prepared with the UI flag off. Idempotent re-prepare never rebuilds a
+finalized SHA, so flipping only runtime flags cannot enable the browser
+input. Checkout the merged SHA, pin `FETCHNOW_RELEASE_REVISION`, set the
+bundle, then run the official production pipeline.
+
+### Canonical activation bundle (host `.env.production`)
+
+```env
+PUBLIC_MEDIA_FLOW_ENABLED=true
+
+MEDIA_INSPECTION_ENABLED=true
+MEDIA_INSPECTION_YTDLP_PATH=/opt/venv/bin/yt-dlp
+
+MEDIA_JOBS_ENABLED=true
+MEDIA_DOWNLOADS_ENABLED=true
+MEDIA_DELIVERY_ENABLED=true
+MEDIA_BROWSER_DELIVERY_ENABLED=true
+
+MEDIA_MUXING_ENABLED=false
+PUBLIC_SEARCH_INDEXING_ENABLED=false
+```
+
+Keep indexing and muxing **false**. Do not enable
+`PUBLIC_SEARCH_INDEXING_ENABLED` until payments exist. Worker yt-dlp is
+already the canonical image path `/opt/venv/bin/yt-dlp` (verified
+`2026.07.04` on the accepted production worker); do not `pip install`
+inside live containers.
+
+OK.ru and Dzen remain in the capability matrix and have landing pages,
+but public progressive options for those providers require muxing
+([ADR 0017](../adr/0017-provider-capability-matrix.md)). With
+`MEDIA_MUXING_ENABLED=false`, do **not** treat OK/Dzen navigation links
+as a live download smoke path. VK and RUTUBE are the real-download
+fixtures for this activation.
+
+### Post-merge operator sequence
+
+Use only `make production-release-*`. No manual `docker compose up`, no
+manual container edits, no pip inside live containers, no manual Alembic.
+
+1. Update the production checkout to the new accepted merge SHA
+   (`/srv/fetchnow-production/app`, clean worktree).
+2. Set `FETCHNOW_RELEASE_REVISION=<new-40-char-sha>` in
+   `/srv/fetchnow-production/env/.env.production`.
+3. Set the canonical activation bundle above. Do not change
+   `GATEWAY_PORT=127.0.0.1:8091`.
+4. Keep `PUBLIC_SEARCH_INDEXING_ENABLED=false` and
+   `MEDIA_MUXING_ENABLED=false`.
+5. `make production-release-preflight EXPECTED_REVISION=<sha>`
+6. `make production-release-prepare EXPECTED_REVISION=<sha>`
+   (rebuilds web with `PUBLIC_MEDIA_FLOW_ENABLED=true` from the env file)
+7. `make production-release-verify EXPECTED_REVISION=<sha>`
+8. `make production-release-deploy-plan EXPECTED_REVISION=<sha>`
+9. Migrate **only** if the plan requires it
+   (`make production-release-migrate EXPECTED_REVISION=<sha>`).
+   This activation does not introduce a schema change by itself.
+10. `make production-release-rollout EXPECTED_REVISION=<sha>`
+11. `make production-release-health EXPECTED_REVISION=<sha>`
+12. Public production downloader smoke (§8, activation subset)
+13. Confirm indexing is still disabled (`X-Robots-Tag: noindex, nofollow`,
+    empty sitemap, robots without a Sitemap line)
+
+---
+
 ## 6. Migration policy
 
 Authoritative mechanics:
@@ -572,34 +652,51 @@ decision is mandatory.
 Run after every successful health gate. Prefer loopback first, then
 public HTTPS.
 
-### Minimum set
+### Minimum set (always)
 
 | Check | Expectation |
 |---|---|
 | Public web `GET https://fetchnow.online/` | 200, FetchNow HTML |
+| Public legal `GET /privacy/`, `/terms/`, `/copyright/` | 200 |
 | Loopback `GET /api/v1/health/live` | 200 `{"status":"ok"}` |
 | Loopback `GET /api/v1/health/ready` | 200 (DB reachable) |
 | Public HTTPS live/ready | Same, with TLS validation on |
+| `X-Robots-Tag` on public HTML | `noindex, nofollow` while indexing is off |
 | Compose `ps` | gateway/api/web/delivery/postgres healthy; worker running; restarts=0 since rollout |
 | Image revision labels | `org.opencontainers.image.revision` equals expected SHA |
+| Gateway publish | still `127.0.0.1:8091` (not `0.0.0.0`) |
 | Capability contract | Job/API responses that expose capabilities match the SHA under test (no staging env bleed) |
-| Inspection happy path | One safe public fixture URL through inspect (only if media flags enabled) |
-| Download job | Enqueue + reach ready for an allowed fixture (only if downloads enabled) |
-| Browser grant / content | Grant issue + content path reachable under HTTPS (only if browser delivery enabled) |
-| Logs since rollout | No critical traceback/unhandled errors (ignore benign logger-name noise) |
-
-### Provider fixtures
-
-- Use only **safe public** media URLs agreed for operator smoke.
-- Never commit secret or private URLs.
-- Provider blips are not automatic NO-GO for process liveness; correlate
-  with live/ready and logs ([chapter 13](13-healthchecks-and-smoke-tests.md)).
+| Logs since rollout | No `ERROR` / Traceback on worker (ignore benign logger-name noise) |
 
 ### Feature flags
 
 If media/download/browser-delivery flags are still disabled on
 production, record that in the smoke report and limit checks to web +
-health + compose. Do not invent fake end-to-end success.
+health + compose + indexing headers. Do not invent fake end-to-end
+success.
+
+### Downloader activation subset
+
+Run the following **only after** §5.1 bundle is live on the new SHA.
+
+| Check | Expectation |
+|---|---|
+| Public home URL input | Enabled (`data-flow-url` / `#media-link`); no “Скачивание появится в следующем релизе” |
+| Provider landings `/vk/`, `/rutube/`, `/ok/`, `/dzen/` | 200, same enabled input, indexing still off |
+| URL validation | Safe public VK and RUTUBE URLs → 200; unknown/private/credentials still fail closed ([chapter 13](13-healthchecks-and-smoke-tests.md)) |
+| Inspection + job enqueue | One VK and one RUTUBE fixture reach inspected |
+| Worker download | Same fixtures reach download `ready` (no muxing) |
+| Browser grant + content | Grant issue + artifact through the browser flow under HTTPS |
+| Indexing still disabled | `noindex,nofollow` meta + `X-Robots-Tag`; sitemap has no `<loc>`; robots has no `Sitemap:` |
+| OK.ru / Dzen | Landing + capability JSON only. Do **not** require a real progressive download while `MEDIA_MUXING_ENABLED=false` |
+
+### Provider fixtures
+
+- Use only **safe public** media URLs already approved for operator smoke
+  (VK and RUTUBE). Never commit secret or private URLs.
+- Do not add YouTube or Instagram as smoke fixtures.
+- Provider blips are not automatic NO-GO for process liveness; correlate
+  with live/ready and logs ([chapter 13](13-healthchecks-and-smoke-tests.md)).
 
 ---
 
@@ -675,6 +772,7 @@ volumes to the production project.
 | TLS | [10](10-tls-and-certbot.md) |
 | Staging bootstrap analogue | [11](11-first-staging-deployment.md) |
 | Manual smoke catalogue | [13](13-healthchecks-and-smoke-tests.md) |
+| Media-flow activation | [§5.1](#51-production-media-flow-activation) |
 | Backups | [15](15-backups-and-restore.md) |
 | Rollback decision table | [16](16-rollback.md) |
 | Preflight / health | [24](24-release-preflight-health.md) |
@@ -731,28 +829,30 @@ canonical production bundle as recipe literals so command-line
 
 Exact production commands are listed in §5.
 
-### Remaining operator bootstrap (not this milestone)
+### Remaining residual work (not media-flow activation)
 
-- Production host, DNS, host Nginx, TLS/Certbot.
-- Creating a real `.env.production` on that host (never in Git).
-- First production application rollout after `production-release-bootstrap-db`.
-- Off-host backup copy.
-- Unified migrate→rollout orchestrator.
+- Off-host backup copy (same residual risk as staging PRD1B).
+- Unified migrate→rollout orchestrator (operators still run deploy-plan
+  then migrate-if-required then rollout).
+- Official search-indexing launch (payments first; keep
+  `PUBLIC_SEARCH_INDEXING_ENABLED=false`).
+- OK.ru / Dzen progressive download (requires a later muxing activation,
+  not this bundle).
 
 ---
 
-## 13. Blockers before real production deployment
+## 13. Remaining production residuals
 
-1. Production host does not exist yet.
-2. DNS `fetchnow.online` not pointed at a production host.
-3. TLS certificate not issued.
-4. `.env.production` with real secrets not created (and must not be
-   created in Git).
-5. Staging acceptance process for each SHA must remain the promotion
-   gate once production exists.
-6. Off-host backup copy still planned (same residual risk as staging
-   PRD1B).
+Accepted production at `https://fetchnow.online` already cleared host,
+DNS, TLS, Nginx, loopback gateway, bootstrap, and fail-closed media
+flags. Treat the following as still open — they are **not** unblocked by
+§5.1 media-flow activation:
 
-Until items 1–4 are cleared, treat any production deploy attempt as
-**NO-GO**. Release parameterization is implemented in-repo; it does not
-replace host/Nginx/TLS operator work.
+1. Off-host backup copy (same residual as staging PRD1B).
+2. Staging acceptance remains the promotion gate for every new SHA.
+3. Search indexing stays disabled until payments exist.
+4. Muxing/transcoding stays disabled; OK/Dzen real progressive download
+   is out of scope until muxing is explicitly activated.
+
+Media-flow activation after merge is a routine production release of a
+new SHA with the §5.1 env bundle. It is not a host/DNS/TLS change.

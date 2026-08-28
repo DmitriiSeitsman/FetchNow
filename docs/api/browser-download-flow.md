@@ -5,6 +5,13 @@ delivery when `PUBLIC_MEDIA_FLOW_ENABLED=true` **and** the server flags for jobs
 inspection, downloads, delivery, and browser delivery are also enabled by an
 operator.
 
+`PUBLIC_MEDIA_FLOW_ENABLED` is a **build-time** web flag. Production activation
+therefore needs a new immutable SHA whose `production-release-prepare` interpolates
+`PUBLIC_MEDIA_FLOW_ENABLED=true` from the host env file. Backend/worker `MEDIA_*`
+flags are runtime. Canonical production bundle (muxing and search indexing stay
+off): see [production runbook §5.1](../infrastructure/30-production-release-runbook.md#51-production-media-flow-activation).
+SEO/indexing is out of scope until payments exist.
+
 ## Sequence
 
 1. Browser generates a 43-character unpadded base64url access token (32 random bytes, Web Crypto).

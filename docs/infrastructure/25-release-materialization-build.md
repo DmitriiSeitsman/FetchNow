@@ -50,7 +50,7 @@ No `.gitattributes` export-ignore/export-subst is currently present in the repos
 
 ## Image build
 
-Build only from the materialized snapshot Compose files with explicit project name `fetchnow-release-build`. Process env for the build is a minimal Docker client allowlist plus `FETCHNOW_RELEASE_REVISION`; Compose secrets/interpolation use the explicit `--env-file` only. No container startup.
+Build only from the materialized snapshot Compose files with explicit project name `fetchnow-release-build`. Process env for the build is a minimal Docker client allowlist plus `FETCHNOW_RELEASE_REVISION`; Compose secrets/interpolation use the explicit `--env-file` only. No container startup. Web image `PUBLIC_MEDIA_FLOW_ENABLED` and `PUBLIC_SEARCH_INDEXING_ENABLED` are Compose build args interpolated from that env file (they are not taken from the prepare process environment). A finalized SHA is never rebuilt, so enabling the browser UI requires a new revision whose prepare runs with `PUBLIC_MEDIA_FLOW_ENABLED=true` in the production env file.
 
 Final tags: `fetchnow-api|web|gateway:<full-sha>` with matching OCI `org.opencontainers.image.revision`. Image IDs are recorded in the manifest from post-build `docker image inspect`. Docker tag creation is **not** transactional: on failure the incomplete filesystem tree is removed and any created revision tags are reported as unmanaged (not deleted); retry rebuilds/verifies the exact revision.
 
