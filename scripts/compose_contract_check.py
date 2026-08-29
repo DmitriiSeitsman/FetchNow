@@ -789,6 +789,42 @@ def check_media_jobs_env_split() -> None:
     )
 
 
+def check_free_quota_env_split() -> None:
+    """Admission flag is API-only; worker retains lifecycle policy settings."""
+    cfg = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    services = _services(cfg)
+    api_env = _service_env(services["api"])
+    worker_env = _service_env(services["worker"])
+    delivery_env = _service_env(services["delivery"])
+    init_env = _service_env(services["storage-init"])
+    _assert(
+        str(api_env.get("FREE_DOWNLOAD_QUOTA_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "base: Free quota admission must default false on api",
+    )
+    _assert(
+        "FREE_DOWNLOAD_QUOTA_ENABLED" not in worker_env,
+        "base: worker lifecycle must not receive the admission feature flag",
+    )
+    for key, expected in (
+        ("FREE_DOWNLOAD_LIMIT", "3"),
+        ("FREE_DOWNLOAD_WINDOW_SECONDS", "86400"),
+        ("ANONYMOUS_CLIENT_TTL_SECONDS", "31536000"),
+        ("FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS", "172800"),
+    ):
+        _assert(api_env.get(key) == expected, f"base: api {key} must be {expected}")
+        _assert(
+            worker_env.get(key) == expected,
+            f"base: worker {key} must be {expected}",
+        )
+        _assert(key not in delivery_env, f"base: delivery must not receive {key}")
+        _assert(key not in init_env, f"base: storage-init must not receive {key}")
+    print("OK: Free quota admission flag is API-only and defaults fail-closed")
+
+
 def _service_env(svc: dict[str, Any]) -> dict[str, str]:
     raw = svc.get("environment") or {}
     if isinstance(raw, dict):
@@ -1355,6 +1391,7 @@ def main() -> int:
     check_production_missing_revision_fails()
     check_isolation_render()
     check_media_jobs_env_split()
+    check_free_quota_env_split()
     check_muxing_and_storage_init()
     check_media_flow_flag()
     check_production_media_activation_interpolation()

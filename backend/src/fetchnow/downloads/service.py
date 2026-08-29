@@ -44,6 +44,8 @@ from fetchnow.jobs.metadata_codec import media_metadata_from_jsonable
 from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
 from fetchnow.media_inspection.models import FormatCategory, MediaFormat
+from fetchnow.quota.errors import AnonymousIdentityRequiredError
+from fetchnow.quota.service import QuotaService
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -138,6 +140,7 @@ class DownloadJobService:
         format_option_id: str,
         access_token: str,
         session: AsyncSession,
+        anonymous_client_id: uuid.UUID | None = None,
     ) -> DownloadJobView:
         """Enqueue or recover a download job for an inspected parent MediaJob."""
         if not self._settings.media_downloads_enabled:
@@ -214,6 +217,15 @@ class DownloadJobService:
             suggested_filename=filename,
             job_id=job_id,
         )
+        if created and self._settings.free_download_quota_enabled:
+            if anonymous_client_id is None:
+                raise AnonymousIdentityRequiredError()
+            await QuotaService(self._settings).admit_locked(
+                identity_id=anonymous_client_id,
+                download_job_id=job.id,
+                reservation_expires_at=job.expires_at,
+                session=session,
+            )
         await session.flush()
         return self._to_view(job, created=created)
 

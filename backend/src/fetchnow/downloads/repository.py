@@ -21,6 +21,8 @@ from fetchnow.downloads.states import (
     assert_transition,
     is_stored_cancelled,
 )
+from fetchnow.quota.errors import QuotaInvariantError
+from fetchnow.quota.repository import QuotaRepository
 
 
 class MediaDownloadJobRepository:
@@ -30,6 +32,56 @@ class MediaDownloadJobRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def _lock_quota_identity_for_job(
+        self, job_id: uuid.UUID
+    ) -> QuotaRepository | None:
+        """Acquire the quota lock prefix before locking a download job.
+
+        An unlocked lookup discovers whether this is a quota-governed job.
+        Once discovered, every lifecycle path locks anonymous client first,
+        then download job, then quota entry.
+        """
+        quota = QuotaRepository(self._session)
+        client_id = await quota.identity_id_for_download(job_id)
+        if client_id is None:
+            return None
+        client = await quota.lock_client(client_id)
+        if client is None:
+            raise QuotaInvariantError("quota entry references a missing identity")
+        return quota
+
+    async def _consume_quota_after_job_lock(
+        self, quota: QuotaRepository | None, *, job_id: uuid.UUID
+    ) -> None:
+        if quota is None:
+            return
+        entry = await quota.lock_entry_for_download(job_id)
+        if entry is None:
+            raise QuotaInvariantError("quota entry disappeared during ready transition")
+        quota.consume_locked(entry, now=await quota.database_now())
+        await self._session.flush()
+
+    async def _release_quota_after_job_lock(
+        self,
+        quota: QuotaRepository | None,
+        *,
+        job_id: uuid.UUID,
+        expired: bool = False,
+    ) -> None:
+        if quota is None:
+            return
+        entry = await quota.lock_entry_for_download(job_id)
+        if entry is None:
+            raise QuotaInvariantError(
+                "quota entry disappeared during terminal transition"
+            )
+        quota.release_locked(
+            entry,
+            now=await quota.database_now(),
+            expired=expired,
+        )
+        await self._session.flush()
 
     async def database_now(self) -> datetime:
         """Read the authoritative PostgreSQL wall clock for this transaction."""
@@ -301,6 +353,7 @@ class MediaDownloadJobRepository:
         assert_transition(
             MediaDownloadJobState.DOWNLOADING, MediaDownloadJobState.READY
         )
+        quota = await self._lock_quota_identity_for_job(job_id)
         result = await self._session.execute(
             update(MediaDownloadJob)
             .where(
@@ -328,7 +381,10 @@ class MediaDownloadJobRepository:
                 updated_at=func.clock_timestamp(),
             )
         )
-        return bool(result.rowcount)
+        applied = bool(result.rowcount)
+        if applied:
+            await self._consume_quota_after_job_lock(quota, job_id=job_id)
+        return applied
 
     async def fail_permanent(
         self,
@@ -344,6 +400,7 @@ class MediaDownloadJobRepository:
         assert_transition(
             MediaDownloadJobState.DOWNLOADING, MediaDownloadJobState.FAILED
         )
+        quota = await self._lock_quota_identity_for_job(job_id)
         result = await self._session.execute(
             update(MediaDownloadJob)
             .where(
@@ -371,7 +428,10 @@ class MediaDownloadJobRepository:
                 updated_at=func.clock_timestamp(),
             )
         )
-        return bool(result.rowcount)
+        applied = bool(result.rowcount)
+        if applied:
+            await self._release_quota_after_job_lock(quota, job_id=job_id)
+        return applied
 
     async def fail_retry(
         self,
@@ -506,8 +566,8 @@ class MediaDownloadJobRepository:
 
     async def reclaim_expired_leases(self, now: datetime) -> int:
         """Requeue downloading jobs with expired leases; bump fence tokens."""
-        stmt = (
-            select(MediaDownloadJob)
+        ids_stmt = (
+            select(MediaDownloadJob.id)
             .where(
                 MediaDownloadJob.public_state
                 == MediaDownloadJobState.DOWNLOADING.value,
@@ -515,10 +575,25 @@ class MediaDownloadJobRepository:
                 MediaDownloadJob.lease_expires_at <= func.clock_timestamp(),
                 MediaDownloadJob.expires_at > func.clock_timestamp(),
             )
-            .with_for_update(skip_locked=True)
         )
-        jobs = list((await self._session.scalars(stmt)).all())
-        for job in jobs:
+        ids = list((await self._session.scalars(ids_stmt)).all())
+        changed = 0
+        for job_id in ids:
+            quota = await self._lock_quota_identity_for_job(job_id)
+            job = await self._session.scalar(
+                select(MediaDownloadJob)
+                .where(
+                    MediaDownloadJob.id == job_id,
+                    MediaDownloadJob.public_state
+                    == MediaDownloadJobState.DOWNLOADING.value,
+                    MediaDownloadJob.lease_expires_at.is_not(None),
+                    MediaDownloadJob.lease_expires_at <= func.clock_timestamp(),
+                    MediaDownloadJob.expires_at > func.clock_timestamp(),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if job is None:
+                continue
             if job.cancel_requested_at is not None:
                 assert_transition(
                     MediaDownloadJobState.DOWNLOADING,
@@ -526,6 +601,10 @@ class MediaDownloadJobRepository:
                 )
                 self._apply_stored_cancel(job, now)
                 job.fence_token = int(job.fence_token) + 1
+                await self._release_quota_after_job_lock(
+                    quota, job_id=job.id
+                )
+                changed += 1
                 continue
             exhausted = int(job.attempt_count) >= int(job.max_attempts)
             target = (
@@ -553,17 +632,21 @@ class MediaDownloadJobRepository:
                 job.artifact_bytes = None
                 job.artifact_content_type = None
                 job.artifact_container = None
-        if jobs:
+                await self._release_quota_after_job_lock(
+                    quota, job_id=job.id
+                )
+            changed += 1
+        if changed:
             await self._session.flush()
-        return len(jobs)
+        return changed
 
     async def expire_due_jobs(self, now: datetime) -> list[uuid.UUID]:
         """Mark past-TTL jobs expired; return artifact ids that need filesystem delete.
 
         Ready jobs clear artifact pointer fields so the result CHECK holds.
         """
-        stmt = (
-            select(MediaDownloadJob)
+        ids_stmt = (
+            select(MediaDownloadJob.id)
             .where(
                 MediaDownloadJob.expires_at <= func.clock_timestamp(),
                 or_(
@@ -584,11 +667,39 @@ class MediaDownloadJobRepository:
                     ),
                 ),
             )
-            .with_for_update(skip_locked=True)
         )
-        jobs = list((await self._session.scalars(stmt)).all())
+        ids = list((await self._session.scalars(ids_stmt)).all())
         artifact_ids: list[uuid.UUID] = []
-        for job in jobs:
+        changed = 0
+        for job_id in ids:
+            quota = await self._lock_quota_identity_for_job(job_id)
+            job = await self._session.scalar(
+                select(MediaDownloadJob)
+                .where(
+                    MediaDownloadJob.id == job_id,
+                    MediaDownloadJob.expires_at <= func.clock_timestamp(),
+                    or_(
+                        MediaDownloadJob.public_state.in_(
+                            (
+                                MediaDownloadJobState.QUEUED.value,
+                                MediaDownloadJobState.DOWNLOADING.value,
+                                MediaDownloadJobState.READY.value,
+                                MediaDownloadJobState.FAILED.value,
+                            )
+                        ),
+                        and_(
+                            MediaDownloadJob.public_state
+                            == MediaDownloadJobState.EXPIRED.value,
+                            MediaDownloadJob.progress_stage
+                            == DownloadProgressStage.CANCELLED.value,
+                            MediaDownloadJob.cancel_requested_at.is_not(None),
+                        ),
+                    ),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if job is None:
+                continue
             if is_stored_cancelled(
                 job.public_state, job.progress_stage, job.cancel_requested_at
             ):
@@ -614,7 +725,22 @@ class MediaDownloadJobRepository:
             job.fence_token = int(job.fence_token) + 1
             if job.completed_at is None:
                 job.completed_at = now
-        if jobs:
+            # A consumed ready entry remains consumed; expiry is artifact
+            # lifecycle only. Every other live reservation is released.
+            if quota is not None:
+                entry = await quota.lock_entry_for_download(job.id)
+                if entry is None:
+                    raise QuotaInvariantError(
+                        "quota entry disappeared during job expiry"
+                    )
+                if entry.state == "reserved":
+                    quota.release_locked(
+                        entry,
+                        now=await quota.database_now(),
+                        expired=True,
+                    )
+            changed += 1
+        if changed:
             await self._session.flush()
         return artifact_ids
 
@@ -622,6 +748,7 @@ class MediaDownloadJobRepository:
         self, *, job_id: uuid.UUID, now: datetime
     ) -> MediaDownloadJob | None:
         """Idempotent user cancel. Ready/failed/expired are left unchanged."""
+        quota = await self._lock_quota_identity_for_job(job_id)
         stmt = (
             select(MediaDownloadJob)
             .where(MediaDownloadJob.id == job_id)
@@ -647,6 +774,7 @@ class MediaDownloadJobRepository:
             )
             job.cancel_requested_at = now
             self._apply_stored_cancel(job, now)
+            await self._release_quota_after_job_lock(quota, job_id=job.id)
             await self._session.flush()
             return job
         if state == MediaDownloadJobState.DOWNLOADING.value:
@@ -673,6 +801,7 @@ class MediaDownloadJobRepository:
         assert_transition(
             MediaDownloadJobState.DOWNLOADING, MediaDownloadJobState.EXPIRED
         )
+        quota = await self._lock_quota_identity_for_job(job_id)
         result = await self._session.execute(
             update(MediaDownloadJob)
             .where(
@@ -698,7 +827,10 @@ class MediaDownloadJobRepository:
                 updated_at=func.clock_timestamp(),
             )
         )
-        return bool(result.rowcount)
+        applied = bool(result.rowcount)
+        if applied:
+            await self._release_quota_after_job_lock(quota, job_id=job_id)
+        return applied
 
     async def set_progress_stage(
         self,

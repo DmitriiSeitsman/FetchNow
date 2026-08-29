@@ -35,6 +35,9 @@ Envelope shape (already used by the API foundation):
 | `RESOLUTION_LIMIT_EXCEEDED` | 422 | Wrapper depth exceeded | no | no | Internal depth counters |
 | `UNSAFE_RESOLUTION_TARGET` | 422 | Resolution target not allowed | no | no | Resolved IPs, Location, query |
 | `RATE_LIMITED` | 429 | Too many requests | yes | yes (honor Retry-After) | Per-user internal quotas math |
+| `FREE_QUOTA_DISABLED` | 503 | Free quota bootstrap is not active | yes | no; continue legacy flow while rollout flag is off | Feature flags, policy internals |
+| `FREE_QUOTA_IDENTITY_REQUIRED` | 428 | A valid anonymous identity is required | yes | refresh quota bootstrap, then retry | Cookie value/hash, identity id |
+| `FREE_DOWNLOAD_QUOTA_EXHAUSTED` | 429 | Free download limit reached | yes | yes, only when reliable `resetAt` is supplied | Identity, event rows, lock/accounting internals |
 | `CAPACITY_UNAVAILABLE` | 503 | Temporary capacity limit | yes | yes | Disk paths, free-byte counts |
 | `FILE_TOO_LARGE` | 413 | File exceeds limit | no | no | Exact configured byte caps (optional high-level OK) |
 | `DURATION_TOO_LONG` | 422 | Media longer than the configured maximum (public text names the hour count) | no | no | Internal probe traces |
@@ -141,6 +144,22 @@ native content return `DELIVERY_DISABLED`.
 | `POST /api/v1/media/download-jobs/{id}/cancel` | Same Bearer. Idempotent. `Cache-Control: no-store`. UUID alone never authorizes. Unknown and unauthorized are indistinguishable (`DOWNLOAD_JOB_NOT_FOUND`). Queued → `cancelled` without running a tool. Downloading records a cancel request; the worker commits `cancelled`. Ready/failed/expired are unchanged (ready artifacts are not deleted). |
 
 See [ADR 0010](../adr/0010-durable-download-execution-and-private-artifact-boundary.md).
+
+## Anonymous Free quota (PRD1E-B2)
+
+`GET /api/v1/media/quota` bootstraps or resolves the server-controlled browser
+identity and returns `tier`, `downloadLimit`, `downloadsUsed`,
+`downloadsReserved`, `downloadsRemaining`, and nullable `resetAt`. Responses are
+`Cache-Control: no-store`. A newly minted identity is returned only through the
+Secure/HttpOnly `__Host-fetchnow_client` cookie; identifiers and hashes never
+appear in JSON.
+
+When quota admission is enabled, download POST requires an already-resolved
+valid cookie. It does not mint an identity. Exhaustion returns HTTP 429 with
+code `FREE_DOWNLOAD_QUOTA_EXHAUSTED` and safe details
+`{limit, remaining, resetAt}`. `Retry-After` is an HTTP date only when
+`resetAt` is reliable; reservation-only exhaustion has `resetAt: null` and no
+`Retry-After`. This is distinct from B3 transport rate limiting.
 
 ## Bounded muxing (PR9)
 

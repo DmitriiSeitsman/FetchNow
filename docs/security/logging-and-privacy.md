@@ -79,6 +79,16 @@ events: `browser_delivery_grant_issued`, `browser_delivery_grant_rejected`,
 `browser_delivery_started`, `browser_delivery_failed` (catalog codes / coarse
 reasons only).
 
+Free quota (PRD1E-B2) additionally forbids logging or publicizing the raw
+`__Host-fetchnow_client` cookie, its domain-separated hash, anonymous-client id,
+or per-client accounting rows. The server stores no raw token and does not use
+IP address or browser fingerprint as the entitlement key. The one-year identity
+TTL is absolute rather than sliding; expired identities with no retained quota
+events are deleted by bounded reconciliation. Public status contains only
+Free policy totals and nullable reset time. Cookie deletion, private browsing,
+and another browser/device remain documented residual bypasses rather than a
+reason to add invasive fingerprinting.
+
 Bounded muxing (PR9) additionally forbids logging or publicizing:
 
 - provider video/audio format tokens;

@@ -14,16 +14,23 @@ SEO/indexing is out of scope until payments exist.
 
 ## Sequence
 
-1. Browser generates a 43-character unpadded base64url access token (32 random bytes, Web Crypto).
-2. `POST /api/v1/media/jobs` with `Authorization: Bearer` and `{ "url": "…" }`.
+1. Browser calls `GET /api/v1/media/quota` with same-origin credentials. When
+   B2 admission is active, this resolves or creates the opaque HttpOnly
+   `__Host-fetchnow_client` identity before any download POST. The UI displays
+   remaining Free downloads and disables preparation at zero. When the rollout
+   flag is off, `FREE_QUOTA_DISABLED` preserves the existing flow.
+2. Browser generates a 43-character unpadded base64url access token (32 random bytes, Web Crypto).
+3. `POST /api/v1/media/jobs` with `Authorization: Bearer` and `{ "url": "…" }`.
    Responses include top-level `providerCapabilities` (product policy for the
    resolved provider) or `null` when the provider has no public profile. This
    is not stored inside `result`.
-3. Poll `GET /api/v1/media/jobs/{id}` until `inspected` / `failed` / `expired`.
-4. User selects a `formatOptionId` that is progressive, has video+audio, and `freeTierEligible` (direct file **or** a server-derived muxed option when muxing is enabled).
-5. `POST /api/v1/media/jobs/{id}/downloads` with `{ "formatOptionId": "…" }`.
+4. Poll `GET /api/v1/media/jobs/{id}` until `inspected` / `failed` / `expired`.
+5. User selects a `formatOptionId` that is progressive, has video+audio, and `freeTierEligible` (direct file **or** a server-derived muxed option when muxing is enabled).
+6. Refresh quota, then `POST /api/v1/media/jobs/{id}/downloads` with `{ "formatOptionId": "…" }`.
    Download job JSON also carries top-level `providerCapabilities` (same shape).
-6. Poll `GET /api/v1/media/download-jobs/{id}` until `ready` / `failed` /
+   The POST never mints an anonymous identity. A 429 shows technical Free-limit
+   copy, not a Premium/paywall CTA. The UI refreshes quota after terminal state.
+7. Poll `GET /api/v1/media/download-jobs/{id}` until `ready` / `failed` /
    `cancelled` / `expired`. The UI shows sanitized `progressStage` copy.
    A real byte percentage is shown only during download stages when the
    backend supplies `progressPercent` (observed bytes over an approximate
@@ -32,15 +39,15 @@ SEO/indexing is out of scope until payments exist.
    parentheses. The bar stays stage-based and interpolates inside a download
    stage; it is never timer-faked. The percentage is not a remaining-time
    estimate. Verifying, muxing, and publishing are not byte percentages.
-7. `Cancel task` calls `POST …/download-jobs/{id}/cancel`. `Start over` is a
+8. `Cancel task` calls `POST …/download-jobs/{id}/cancel`. `Start over` is a
    local reset and does **not** cancel the server job.
-8. When the job is `ready`, the UI calls
+9. When the job is `ready`, the UI calls
    `POST /api/v1/media/download-jobs/{id}/browser-grants` with the parent Bearer
    token and `credentials: "same-origin"`. The response is `{ downloadPath,
    expiresAt }` only; the server also sets `Set-Cookie:
    __Secure-fetchnow_delivery=…` (HttpOnly). While this request is in flight
    the UI shows “Preparing secure download…”.
-9. The always-available action is a real same-origin anchor:
+10. The always-available action is a real same-origin anchor:
    `<a href="/api/v1/media/browser-grants/{uuid}/content" download>Download
    file</a>`. Navigation uses the cookie; the parent token is never placed in
    the URL. After the user clicks, the UI shows “Sent to your browser” and keeps
@@ -48,7 +55,7 @@ SEO/indexing is out of scope until payments exist.
    was clicked, and the UI does not fake byte progress after browser handoff.
    Grants are reissued near expiry; stale grant responses are ignored when a
    newer generation is active.
-10. Optional **Save as…** (Chromium desktop with File System Access API) still
+11. Optional **Save as…** (Chromium desktop with File System Access API) still
     streams `GET …/download-jobs/{id}/content` with the same Bearer token into
     `showSaveFilePicker`. Credentials are cleared only after a clean FSA close.
     Where that API exists the UI leads with Save as… and keeps the anchor as a

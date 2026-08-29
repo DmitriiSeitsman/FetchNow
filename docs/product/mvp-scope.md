@@ -4,7 +4,8 @@
 
 - **Public links only.** Users paste publicly reachable media URLs.
 - **First providers:** VK, Rutube, and OK.ru.
-- **Free quality:** up to 720p without payment.
+- **Free quality:** combined stream-copy-compatible quality, including 1080p
+  when it remains within configured size, duration, disk, and timeout ceilings.
 - **Turbo:** time-limited boost (24 hours) for faster/higher-priority processing — details in a later PR.
 - **No registration.** No accounts, no passwords, no OAuth in the MVP.
 - **Download modes:** direct URL handoff when possible; server-processed fetch when the provider requires it.
@@ -37,8 +38,9 @@
   (`MEDIA_MUXING_ENABLED=false`) pending operator activation. No transcoding;
   public `MediaFormat` schema unchanged; separate audio/video products are not
   exposed.
-- **PRD1E-B2 (separate):** database-backed anonymous Free quota with atomic
-  admission and successful-`ready` accounting.
+- **PRD1E-B2:** database-backed anonymous Free quota (3 successful downloads in
+  a rolling 24 hours), atomic reservation/admission, and successful-`ready`
+  accounting. Feature default off pending separate operator activation.
 - **PRD1E-B3 (separate):** configurable Free throttling at artifact delivery,
   preserving Range requests and worker throughput.
 - Payments and Premium entitlements arrive in subsequent PRs.

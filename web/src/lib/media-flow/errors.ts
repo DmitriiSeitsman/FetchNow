@@ -83,6 +83,15 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "Слишком много запросов. Подождите немного и попробуйте снова.",
     retryable: true,
   },
+  FREE_QUOTA_DISABLED: { text: GENERIC, retryable: true },
+  FREE_QUOTA_IDENTITY_REQUIRED: {
+    text: "Не удалось подтвердить бесплатный лимит. Обновите страницу и попробуйте снова.",
+    retryable: true,
+  },
+  FREE_DOWNLOAD_QUOTA_EXHAUSTED: {
+    text: "Лимит бесплатных загрузок исчерпан.",
+    retryable: false,
+  },
   JOB_NOT_FOUND: { text: GENERIC, retryable: false },
   JOB_EXPIRED: {
     text: "Проверка устарела. Начните сначала с той же ссылкой.",

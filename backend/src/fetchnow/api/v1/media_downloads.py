@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from email.utils import format_datetime
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from fetchnow.core.errors import error_envelope
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.service import DownloadJobService
+from fetchnow.quota.errors import (
+    AnonymousIdentityRequiredError,
+    FreeQuotaExceededError,
+)
+from fetchnow.quota.service import QuotaService
 
 router = APIRouter(prefix="/media", tags=["media-downloads"])
 logger = logging.getLogger("fetchnow.api.media_downloads")
@@ -90,13 +96,47 @@ async def create_download_job(
     session_factory = _get_session_factory(request)
     try:
         async with session_factory() as session:
+            anonymous_client_id: uuid.UUID | None = None
+            if request.app.state.settings.free_download_quota_enabled:
+                identity = await QuotaService(
+                    request.app.state.settings
+                ).require_identity(
+                    cookie_header=request.headers.get("cookie"),
+                    session=session,
+                )
+                anonymous_client_id = identity.id
             view = await service.create(
                 media_job_id=media_job_id,
                 format_option_id=payload.format_option_id,
                 access_token=token,
                 session=session,
+                anonymous_client_id=anonymous_client_id,
             )
             await session.commit()
+    except AnonymousIdentityRequiredError as exc:
+        return JSONResponse(
+            status_code=exc.http_status,
+            headers=_NO_STORE,
+            content=error_envelope(
+                code=exc.code,
+                message=exc.message,
+                request_id=request_id,
+            ),
+        )
+    except FreeQuotaExceededError as exc:
+        headers = dict(_NO_STORE)
+        if exc.status.reset_at is not None:
+            headers["Retry-After"] = format_datetime(exc.status.reset_at, usegmt=True)
+        return JSONResponse(
+            status_code=exc.http_status,
+            headers=headers,
+            content=error_envelope(
+                code=exc.code,
+                message=exc.message,
+                request_id=request_id,
+                details=QuotaService.error_details(exc.status),
+            ),
+        )
     except DownloadError as exc:
         return _download_error_response(exc, request_id)
     except Exception:

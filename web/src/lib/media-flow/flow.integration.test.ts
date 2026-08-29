@@ -38,6 +38,42 @@ const enabledCapabilities = {
 } as const;
 
 describe("browser flow integration", () => {
+  it("bootstraps quota before admission and blocks an exhausted identity", async () => {
+    const token = generateAccessToken();
+    const api = {
+      getFreeQuota: vi.fn(async () => ({
+        tier: "free" as const,
+        downloadLimit: 3,
+        downloadsUsed: 2,
+        downloadsReserved: 1,
+        downloadsRemaining: 0,
+        resetAt: null,
+      })),
+      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
+      getInspectionJob: vi.fn(async () => parseInspectionJob(inspectedPayload())),
+      createDownloadJob: vi.fn(),
+      getDownloadJob: vi.fn(),
+      createBrowserGrant: vi.fn(),
+      cancelDownloadJob: vi.fn(),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(),
+      generateToken: () => token,
+      pickerSupported: () => false,
+      secureContext: () => true,
+      documentHidden: () => false,
+    });
+
+    await controller.initializeQuota();
+    await controller.submit("https://vk.com/video-1_2");
+    await controller.enqueueDownload();
+
+    expect(api.getFreeQuota.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(api.createDownloadJob).not.toHaveBeenCalled();
+    expect(controller.snapshot().errorText?.toLowerCase()).toContain("лимит");
+  });
+
   it("submits, inspects, selects, downloads, arms a grant, and keeps session on native click", async () => {
     const token = generateAccessToken();
     const api = {

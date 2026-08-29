@@ -80,7 +80,7 @@ from password_fixture import valid_test_password  # noqa: E402
 REV = "a" * 40
 IMAGE = f"sha256:{'b' * 64}"
 CONTRACT = "c" * 64
-HEAD = "0006_browser_delivery_grants"
+HEAD = "0007_free_download_quota"
 BOOT_ID = "12345678-1234-1234-1234-123456789abc"
 
 

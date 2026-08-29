@@ -206,7 +206,8 @@ describe("provider landing wiring", () => {
     expect(footer).toContain("/copyright/");
     expect(footer).toContain("mailto:support@fetchnow.online");
     expect(footer).toContain("mailto:copyright@fetchnow.online");
-    expect(privacy).toContain("Редакция от 16 августа 2026 года");
+    expect(privacy).toContain("Редакция от 29 августа 2026 года");
+    expect(privacy).toContain("__Host-fetchnow_client");
     expect(privacy).toContain("Локальная статистика использования");
     expect(privacy).toContain("Обращения правообладателей");
     expect(privacy).toContain("mailto:copyright@fetchnow.online");

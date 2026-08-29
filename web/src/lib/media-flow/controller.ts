@@ -6,6 +6,7 @@ import {
   type InspectionResult,
   type MediaFormat,
   type ProgressStage,
+  type FreeQuota,
 } from "./contracts";
 import { projectCapabilityUi } from "./capabilities";
 import { flowStatusText, STAGE_LABEL } from "./progress";
@@ -26,7 +27,11 @@ import {
   isAbortError,
   userMessageForCode,
 } from "./errors";
-import { pollUntilTerminal, jobProgressSemanticKey, isActiveDownloadProgress } from "./poller";
+import {
+  pollUntilTerminal,
+  jobProgressSemanticKey,
+  isActiveDownloadProgress,
+} from "./poller";
 import { FlowSession, type RecoveryRecord } from "./session";
 import {
   FlowMachine,
@@ -62,6 +67,8 @@ export type FlowSnapshot = {
   progressStage: ProgressStage | null;
   progressPercent: number | null;
   artifactBytes: number | null;
+  freeQuota?: FreeQuota | null;
+  quotaLoading?: boolean;
 };
 
 export type ControllerHooks = {
@@ -105,6 +112,9 @@ export class MediaFlowController {
   private grantGeneration = 0;
   private resumeDownloadId: string | null = null;
   private restored = false;
+  private freeQuota: FreeQuota | null = null;
+  private quotaLoading = false;
+  private quotaRefresh: Promise<void> | null = null;
 
   constructor(hooks: ControllerHooks = {}) {
     this.api = hooks.api ?? new MediaApi();
@@ -181,7 +191,46 @@ export class MediaFlowController {
       progressStage: this.downloadJob?.progressStage ?? null,
       progressPercent: this.downloadJob?.progressPercent ?? null,
       artifactBytes: this.downloadJob?.artifactBytes ?? null,
+      freeQuota: this.freeQuota,
+      quotaLoading: this.quotaLoading,
     };
+  }
+
+  async initializeQuota(): Promise<void> {
+    await this.refreshQuota(true);
+  }
+
+  private async refreshQuota(silent: boolean): Promise<void> {
+    if (this.quotaRefresh !== null) {
+      await this.quotaRefresh;
+      return;
+    }
+    // Older focused test doubles predate the optional quota endpoint. The real
+    // MediaApi always provides it; preserving this guard keeps unrelated flow
+    // tests scoped to their original contracts.
+    if (typeof this.api.getFreeQuota !== "function") {
+      return;
+    }
+    const run = async () => {
+      this.quotaLoading = true;
+      this.emit();
+      try {
+        this.freeQuota = await this.api.getFreeQuota();
+      } catch (err) {
+        if (!silent) {
+          throw err;
+        }
+      } finally {
+        this.quotaLoading = false;
+        this.emit();
+      }
+    };
+    this.quotaRefresh = run();
+    try {
+      await this.quotaRefresh;
+    } finally {
+      this.quotaRefresh = null;
+    }
   }
 
   private statusText(): string {
@@ -207,25 +256,25 @@ export class MediaFlowController {
     }
     if (this.restored && this.machine.current === "downloading") {
       return (
-        flowStatusText(
-          this.machine.current,
-          this.downloadJob?.progressStage ?? null,
-          {
-            progressPercent: this.downloadJob?.progressPercent ?? null,
-            artifactBytes: this.downloadJob?.artifactBytes ?? null,
-            formats: this.mediaJob?.result?.formats ?? [],
-          },
-        ) || "Восстановлена текущая задача."
+        flowStatusText(this.machine.current, this.downloadJob?.progressStage ?? null, {
+          progressPercent: this.downloadJob?.progressPercent ?? null,
+          artifactBytes: this.downloadJob?.artifactBytes ?? null,
+          formats: this.mediaJob?.result?.formats ?? [],
+        }) || "Восстановлена текущая задача."
       );
     }
     if (this.machine.current === "cancelled") {
       return STAGE_LABEL.cancelled;
     }
-    return flowStatusText(this.machine.current, this.downloadJob?.progressStage ?? null, {
-      progressPercent: this.downloadJob?.progressPercent ?? null,
-      artifactBytes: this.downloadJob?.artifactBytes ?? null,
-      formats: this.mediaJob?.result?.formats ?? [],
-    });
+    return flowStatusText(
+      this.machine.current,
+      this.downloadJob?.progressStage ?? null,
+      {
+        progressPercent: this.downloadJob?.progressPercent ?? null,
+        artifactBytes: this.downloadJob?.artifactBytes ?? null,
+        formats: this.mediaJob?.result?.formats ?? [],
+      },
+    );
   }
 
   private emit(): void {
@@ -661,6 +710,10 @@ export class MediaFlowController {
     this.abort = new AbortController();
     this.emit();
     try {
+      await this.refreshQuota(false);
+      if (this.freeQuota?.downloadsRemaining === 0) {
+        throw flowErrorFromCode("FREE_DOWNLOAD_QUOTA_EXHAUSTED");
+      }
       const job = await this.api.createDownloadJob(
         this.mediaJob.id,
         format.formatOptionId,
@@ -686,6 +739,7 @@ export class MediaFlowController {
         return;
       }
       this.fail("download_failed", err, generation);
+      void this.refreshQuota(true);
     }
   }
 
@@ -726,10 +780,12 @@ export class MediaFlowController {
     }
     this.downloadJob = job;
     if (job.state === "expired") {
+      void this.refreshQuota(true);
       this.fail("expired", flowErrorFromCode("DOWNLOAD_EXPIRED"), generation);
       return;
     }
     if (job.state === "cancelled") {
+      void this.refreshQuota(true);
       this.errorText = null;
       this.clearGrantState();
       this.machine.transition("cancelled", generation);
@@ -740,6 +796,7 @@ export class MediaFlowController {
       return;
     }
     if (job.state === "failed") {
+      void this.refreshQuota(true);
       this.fail("download_failed", flowErrorFromCode(job.errorCode), generation);
       return;
     }
@@ -748,6 +805,7 @@ export class MediaFlowController {
     this.machine.endAction();
     this.persist();
     this.emit();
+    void this.refreshQuota(true);
     void this.armNativeDownload(generation);
   }
 
@@ -852,10 +910,7 @@ export class MediaFlowController {
     if (this.machine.current !== "ready" || this.grantArming) {
       return false;
     }
-    if (
-      !this.downloadPath ||
-      !this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)
-    ) {
+    if (!this.downloadPath || !this.grantStillValid(GRANT_HANDOFF_SAFETY_MS)) {
       this.invalidateExpiredGrantHref();
       this.emit();
       void this.armNativeDownload();
@@ -942,7 +997,10 @@ export class MediaFlowController {
     if (!this.token || !this.downloadJob?.cancellable) {
       return;
     }
-    if (this.machine.current !== "downloading" && this.machine.current !== "enqueueing_download") {
+    if (
+      this.machine.current !== "downloading" &&
+      this.machine.current !== "enqueueing_download"
+    ) {
       return;
     }
     const generation = this.machine.generationId;
@@ -958,6 +1016,7 @@ export class MediaFlowController {
       this.downloadJob = job;
       this.emit();
       if (job.state === "cancelled") {
+        void this.refreshQuota(true);
         this.errorText = null;
         this.clearGrantState();
         this.machine.transition("cancelled", generation);

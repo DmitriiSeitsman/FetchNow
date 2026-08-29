@@ -106,6 +106,15 @@ those timeouts, not from source duration.
 
 Capacity pressure and TTL cleanup reinforce each other: expired ready files and absolute job TTL (`JOB_ABSOLUTE_TTL_SECONDS`, `READY_FILE_TTL_SECONDS`) must be enforced so disk recovers without manual intervention. Media-job absolute TTL (`MEDIA_JOB_ABSOLUTE_TTL_SECONDS`) expires inspection rows independently of download artifacts and clears persisted inspection metadata and public error codes so expired rows remain a privacy/capacity boundary (CHECK `ck_media_jobs_result_state`). The job row is retained; payloads are not.
 
+PRD1E-B2 reserves one Free quota unit before a new download can enter the
+worker queue. This is entitlement admission, not B3 request/byte rate limiting
+or a replacement for process/disk capacity guards. Default policy is three
+successful `ready` jobs per anonymous identity in a rolling 24 hours. Active
+reservations count against admission and are bounded by the download-job TTL;
+terminal events are retained for 48 hours by default, which exceeds the window,
+then pruned in bounded worker batches. Anonymous identities use a one-year
+absolute TTL and are pruned only after their accounting entries are gone.
+
 ## Related documents
 
 - [File lifecycle policy](../product/file-lifecycle-policy.md)

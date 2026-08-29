@@ -66,6 +66,28 @@ function qualityRow(
 }
 
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
+  const quotaState = snapshot.freeQuota ?? null;
+  const quota = root.querySelector<HTMLElement>("[data-flow-quota]");
+  if (quota) {
+    quota.hidden = quotaState === null;
+    if (quotaState !== null) {
+      quota.textContent =
+        quotaState.downloadsRemaining === 0
+          ? "Лимит бесплатных загрузок исчерпан."
+          : `Доступно бесплатных загрузок: ${quotaState.downloadsRemaining} из ${quotaState.downloadLimit}`;
+    }
+  }
+  const quotaReset = root.querySelector<HTMLElement>("[data-flow-quota-reset]");
+  if (quotaReset) {
+    const resetAt = quotaState?.resetAt ?? null;
+    quotaReset.hidden = resetAt === null;
+    quotaReset.textContent = resetAt
+      ? `Следующая загрузка станет доступна ${new Intl.DateTimeFormat("ru-RU", {
+          dateStyle: "short",
+          timeStyle: "short",
+        }).format(new Date(resetAt))}.`
+      : "";
+  }
   const hideProgressAfterHandoff =
     snapshot.phase === "ready" && snapshot.nativeDownloadHandoff;
   const progress = progressView(snapshot.phase, snapshot.progressStage, {
@@ -152,7 +174,10 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const enqueue = root.querySelector<HTMLButtonElement>("[data-flow-download]");
   if (enqueue) {
     enqueue.disabled =
-      !snapshot.downloadEligible || snapshot.busy || snapshot.phase !== "inspected";
+      !snapshot.downloadEligible ||
+      snapshot.busy ||
+      snapshot.phase !== "inspected" ||
+      snapshot.freeQuota?.downloadsRemaining === 0;
     enqueue.hidden = snapshot.phase !== "inspected";
   }
   const startOver = root.querySelector<HTMLButtonElement>("[data-flow-reset]");

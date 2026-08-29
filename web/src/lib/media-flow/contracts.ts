@@ -290,6 +290,57 @@ export type ApiErrorBody = {
   error: { code: string; message: string; request_id?: string };
 };
 
+const FREE_QUOTA_KEYS = new Set([
+  "tier",
+  "downloadLimit",
+  "downloadsUsed",
+  "downloadsReserved",
+  "downloadsRemaining",
+  "resetAt",
+]);
+
+export type FreeQuota = {
+  tier: "free";
+  downloadLimit: number;
+  downloadsUsed: number;
+  downloadsReserved: number;
+  downloadsRemaining: number;
+  resetAt: string | null;
+};
+
+export function parseFreeQuota(value: unknown): FreeQuota {
+  if (!isRecord(value)) {
+    fail();
+  }
+  rejectForbidden(value);
+  rejectUnknown(value, FREE_QUOTA_KEYS);
+  if (value.tier !== "free") {
+    fail();
+  }
+  const downloadLimit = requireIntegerInRange(value.downloadLimit, 1, 100);
+  const downloadsUsed = requireIntegerInRange(value.downloadsUsed, 0, 100);
+  const downloadsReserved = requireIntegerInRange(value.downloadsReserved, 0, 100);
+  const downloadsRemaining = requireIntegerInRange(
+    value.downloadsRemaining,
+    0,
+    downloadLimit,
+  );
+  if (
+    downloadsRemaining !==
+    Math.max(0, downloadLimit - downloadsUsed - downloadsReserved)
+  ) {
+    fail();
+  }
+  return {
+    tier: "free",
+    downloadLimit,
+    downloadsUsed,
+    downloadsReserved,
+    downloadsRemaining,
+    resetAt: value.resetAt === null ? null : requireIso(value.resetAt),
+  };
+}
+
 export const BROWSER_GRANT_PATH_RE =
   /^\/api\/v1\/media\/browser-grants\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/content$/;
 

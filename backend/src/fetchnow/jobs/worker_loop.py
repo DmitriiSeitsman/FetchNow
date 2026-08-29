@@ -29,6 +29,7 @@ from fetchnow.media_inspection.errors import InspectionError, InspectionErrorKin
 from fetchnow.media_inspection.registry import InspectionExtractorRegistry
 from fetchnow.media_inspection.service import MediaInspectionService
 from fetchnow.network.client import SafeHTTPClient
+from fetchnow.quota.reconcile import QuotaReconciler
 from fetchnow.url.dns import DnsResolver, SystemDnsResolver
 from fetchnow.url.providers import ProviderRegistry
 from fetchnow.url.validate import URLValidator
@@ -234,6 +235,7 @@ class MediaJobWorkerRunner:
 
         if self._settings.media_downloads_enabled:
             await self._hygiene_download_jobs()
+            await self._hygiene_free_quota()
             await self._hygiene_browser_grants()
 
         if (
@@ -318,6 +320,31 @@ class MediaJobWorkerRunner:
             await session.commit()
         if removed:
             logger.info("browser_delivery_grant_cleanup count=%s", removed)
+
+    async def _hygiene_free_quota(self) -> None:
+        """Repair and prune quota rows regardless of the admission flag."""
+        async with self._session_factory() as session:
+            result = await QuotaReconciler(self._settings).run(
+                session=session, limit=64
+            )
+            await session.commit()
+        total = (
+            result.consumed
+            + result.released
+            + result.expired
+            + result.entries_deleted
+            + result.clients_deleted
+        )
+        if total:
+            logger.info(
+                "free_quota_reconcile consumed=%s released=%s expired=%s "
+                "entries_deleted=%s clients_deleted=%s",
+                result.consumed,
+                result.released,
+                result.expired,
+                result.entries_deleted,
+                result.clients_deleted,
+            )
 
     async def _claim_inspection_jobs(self) -> None:
         free_slots = self._settings.worker_concurrency - len(self._active_inspection)

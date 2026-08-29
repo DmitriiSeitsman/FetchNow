@@ -38,23 +38,40 @@ MEDIA_MUXING_FFPROBE_PATH=/usr/bin/ffprobe
 not enable inspection, jobs, downloads, delivery, indexing, or any Premium
 state.
 
-## Separate follow-up: quota (PRD1E-B2)
+## Free rolling quota (PRD1E-B2)
 
-The target Free policy is three successful downloads in a rolling 24-hour
-window. It is not implemented by B1. B2 requires a new additive database
-migration because the current per-flow bearer token in `sessionStorage` and
-short-lived browser delivery grants are not stable anonymous identities.
+Free policy is three successful downloads in a rolling 24-hour window. Before
+download admission, the browser calls `GET /api/v1/media/quota`; the server may
+issue `__Host-fetchnow_client`, a Secure, HttpOnly, SameSite=Lax, Path=/ cookie.
+Its 32 random bytes are encoded as unpadded base64url. PostgreSQL stores only a
+domain-separated SHA-256 hash. The identity and cookie expire absolutely after
+one year; activity does not extend them. Expired identities without accounting
+entries are removed by bounded worker reconciliation.
 
-B2 should issue an opaque random browser identity in an HttpOnly cookie where
-practical and persist only its domain-separated hash and minimal accounting
-data. IP may be an abuse signal but must not be the entitlement key.
+The API locks the anonymous client and counts database-timestamped events in the
+rolling window. A new idempotent download job and its reservation commit in one
+transaction. The unique `(media_job_id, format_option_id)` download key and the
+unique quota `download_job_id` ensure retries and concurrent duplicates reserve
+only once. Parallel distinct admissions serialize on the anonymous-client row.
 
-Admission must atomically reserve capacity before enqueue so parallel requests
-cannot exceed the limit. A reservation becomes consumed only when the fenced
-download job reaches `ready`; terminal failure, cancellation, or expiry releases
-it. This preserves the product rule that provider failures do not burn quota
-while rejecting excess work before it reaches a worker. The API should expose
-only safe policy state: tier, limit, used, remaining, and reset time.
+A reservation consumes capacity immediately but becomes a counted success only
+in the same transaction that the fenced worker transition commits `ready`.
+Terminal failure, cancellation, or pre-ready expiry releases it atomically.
+Retries retain it. Worker lifecycle and reconciliation honor existing
+reservations even when `FREE_DOWNLOAD_QUOTA_ENABLED` is later false; that flag
+controls only admission of new quota-governed downloads in the API.
+
+Status returns `tier`, `downloadLimit`, `downloadsUsed`, `downloadsReserved`,
+`downloadsRemaining`, and `resetAt`. Reservations reduce remaining capacity but
+cannot promise a reset time. Thus used=2/reserved=1 reports remaining=0 and
+`resetAt=null`; used=3/reserved=0 reports the oldest counted success plus 24
+hours. PostgreSQL time is authoritative for cutoff, reservation expiry,
+consumption, and reset calculation.
+
+This is a best-effort anonymous Free entitlement, not an anti-fraud identity.
+Deleting the cookie, private browsing, or using another browser/device can
+obtain another identity. IP addresses and invasive browser fingerprints are not
+used as the entitlement key. B3 delivery throttling remains separate.
 
 ## Separate follow-up: delivery rate (PRD1E-B3)
 

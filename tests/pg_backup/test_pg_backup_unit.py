@@ -552,7 +552,7 @@ def test_discover_alembic_heads() -> None:
     heads = discover_alembic_head_revisions(
         ROOT / "backend" / "migrations" / "versions"
     )
-    assert heads == ("0006_browser_delivery_grants",)
+    assert heads == ("0007_free_download_quota",)
 
 
 def test_compose_argv_requires_project() -> None:

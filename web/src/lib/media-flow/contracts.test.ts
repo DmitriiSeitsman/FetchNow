@@ -8,6 +8,7 @@ import {
   isDownloadEligible,
   parseBrowserGrant,
   parseDownloadJob,
+  parseFreeQuota,
   parseInspectionJob,
   parseMediaFormat,
 } from "./contracts";
@@ -47,6 +48,29 @@ const providerCapabilities = {
 } as const;
 
 describe("contracts", () => {
+  it("accepts coherent Free quota status and rejects false remaining math", () => {
+    expect(
+      parseFreeQuota({
+        tier: "free",
+        downloadLimit: 3,
+        downloadsUsed: 2,
+        downloadsReserved: 1,
+        downloadsRemaining: 0,
+        resetAt: null,
+      }),
+    ).toMatchObject({ downloadsRemaining: 0, resetAt: null });
+    expect(() =>
+      parseFreeQuota({
+        tier: "free",
+        downloadLimit: 3,
+        downloadsUsed: 2,
+        downloadsReserved: 1,
+        downloadsRemaining: 1,
+        resetAt: null,
+      }),
+    ).toThrow(FlowError);
+  });
+
   it("accepts valid create/status inspection payloads", () => {
     const queued = parseInspectionJob(inspectionPayload());
     expect(queued.state).toBe("queued");

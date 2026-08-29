@@ -420,6 +420,38 @@ class Settings(BaseSettings):
         le=16,
     )
 
+    # Free rolling download quota (PRD1E-B2). The flag controls admission of
+    # new quota-governed downloads in the API only. Workers always finalize an
+    # existing reservation regardless of the current flag value.
+    free_download_quota_enabled: bool = Field(
+        default=False,
+        alias="FREE_DOWNLOAD_QUOTA_ENABLED",
+    )
+    free_download_limit: int = Field(
+        default=3,
+        alias="FREE_DOWNLOAD_LIMIT",
+        ge=1,
+        le=100,
+    )
+    free_download_window_seconds: int = Field(
+        default=86_400,
+        alias="FREE_DOWNLOAD_WINDOW_SECONDS",
+        ge=60,
+        le=604_800,
+    )
+    anonymous_client_ttl_seconds: int = Field(
+        default=31_536_000,
+        alias="ANONYMOUS_CLIENT_TTL_SECONDS",
+        ge=86_400,
+        le=63_072_000,
+    )
+    free_download_quota_retention_seconds: int = Field(
+        default=172_800,
+        alias="FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS",
+        ge=86_400,
+        le=2_592_000,
+    )
+
     # Bounded stream-copy muxing (PR9) — fail closed / disabled by default.
     # ffmpeg/ffprobe paths are worker-only; API and delivery must not receive them.
     media_muxing_enabled: bool = Field(
@@ -573,6 +605,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MEDIA_DOWNLOAD_CONCURRENCY must be 1 until cross-worker "
                 "disk reservation is implemented"
+            )
+        if self.anonymous_client_ttl_seconds <= self.free_download_window_seconds:
+            raise ValueError(
+                "ANONYMOUS_CLIENT_TTL_SECONDS must be greater than "
+                "FREE_DOWNLOAD_WINDOW_SECONDS"
+            )
+        if (
+            self.free_download_quota_retention_seconds
+            <= self.free_download_window_seconds
+        ):
+            raise ValueError(
+                "FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS must be greater than "
+                "FREE_DOWNLOAD_WINDOW_SECONDS"
             )
         delivery_root = self.media_delivery_root.strip()
         if delivery_root and not os.path.isabs(delivery_root):
