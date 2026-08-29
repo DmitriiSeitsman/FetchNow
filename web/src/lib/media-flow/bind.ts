@@ -170,6 +170,7 @@ export function mountMediaFlow(
   };
 
   void controller.restore();
+  void controller.initializeQuota();
   renderFlow(root, controller.snapshot());
   return controller;
 }

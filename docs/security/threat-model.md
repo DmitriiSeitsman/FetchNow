@@ -167,6 +167,16 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Residual risk | yt-dlp own HTTP outside SafeHTTPClient |
 | Planned PR | Stronger isolation / rate limits in later PRs |
 
+### Anonymous Free quota abuse (PRD1E-B2)
+
+| Field | Detail |
+|---|---|
+| Attack | Parallel distinct admissions exceed three; repeated idempotent POSTs reserve twice; forged/stolen identity cookie; delete cookie/use private browsing to reset identity; race worker finalization with cancellation/reconciliation |
+| Impact | Unfair Free usage, excess worker/disk load, stranded or incorrectly consumed reservations |
+| Mitigation | Server-minted 32-byte opaque token; Secure/HttpOnly/SameSite=Lax `__Host-` cookie; only domain-separated SHA-256 stored; download POST requires pre-bootstrapped valid identity; anonymous-client row serializes admission; unique download idempotency and unique quota job FK; job + quota terminal state commit atomically; DB clock; bounded reconciliation; admission flag defaults off |
+| Residual risk | Cookie deletion, private mode, different browser/device, or stolen cookie until absolute one-year expiry; no invasive fingerprinting; B3 rate limiting is separate |
+| Planned PR | **PRD1E-B2** (implemented foundation); B3 delivery limiting later |
+
 ### Download cancel / progress oracle (PR10)
 
 | Field | Detail |

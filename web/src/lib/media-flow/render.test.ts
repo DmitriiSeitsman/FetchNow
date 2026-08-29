@@ -53,6 +53,34 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
 }
 
 describe("render", () => {
+  it("shows exhausted Free quota as a technical limit without Premium copy", () => {
+    document.body.innerHTML = `
+      <p data-flow-quota></p>
+      <p data-flow-quota-reset></p>
+      <button data-flow-download></button>
+    `;
+    renderFlow(
+      document,
+      snapshot({
+        freeQuota: {
+          tier: "free",
+          downloadLimit: 3,
+          downloadsUsed: 3,
+          downloadsReserved: 0,
+          downloadsRemaining: 0,
+          resetAt: "2026-08-30T09:00:00Z",
+        },
+      }),
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Лимит бесплатных загрузок исчерпан");
+    expect(text).toContain("Следующая загрузка станет доступна");
+    expect(text).not.toMatch(/premium|премиум|оплат/i);
+    expect(
+      document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled,
+    ).toBe(true);
+  });
+
   it("renders provider title as text and uses opaque formatOptionId", () => {
     document.body.innerHTML = `
       <p data-flow-status></p>

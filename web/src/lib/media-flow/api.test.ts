@@ -4,6 +4,53 @@ import { generateAccessToken } from "./credentials";
 import { inspectedPayload, inspectionPayload, JOB_ID } from "./fixtures";
 
 describe("api client", () => {
+  it("bootstraps the anonymous quota identity with same-origin credentials", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            tier: "free",
+            downloadLimit: 3,
+            downloadsUsed: 0,
+            downloadsReserved: 0,
+            downloadsRemaining: 3,
+            resetAt: null,
+          }),
+          { status: 200 },
+        ),
+    );
+    const api = new MediaApi({
+      origin: "http://localhost",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(api.getFreeQuota()).resolves.toMatchObject({
+      tier: "free",
+      downloadsRemaining: 3,
+    });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://localhost/api/v1/media/quota");
+    expect(init.credentials).toBe("same-origin");
+    expect(init.method).toBe("GET");
+  });
+
+  it("treats the fail-closed quota flag response as not yet active", async () => {
+    const api = new MediaApi({
+      origin: "http://localhost",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "FREE_QUOTA_DISABLED",
+              message: "Free download quota is not active.",
+            },
+          }),
+          { status: 503 },
+        )) as unknown as typeof fetch,
+    });
+    await expect(api.getFreeQuota()).resolves.toBeNull();
+  });
+
   it("sends Bearer to same-origin paths only", async () => {
     const token = generateAccessToken();
     const fetchImpl = vi.fn(async () => {

@@ -18,6 +18,7 @@ from fetchnow.downloads.service import DownloadJobService
 from fetchnow.jobs.service import MediaJobService
 from fetchnow.media_inspection.defaults import build_default_inspection_registry
 from fetchnow.network.client import SafeHTTPClient
+from fetchnow.quota.service import QuotaService
 from fetchnow.resolution.defaults import build_wrapper_registry
 from fetchnow.resolution.service import ResolutionService
 from fetchnow.url.dns import SystemDnsResolver
@@ -61,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         media_job_service = MediaJobService(settings)
         download_job_service = DownloadJobService(settings)
+        quota_service = QuotaService(settings)
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.settings = settings
@@ -73,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.inspection_registry = inspection_registry
         app.state.media_job_service = media_job_service
         app.state.download_job_service = download_job_service
+        app.state.quota_service = quota_service
         try:
             yield
         finally:

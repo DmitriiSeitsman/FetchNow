@@ -2,9 +2,11 @@ import {
   parseApiError,
   parseBrowserGrant,
   parseDownloadJob,
+  parseFreeQuota,
   parseInspectionJob,
   type BrowserGrant,
   type DownloadJob,
+  type FreeQuota,
   type InspectionJob,
 } from "./contracts";
 import { FlowError, flowErrorFromCode, GENERIC_USER_MESSAGE } from "./errors";
@@ -200,6 +202,30 @@ export class MediaApi {
     }
     const body = await readJson(response);
     return { status: response.status, body, headers: response.headers };
+  }
+
+  async getFreeQuota(signal?: AbortSignal): Promise<FreeQuota | null> {
+    const { status, body, headers } = await this.requestJson(
+      "/api/v1/media/quota",
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (status === 503) {
+      try {
+        if (parseApiError(body).error.code === "FREE_QUOTA_DISABLED") {
+          return null;
+        }
+      } catch {
+        /* use the normal contract error below */
+      }
+    }
+    if (status !== 200) {
+      throwHttpError(status, body, headers);
+    }
+    return parseFreeQuota(body);
   }
 
   async createInspectionJob(

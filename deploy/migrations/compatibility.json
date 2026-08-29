@@ -85,6 +85,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create the new media_delivery_grants table and indexes only. Existing media_download_jobs / media_jobs schema, enums, and CHECKs are unchanged, so a previous application that ignores the new table remains compatible during online expand and application rollback. Downgrade drops only the new grant objects."
+    },
+    {
+      "from_heads": [
+        "0006_browser_delivery_grants"
+      ],
+      "to_heads": [
+        "0007_free_download_quota"
+      ],
+      "included_revisions": [
+        "0007_free_download_quota"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create anonymous_clients and free_download_quota_entries with indexes and constraints only. Existing media, download, and delivery-grant tables are unchanged, so the previous application ignores the additive schema safely during migration and rollback. Admission remains disabled by default until a separate operator activation."
     }
   ]
 }

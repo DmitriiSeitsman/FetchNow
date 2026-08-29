@@ -517,6 +517,30 @@ SEO, or host configuration changes. Roll back by restoring
 `MEDIA_MUXING_ENABLED=false` and rolling out the accepted revision; existing
 direct progressive downloads remain available.
 
+#### Later PRD1E-B2 quota rollout (not performed by implementation task)
+
+Quota rollout is deliberately split so schema compatibility and accounting
+health are verified before new admission depends on them:
+
+1. Deploy the accepted B2 code/configuration with
+   `FREE_DOWNLOAD_QUOTA_ENABLED=false`, `FREE_DOWNLOAD_LIMIT=3`,
+   `FREE_DOWNLOAD_WINDOW_SECONDS=86400`, and
+   `PUBLIC_SEARCH_INDEXING_ENABLED=false`.
+2. Use the canonical production release plan, verified backup, and migration
+   tooling to advance PostgreSQL to `0007_free_download_quota`. Do not run
+   Alembic manually.
+3. Verify API/worker/delivery health, the exact database head, and quota
+   reconciliation while admission remains disabled. Existing reservation
+   finalization is flag-independent.
+4. In a separate explicitly approved activation, set only
+   `FREE_DOWNLOAD_QUOTA_ENABLED=true` (keeping limit 3, window 86400, and SEO
+   false), then follow the normal immutable rollout and health sequence.
+
+Rollback admission by restoring `FREE_DOWNLOAD_QUOTA_ENABLED=false`; do not
+downgrade the additive migration. Workers continue consuming/releasing existing
+reservations. This sequence does not authorize B3 throttling, Premium/payments,
+provider smoke, or manual production environment edits.
+
 ### Post-merge operator sequence
 
 Use only `make production-release-*`. No manual `docker compose up`, no
