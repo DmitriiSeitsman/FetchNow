@@ -79,6 +79,7 @@ Risk: low — чтение; medium — контролируемое измене
 | Release | `make production-release-migrate EXPECTED_REVISION=<sha>` | production verified DB migration | database + backup root | нет* | high; journaled commit or recovery |
 | Release | `make production-release-migration-recover MIGRATION_ID=<uuid> ACTION=accept_source\|accept_target` | production migration recovery | deploy + backup root | нет* | high; explicit recovery only |
 | Release | `make production-release-rollout EXPECTED_REVISION=<sha> [BOOTSTRAP=1]` | production application-only rollout | modifying app containers | нет* | high; stabilized commit or rollback |
+| Release | `make production-release-config-rollout EXPECTED_REVISION=<sha> [INIT_CONFIG=1]` | allowlisted config-only rollout on active immutable release | affected app containers only | нет* | high; journaled commit or automatic config rollback |
 | Release | `make production-release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback\|accept-target` | production rollout recovery | modifying app containers | нет* | high; explicit terminal action |
 | Release | `make production-release-health EXPECTED_REVISION=<sha>` | production managed health | read-only | нет* | low; service/HTTP status |
 | Backup | `make production-pg-backup-create` | production logical dump | modifying file | нет* | medium; backup id/sha |

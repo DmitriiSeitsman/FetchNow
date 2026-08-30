@@ -73,6 +73,12 @@ successfully (application section is not rewritten on automatic rollback).
 A successful repeat of the current revision is idempotent: it verifies health
 without recreating services.
 
+That already-active path intentionally does not apply changed host runtime env.
+Use the separate, allowlisted config transaction documented in
+[chapter 31](31-runtime-config-rollout.md). Source rollout owns deployment/image
+identity in `current.json`; config rollout owns a separate config rollout ID and
+`state/runtime-config.json`, without changing the deployment ID.
+
 If automatic rollback itself cannot complete, inspect the deployment journal and choose an explicit action:
 
 ```bash

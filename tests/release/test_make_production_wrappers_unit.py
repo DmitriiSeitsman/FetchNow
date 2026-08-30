@@ -67,20 +67,45 @@ def test_production_rollout_and_backup_wrappers_stay_production() -> None:
     assert "compose.staging.yaml" not in backup
 
 
+def test_production_config_rollout_wrapper_and_explicit_initialization() -> None:
+    output = _make_n(
+        "production-release-config-rollout",
+        EXPECTED_REVISION=REVISION,
+        PROJECT_NAME="fetchnow-staging",
+        DEPLOY_ROOT="/srv/fetchnow-staging",
+        ENV_FILE=".env.staging",
+    )
+    assert "config-rollout" in output
+    assert "--project-name fetchnow-production" in output
+    assert "--env-file /srv/fetchnow-production/env/.env.production" in output
+    assert "--deploy-root /srv/fetchnow-production" in output
+    assert "--initialize-active-config" not in output
+    assert "fetchnow-staging" not in output
+
+    initialized = _make_n(
+        "production-release-config-rollout",
+        EXPECTED_REVISION=REVISION,
+        INIT_CONFIG="1",
+    )
+    assert "--initialize-active-config" in initialized
+
+
 def test_staging_prepare_and_deploy_plan_make_do_not_require_backup_root() -> None:
     prepare = _make_n("release-prepare", EXPECTED_REVISION=REVISION)
     assert "--backup-root" not in prepare
-    assert "--project-name \"fetchnow-staging\"" in prepare
-    assert "--compose-file \"compose.staging.yaml\"" in prepare
-    assert "--env-file \".env.staging\"" in prepare
+    assert '--project-name "fetchnow-staging"' in prepare
+    assert '--compose-file "compose.staging.yaml"' in prepare
+    assert '--env-file ".env.staging"' in prepare
 
     plan = _make_n("release-deploy-plan", EXPECTED_REVISION=REVISION)
     assert "--backup-root" not in plan
-    assert "--project-name \"fetchnow-staging\"" in plan
-    assert "--compose-file \"compose.staging.yaml\"" in plan
+    assert '--project-name "fetchnow-staging"' in plan
+    assert '--compose-file "compose.staging.yaml"' in plan
 
 
-def test_production_prepare_make_omits_backup_root_deploy_plan_keeps_canonical() -> None:
+def test_production_prepare_make_omits_backup_root_deploy_plan_keeps_canonical() -> (
+    None
+):
     prepare = _make_n("production-release-prepare", EXPECTED_REVISION=REVISION)
     assert "--backup-root" not in prepare
     assert "--project-name fetchnow-production" in prepare
