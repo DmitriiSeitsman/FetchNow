@@ -3,6 +3,28 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { mountMediaFlow, pasteClipboardIntoInput } from "./bind";
+import type { MediaFlowController } from "./controller";
+
+const SAMPLE_QUOTA = {
+  tier: "free" as const,
+  downloadLimit: 3,
+  downloadsUsed: 1,
+  downloadsReserved: 0,
+  downloadsRemaining: 2,
+  resetAt: null,
+};
+
+async function drainQuotaAndDisconnect(controller: MediaFlowController | null) {
+  controller?.disconnect();
+  await controller?.initializeQuota();
+}
+
+function quotaJsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 describe("bind", () => {
   it("does not mount or fetch when the UI flag is off", () => {
@@ -109,11 +131,11 @@ describe("bind", () => {
     expect(
       document.querySelector<HTMLElement>("[data-flow-paste-hint]")?.hidden,
     ).toBe(true);
-    controller?.disconnect();
+    await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });
 
-  it("does not cancel the paste click so native paste UI can proceed", () => {
+  it("does not cancel the paste click so native paste UI can proceed", async () => {
     const readText = vi.fn().mockReturnValue(new Promise<string>(() => {}));
     vi.stubGlobal("navigator", { ...navigator, clipboard: { readText } });
     document.body.innerHTML = `
@@ -130,7 +152,7 @@ describe("bind", () => {
     paste?.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
     expect(readText).toHaveBeenCalledOnce();
-    controller?.disconnect();
+    await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });
 
@@ -160,11 +182,11 @@ describe("bind", () => {
 
     input?.dispatchEvent(new Event("paste", { bubbles: true }));
     expect(hint?.hidden).toBe(true);
-    controller?.disconnect();
+    await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });
 
-  it("hints immediately when the Clipboard API is missing", () => {
+  it("hints immediately when the Clipboard API is missing", async () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
     document.body.innerHTML = `
       <section data-media-flow>
@@ -182,11 +204,11 @@ describe("bind", () => {
     expect(document.activeElement).toBe(
       document.querySelector("[data-flow-url]"),
     );
-    controller?.disconnect();
+    await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });
 
-  it("keeps paste hint hidden until the paste button is used", () => {
+  it("keeps paste hint hidden until the paste button is used", async () => {
     document.body.innerHTML = `
       <section data-media-flow>
         <form data-flow-form>
@@ -200,10 +222,10 @@ describe("bind", () => {
     const hint = document.querySelector<HTMLElement>("[data-flow-paste-hint]");
     expect(hint?.hidden).toBe(true);
     expect(hint?.textContent).toBe("");
-    controller?.disconnect();
+    await drainQuotaAndDisconnect(controller);
   });
 
-  it("clears the url field when Start over is clicked", () => {
+  it("clears the url field when Start over is clicked", async () => {
     document.body.innerHTML = `
       <section data-media-flow>
         <form data-flow-form>
@@ -219,6 +241,63 @@ describe("bind", () => {
     expect(input?.value).toBe("https://example.test/video");
     document.querySelector<HTMLButtonElement>("[data-flow-reset]")?.click();
     expect(input?.value).toBe("");
+    await drainQuotaAndDisconnect(controller);
+  });
+
+  it("renders quota while the flow remains mounted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => quotaJsonResponse(SAMPLE_QUOTA)),
+    );
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="submit" data-flow-submit>Fetch</button>
+        </form>
+        <p data-flow-status></p>
+        <p data-flow-quota hidden></p>
+        <p data-flow-quota-reset hidden></p>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    await controller?.initializeQuota();
+    const quota = document.querySelector<HTMLElement>("[data-flow-quota]");
+    expect(quota?.hidden).toBe(false);
+    expect(quota?.textContent).toContain("2 из 3");
+    await drainQuotaAndDisconnect(controller);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not render quota after disconnect even if the fetch later settles", async () => {
+    let release!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => pending),
+    );
+    document.body.innerHTML = `
+      <section data-media-flow>
+        <form data-flow-form>
+          <input data-flow-url type="url" value="" />
+          <button type="submit" data-flow-submit>Fetch</button>
+        </form>
+        <p data-flow-status></p>
+        <p data-flow-quota hidden></p>
+      </section>
+    `;
+    const controller = mountMediaFlow(document.body, true);
+    const quota = document.querySelector<HTMLElement>("[data-flow-quota]");
+    expect(quota?.hidden).toBe(true);
+    expect(quota?.textContent).toBe("");
     controller?.disconnect();
+    release(quotaJsonResponse(SAMPLE_QUOTA));
+    await controller?.initializeQuota();
+    expect(quota?.hidden).toBe(true);
+    expect(quota?.textContent).toBe("");
+    expect(controller?.snapshot().freeQuota).toBeNull();
+    vi.unstubAllGlobals();
   });
 });
