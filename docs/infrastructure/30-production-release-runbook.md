@@ -534,12 +534,20 @@ health are verified before new admission depends on them:
    finalization is flag-independent.
 4. In a separate explicitly approved activation, set only
    `FREE_DOWNLOAD_QUOTA_ENABLED=true` (keeping limit 3, window 86400, and SEO
-   false), then follow the normal immutable rollout and health sequence.
+   false). Before editing the env, initialize sanitized active-config state with
+   `make production-release-config-rollout EXPECTED_REVISION=<active-sha> INIT_CONFIG=1`.
+   After the atomic env edit, apply it with
+   `make production-release-config-rollout EXPECTED_REVISION=<active-sha>` and
+   run official health. This recreates only API for the quota flag and keeps the
+   accepted images, source deployment identity, and database state unchanged.
 
 Rollback admission by restoring `FREE_DOWNLOAD_QUOTA_ENABLED=false`; do not
-downgrade the additive migration. Workers continue consuming/releasing existing
-reservations. This sequence does not authorize B3 throttling, Premium/payments,
-provider smoke, or manual production environment edits.
+downgrade the additive migration, then run the same canonical config rollout.
+An unhealthy activation automatically restores the previous sanitized config.
+Workers continue consuming/releasing existing reservations. See
+[chapter 31](31-runtime-config-rollout.md). This sequence does not authorize B3
+throttling, Premium/payments, provider smoke, raw Compose activation, or manual
+container edits.
 
 ### Post-merge operator sequence
 

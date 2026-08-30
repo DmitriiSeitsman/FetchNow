@@ -54,6 +54,8 @@ Internet
 
 **PRD1C3B2B2 (verified migration transaction):** journaled forward migration under rollout lock with B2B1 backup proof, retention holds, Alembic from target release image, atomic database-side `current.json` commit, and explicit recovery — without application activation. См. [главу 29](29-verified-migration-transaction.md).
 
+**PRD1E-B2.1 (runtime config rollout):** allowlisted config-only activation on an already accepted immutable release, with sanitized active-config state, service-scoped recreation, global health, journaling, and automatic config rollback. См. [главу 31](31-runtime-config-rollout.md).
+
 **Production release design:** planned production host/domain isolation, bootstrap vs routine release, migration/rollback/smoke/GO-NO-GO, and `PRD1D-prod-param` (PRD1D-A overlay/env contract landed; Make/CLI parameterization is PRD1D-B) are documented in [главе 30](30-production-release-runbook.md). This does **not** claim Make/CLI already accept `fetchnow-production`.
 
 Архитектурные основания URL/DNS и outbound-защиты: [ADR 0004](../adr/0004-provider-registry-and-dns-validation.md) и [ADR 0005](../adr/0005-safe-outbound-http-and-redirects.md).
@@ -68,7 +70,7 @@ Internet
 
 ### Маршрут для будущего production
 
-[Production release runbook / design](30-production-release-runbook.md) → [release preflight/health](24-release-preflight-health.md) → [materialize/build](25-release-materialization-build.md) → [rollout/recover](26-deployment-transaction-rollback.md) → [deploy-plan](27-migration-compatibility-deployment-planning.md) → [migrate](29-verified-migration-transaction.md) → [smoke](13-healthchecks-and-smoke-tests.md). Production host/DNS/TLS and the `PRD1D-prod-param` milestone are prerequisites; do not treat chapter 30 as a live deploy claim.
+[Production release runbook / design](30-production-release-runbook.md) → [release preflight/health](24-release-preflight-health.md) → [materialize/build](25-release-materialization-build.md) → [rollout/recover](26-deployment-transaction-rollback.md) → [deploy-plan](27-migration-compatibility-deployment-planning.md) → [migrate](29-verified-migration-transaction.md) → [runtime config rollout](31-runtime-config-rollout.md) → [smoke](13-healthchecks-and-smoke-tests.md).
 
 ### Маршрут для диагностики
 
@@ -110,3 +112,4 @@ Internet
 28. [Dual application/database state (PRD1C3B2A)](28-dual-application-database-state.md)
 29. [Verified migration transaction (PRD1C3B2B2)](29-verified-migration-transaction.md)
 30. [Production release runbook / design](30-production-release-runbook.md)
+31. [Canonical runtime config rollout (PRD1E-B2.1)](31-runtime-config-rollout.md)

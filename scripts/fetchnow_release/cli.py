@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import STAGING_PROJECT, __version__
 from .bootstrap_db import BootstrapDbInput, run_bootstrap_db
+from .config_rollout import ConfigRolloutInput, run_config_rollout
 from .deploy_plan import DeployPlanInput, emit_deploy_plan, run_deploy_plan
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
@@ -43,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fetchnow_release",
         description=(
             "FetchNow release preflight, health, prepare, verify, "
-            "deploy-plan, bootstrap-db, application rollout & recover"
+            "deploy-plan, bootstrap-db, application rollout, "
+            "config-rollout & recover"
         ),
     )
     parser.add_argument(
@@ -147,6 +149,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--wait-lock",
         action="store_true",
         help="Wait for exclusive rollout lock (default: fail immediately)",
+    )
+
+    config_roll = sub.add_parser(
+        "config-rollout",
+        help="Transactional allowlisted runtime-config rollout (no image/DB change)",
+    )
+    config_roll.add_argument("--project-name", default=STAGING_PROJECT)
+    config_roll.add_argument("--env-file", type=Path, required=True)
+    config_roll.add_argument("--expected-revision", required=True)
+    config_roll.add_argument("--deploy-root", type=Path, required=True)
+    config_roll.add_argument("--repo-root", type=Path, default=None)
+    config_roll.add_argument(
+        "--gateway-base-url",
+        default="http://127.0.0.1:8091",
+    )
+    config_roll.add_argument("--wait-lock", action="store_true")
+    config_roll.add_argument(
+        "--initialize-active-config",
+        action="store_true",
+        help="Initialize sanitized state only when live and target config match",
     )
 
     rec = sub.add_parser(
@@ -354,6 +376,29 @@ def main(argv: list[str] | None = None) -> int:
                 gateway_base_url=base,
                 bootstrap=bool(args.bootstrap),
                 wait_lock=bool(args.wait_lock),
+            )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        return 0 if result.ok else 1
+
+    if args.command == "config-rollout":
+        base = args.gateway_base_url
+        if not base.startswith("http://127.0.0.1:") and not base.startswith(
+            "http://localhost:"
+        ):
+            print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
+            return 1
+        result = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=args.project_name,
+                env_file=args.env_file.expanduser().resolve(),
+                expected_revision=args.expected_revision,
+                repo_root=repo,
+                deploy_root=args.deploy_root.expanduser().resolve(),
+                gateway_base_url=base,
+                wait_lock=bool(args.wait_lock),
+                initialize_active_config=bool(args.initialize_active_config),
             )
         )
         for line in result.messages:

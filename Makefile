@@ -8,7 +8,7 @@
 	release-bootstrap-db-integration \
 	production-release-preflight production-release-prepare production-release-verify \
 	production-release-deploy-plan production-release-bootstrap-db production-release-migrate production-release-migration-recover \
-	production-release-rollout production-release-recover production-release-health \
+	production-release-rollout production-release-config-rollout production-release-recover production-release-health \
 	production-pg-backup-create production-pg-backup-verify
 
 COMPOSE ?= docker compose
@@ -164,7 +164,7 @@ release-build-integration:
 	$(PYTHON) scripts/release_build_integration_test.py
 
 release-rollout-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py
+	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py tests/release/test_config_rollout_unit.py
 
 release-rollout:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
@@ -343,6 +343,16 @@ production-release-rollout:
 		--expected-revision "$(EXPECTED_REVISION)" \
 		--deploy-root /srv/fetchnow-production \
 		$(if $(filter 1,$(BOOTSTRAP)),--bootstrap)
+
+production-release-config-rollout:
+	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make production-release-config-rollout EXPECTED_REVISION=<40-char-sha>' && exit 1)
+	@test -f /srv/fetchnow-production/env/.env.production || (echo 'Missing /srv/fetchnow-production/env/.env.production' && exit 1)
+	$(RELEASE) config-rollout \
+		--project-name fetchnow-production \
+		--env-file /srv/fetchnow-production/env/.env.production \
+		--expected-revision "$(EXPECTED_REVISION)" \
+		--deploy-root /srv/fetchnow-production \
+		$(if $(filter 1,$(INIT_CONFIG)),--initialize-active-config)
 
 production-release-recover:
 	@test -n "$(DEPLOYMENT_ID)" || (echo 'Usage: make production-release-recover DEPLOYMENT_ID=<uuid> ACTION=rollback|accept-target' && exit 1)

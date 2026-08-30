@@ -208,7 +208,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest==8.4.1
       - name: Unit tests
-        run: python -m pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py
+        run: python -m pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py tests/release/test_config_rollout_unit.py
 
   release-rollout-integration:
     name: Release rollout transaction integration

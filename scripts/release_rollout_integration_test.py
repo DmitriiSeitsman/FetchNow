@@ -39,6 +39,11 @@ from fetchnow_release.bootstrap_cleanup import (  # noqa: E402
 )
 from fetchnow_release.c2_constants import SOURCE_CONTRACT_VERSION_V2, SOURCE_DIRNAME  # noqa: E402
 from fetchnow_release.c3b1_constants import COMPATIBILITY_REL_PATH  # noqa: E402
+from fetchnow_release.config_rollout import (  # noqa: E402
+    ConfigRolloutInput,
+    run_config_rollout,
+)
+from fetchnow_release.config_state import load_runtime_config_state  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
     PLAN_SCHEMA_VERSION,
     PlanDocument,
@@ -98,7 +103,12 @@ def ensure_rollout_fixture_compatibility_policy(clone: Path) -> str:
         clone_policy.write_bytes(fixture_bytes)
         run(["git", "add", str(clone_policy)], cwd=clone)
         run(
-            ["git", "commit", "-m", "test: add migration compatibility contract for rollout"],
+            [
+                "git",
+                "commit",
+                "-m",
+                "test: add migration compatibility contract for rollout",
+            ],
             cwd=clone,
         )
         revision = run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip()
@@ -165,6 +175,9 @@ def write_env(
                 f"GATEWAY_PORT={gateway_port}",
                 "APP_ENV=test",
                 "PUBLIC_SITE_URL=http://127.0.0.1",
+                "PUBLIC_MEDIA_FLOW_ENABLED=true",
+                "PUBLIC_SEARCH_INDEXING_ENABLED=false",
+                "FREE_DOWNLOAD_QUOTA_ENABLED=false",
                 "POSTGRES_DB=fetchnow",
                 "POSTGRES_USER=fetchnow",
                 f"POSTGRES_PASSWORD={valid_test_password()}",
@@ -538,9 +551,7 @@ def journal_compose_files(
 ) -> tuple[Path, ...]:
     rel = release_dir(deploy_root, revision)
     source = rel / SOURCE_DIRNAME
-    override = (
-        deploy_root / "deployments" / deployment_id / "overrides" / "images.yaml"
-    )
+    override = deploy_root / "deployments" / deployment_id / "overrides" / "images.yaml"
     return (
         (source / "compose.yaml").resolve(),
         (source / "compose.staging.yaml").resolve(),
@@ -631,7 +642,9 @@ def main(argv: list[str] | None = None) -> int:
             deploy_root, revision_unhealthy, fixture_policy_sha256=fixture_policy_sha256
         )
         if running_app_container_ids(compose, clone):
-            raise RuntimeError("application containers present before unhealthy bootstrap")
+            raise RuntimeError(
+                "application containers present before unhealthy bootstrap"
+            )
 
         bad_boot = rollout_release(
             RolloutInput(
@@ -692,7 +705,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             ) from exc
         if any(
-            item.get("service") == "postgres" or item.get("compose_service") == "postgres"
+            item.get("service") == "postgres"
+            or item.get("compose_service") == "postgres"
             for item in audit
         ):
             raise RuntimeError("bootstrap cleanup removed postgres")
@@ -729,10 +743,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(
                     f"bootstrap cleanup left removed container present: {cid}"
                 )
-        print(
-            "OK: exact owned container IDs removed "
-            f"({', '.join(sorted(audit_ids))})"
-        )
+        print(f"OK: exact owned container IDs removed ({', '.join(sorted(audit_ids))})")
 
         if running_app_container_ids(compose, clone):
             raise RuntimeError("application containers remain after bootstrap cleanup")
@@ -747,8 +758,13 @@ def main(argv: list[str] | None = None) -> int:
             release_revision=revision_unhealthy,
         )
         if remaining_owned:
-            raise RuntimeError("discover_owned found bootstrap containers after cleanup")
-        if run(compose + ["ps", "-q", "postgres"], cwd=clone).stdout.strip() != postgres_id:
+            raise RuntimeError(
+                "discover_owned found bootstrap containers after cleanup"
+            )
+        if (
+            run(compose + ["ps", "-q", "postgres"], cwd=clone).stdout.strip()
+            != postgres_id
+        ):
             raise RuntimeError("bootstrap cleanup recreated postgres container")
         wait_for_postgres(compose, clone)
         if read_db_sentinel(compose, clone, marker) != marker:
@@ -852,10 +868,10 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("bootstrap api container missing deployment-id label")
         if api_labels.get(LABEL_RELEASE_REVISION) != revision_a:
             raise RuntimeError("bootstrap api container missing release-revision label")
-        print("OK: healthy bootstrap after terminal failure succeeded with ownership labels")
-        state_a = assert_current_state_v2(
-            deploy_root, application_revision=revision_a
+        print(
+            "OK: healthy bootstrap after terminal failure succeeded with ownership labels"
         )
+        state_a = assert_current_state_v2(deploy_root, application_revision=revision_a)
         print("OK: bootstrap published current.json schema v2")
 
         active_ids = state_a["application"]["image_ids"]
@@ -945,7 +961,9 @@ def main(argv: list[str] | None = None) -> int:
         state_b = assert_current_state_v2(deploy_root, application_revision=revision_b)
         envelope = frozenset(state_b["database"]["compatible_application_revisions"])
         if revision_a not in envelope or revision_b not in envelope:
-            raise RuntimeError("compatibility envelope missing A or B after same-head rollout")
+            raise RuntimeError(
+                "compatibility envelope missing A or B after same-head rollout"
+            )
         # Same-head app bump keeps database heads and schema_release_revision.
         if not state_b["database"]["heads"]:
             raise RuntimeError("database heads lost after application-only rollout")
@@ -1064,25 +1082,40 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if current_path.read_bytes() != before_bytes:
-            raise RuntimeError("rejected incompatible rollout mutated current.json bytes")
+            raise RuntimeError(
+                "rejected incompatible rollout mutated current.json bytes"
+            )
         if current_path.stat().st_mtime_ns != before_mtime:
-            raise RuntimeError("rejected incompatible rollout touched current.json mtime")
+            raise RuntimeError(
+                "rejected incompatible rollout touched current.json mtime"
+            )
         after_state = json.loads(current_path.read_text(encoding="utf-8"))
         if after_state != before_state:
-            raise RuntimeError("rejected incompatible rollout changed parsed current state")
+            raise RuntimeError(
+                "rejected incompatible rollout changed parsed current state"
+            )
         if after_state["application"] != before_state["application"]:
-            raise RuntimeError("rejected incompatible rollout changed application state")
+            raise RuntimeError(
+                "rejected incompatible rollout changed application state"
+            )
         if after_state["database"] != before_state["database"]:
             raise RuntimeError("rejected incompatible rollout changed database state")
-        if after_state["database"]["compatible_application_revisions"] != before_envelope:
-            raise RuntimeError("rejected incompatible rollout changed compatibility envelope")
+        if (
+            after_state["database"]["compatible_application_revisions"]
+            != before_envelope
+        ):
+            raise RuntimeError(
+                "rejected incompatible rollout changed compatibility envelope"
+            )
         after_app_ids = app_container_ids(compose, clone)
         if after_app_ids != before_app_ids:
             raise RuntimeError(
                 f"rejected incompatible rollout changed app container IDs: "
                 f"{before_app_ids} -> {after_app_ids}"
             )
-        after_postgres = run(compose + ["ps", "-q", "postgres"], cwd=clone).stdout.strip()
+        after_postgres = run(
+            compose + ["ps", "-q", "postgres"], cwd=clone
+        ).stdout.strip()
         if after_postgres != before_postgres:
             raise RuntimeError("rejected incompatible rollout recreated postgres")
         after_live_heads = live_db_heads(
@@ -1101,10 +1134,14 @@ def main(argv: list[str] | None = None) -> int:
         if project_volumes(project) != before_volumes:
             raise RuntimeError("rejected incompatible rollout changed named volumes")
         if current_revision(deploy_root) != revision_b:
-            raise RuntimeError("rejected incompatible rollout changed application revision")
+            raise RuntimeError(
+                "rejected incompatible rollout changed application revision"
+            )
         after_images = container_image_ids(compose, clone)
         if after_images != before_app_images:
-            raise RuntimeError("rejected incompatible rollout changed running image IDs")
+            raise RuntimeError(
+                "rejected incompatible rollout changed running image IDs"
+            )
         for svc, image_id in after_images.items():
             image_key = "api" if svc == "delivery" else svc
             if image_id == incompatible_image_ids[image_key]:
@@ -1200,9 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         b_release = release_dir(deploy_root, revision_b)
-        b_heads = tuple(
-            sorted(target_heads_from_release_source(b_release))
-        )
+        b_heads = tuple(sorted(target_heads_from_release_source(b_release)))
         accept_dep = seed_unresolved_journal(
             deploy_root=deploy_root,
             project=project,
@@ -1304,7 +1339,11 @@ def main(argv: list[str] | None = None) -> int:
             previous_ids=b_manifest_ids,
             man_hash=sha256_file(manifest_path(c_release)),
             database_heads=b_heads,
-            event_trail=(STATUS_PLANNED, STATUS_ACTIVATING_APP, STATUS_ROLLBACK_STARTED),
+            event_trail=(
+                STATUS_PLANNED,
+                STATUS_ACTIVATING_APP,
+                STATUS_ROLLBACK_STARTED,
+            ),
         )
         rollback_recover = recover_deployment(
             RecoverInput(
@@ -1376,9 +1415,7 @@ def main(argv: list[str] | None = None) -> int:
         active_before = (deploy_root / "state" / "current.json").read_bytes()
         active_mtime = (deploy_root / "state" / "current.json").stat().st_mtime_ns
         dep_dirs_before = {
-            p.name
-            for p in (deploy_root / "deployments").iterdir()
-            if p.is_dir()
+            p.name for p in (deploy_root / "deployments").iterdir() if p.is_dir()
         }
         container_ids_before = {
             svc: run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
@@ -1401,37 +1438,167 @@ def main(argv: list[str] | None = None) -> int:
             )
         if (deploy_root / "state" / "current.json").read_bytes() != active_before:
             raise RuntimeError("already-active rollout mutated current.json")
-        if (
-            (deploy_root / "state" / "current.json").stat().st_mtime_ns
-            != active_mtime
-        ):
+        if (deploy_root / "state" / "current.json").stat().st_mtime_ns != active_mtime:
             raise RuntimeError("already-active rollout touched current.json mtime")
         dep_dirs_after = {
-            p.name
-            for p in (deploy_root / "deployments").iterdir()
-            if p.is_dir()
+            p.name for p in (deploy_root / "deployments").iterdir() if p.is_dir()
         }
         if dep_dirs_after != dep_dirs_before:
             raise RuntimeError("already-active rollout created new deployment journal")
         for svc, cid in container_ids_before.items():
             after = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
             if after != cid:
-                raise RuntimeError(
-                    f"already-active rollout recreated {svc} container"
-                )
+                raise RuntimeError(f"already-active rollout recreated {svc} container")
         print("OK: already-active B verified without mutation")
 
-        for journal in (deploy_root / "deployments").rglob("*"):
-            if journal.is_file():
-                text = journal.read_text(encoding="utf-8")
-                if (
-                    "POSTGRES_PASSWORD" in text
-                    or "DATABASE_URL" in text
-                    or valid_test_password() in text
-                ):
-                    raise RuntimeError(
-                        f"secret pattern appeared in journal: {journal.name}"
-                    )
+        config_init = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=project,
+                env_file=env_file,
+                expected_revision=revision_b,
+                repo_root=clone,
+                deploy_root=deploy_root,
+                gateway_base_url=f"http://{gateway_port}",
+                policy=policy,
+                initialize_active_config=True,
+            )
+        )
+        if not config_init.ok or not config_init.already_active_config:
+            raise RuntimeError(
+                f"active config initialization failed: {config_init.messages}"
+            )
+        initialized = load_runtime_config_state(deploy_root)
+        if initialized is None or initialized.runtime_values != {
+            "FREE_DOWNLOAD_QUOTA_ENABLED": "false"
+        }:
+            raise RuntimeError("active runtime config state not initialized")
+        print("OK: active runtime config initialized without recreation")
+
+        config_current_before = (deploy_root / "state" / "current.json").read_bytes()
+        config_ids_before = {
+            svc: run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+            for svc in (*RUNTIME_APPLICATION_SERVICES, "postgres")
+        }
+        config_images_before = {
+            svc: run(
+                ["docker", "inspect", "-f", "{{.Image}}", cid], cwd=clone
+            ).stdout.strip()
+            for svc, cid in config_ids_before.items()
+        }
+        env_text = env_file.read_text(encoding="utf-8")
+        env_file.write_text(
+            env_text.replace(
+                "FREE_DOWNLOAD_QUOTA_ENABLED=false",
+                "FREE_DOWNLOAD_QUOTA_ENABLED=true",
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(env_file, 0o600)
+        quota_on = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=project,
+                env_file=env_file,
+                expected_revision=revision_b,
+                repo_root=clone,
+                deploy_root=deploy_root,
+                gateway_base_url=f"http://{gateway_port}",
+                policy=policy,
+            )
+        )
+        if not quota_on.ok or quota_on.already_active_config:
+            raise RuntimeError(f"quota config rollout failed: {quota_on.messages}")
+        for svc, before in config_ids_before.items():
+            after = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+            if svc == "api":
+                if after == before:
+                    raise RuntimeError("quota config rollout did not recreate api")
+            elif after != before:
+                raise RuntimeError(f"quota config rollout recreated {svc}")
+        active_config = load_runtime_config_state(deploy_root)
+        if active_config is None or active_config.runtime_values != {
+            "FREE_DOWNLOAD_QUOTA_ENABLED": "true"
+        }:
+            raise RuntimeError("quota config rollout did not commit active state")
+        if (
+            deploy_root / "state" / "current.json"
+        ).read_bytes() != config_current_before:
+            raise RuntimeError("config rollout mutated current.json")
+        for svc, before_image in config_images_before.items():
+            after_cid = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+            after_image = run(
+                ["docker", "inspect", "-f", "{{.Image}}", after_cid], cwd=clone
+            ).stdout.strip()
+            if after_image != before_image:
+                raise RuntimeError(f"config rollout changed image identity for {svc}")
+        print("OK: quota config rollout recreated only api and preserved release state")
+
+        ids_after_quota = {
+            svc: run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+            for svc in (*RUNTIME_APPLICATION_SERVICES, "postgres")
+        }
+        same_config = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=project,
+                env_file=env_file,
+                expected_revision=revision_b,
+                repo_root=clone,
+                deploy_root=deploy_root,
+                gateway_base_url=f"http://{gateway_port}",
+                policy=policy,
+            )
+        )
+        if not same_config.ok or not same_config.already_active_config:
+            raise RuntimeError("repeated config rollout was not idempotent")
+        for svc, before in ids_after_quota.items():
+            after = run(compose + ["ps", "-q", svc], cwd=clone).stdout.strip()
+            if after != before:
+                raise RuntimeError(f"idempotent config rollout recreated {svc}")
+        print("OK: repeated config rollout was idempotent")
+
+        env_file.write_text(
+            env_file.read_text(encoding="utf-8").replace(
+                "FREE_DOWNLOAD_QUOTA_ENABLED=true",
+                "FREE_DOWNLOAD_QUOTA_ENABLED=false",
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(env_file, 0o600)
+        quota_off = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=project,
+                env_file=env_file,
+                expected_revision=revision_b,
+                repo_root=clone,
+                deploy_root=deploy_root,
+                gateway_base_url=f"http://{gateway_port}",
+                policy=policy,
+            )
+        )
+        if not quota_off.ok:
+            raise RuntimeError(
+                f"quota rollback config rollout failed: {quota_off.messages}"
+            )
+        print("OK: reverse config rollout restored quota=false")
+
+        journal_roots = [
+            deploy_root / "deployments",
+            deploy_root / "config-rollouts",
+        ]
+        state_file = deploy_root / "state" / "runtime-config.json"
+        journal_files = [state_file] if state_file.is_file() else []
+        for root in journal_roots:
+            if root.is_dir():
+                journal_files.extend(path for path in root.rglob("*") if path.is_file())
+        for journal in journal_files:
+            text = journal.read_text(encoding="utf-8")
+            if (
+                "POSTGRES_PASSWORD" in text
+                or "DATABASE_URL" in text
+                or valid_test_password() in text
+            ):
+                raise RuntimeError(
+                    f"secret pattern appeared in journal: {journal.name}"
+                )
         print("OK: journals contain no password or DATABASE_URL patterns")
         rc = 0
     except Exception:  # noqa: BLE001
