@@ -252,4 +252,23 @@ describe("render", () => {
     );
     expect(link?.hidden).toBe(false);
   });
+
+  it("does not write into a detached flow root", () => {
+    const root = document.createElement("section");
+    root.innerHTML = `<p data-flow-quota hidden></p><p data-flow-status></p>`;
+    renderFlow(
+      root,
+      snapshot({
+        freeQuota: {
+          tier: "free",
+          downloadLimit: 3,
+          downloadsUsed: 1,
+          downloadsReserved: 0,
+          downloadsRemaining: 2,
+          resetAt: null,
+        },
+      }),
+    );
+    expect(root.querySelector("[data-flow-quota]")?.textContent).toBe("");
+  });
 });

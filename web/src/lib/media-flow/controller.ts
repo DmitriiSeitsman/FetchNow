@@ -97,6 +97,8 @@ export class MediaFlowController {
   private readonly onChange?: (snapshot: FlowSnapshot) => void;
 
   private abort: AbortController | null = null;
+  private quotaAbort = new AbortController();
+  private closed = false;
   private grantAbort: AbortController | null = null;
   private grantRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private token: string | null = null;
@@ -205,6 +207,9 @@ export class MediaFlowController {
       await this.quotaRefresh;
       return;
     }
+    if (this.closed) {
+      return;
+    }
     // Older focused test doubles predate the optional quota endpoint. The real
     // MediaApi always provides it; preserving this guard keeps unrelated flow
     // tests scoped to their original contracts.
@@ -212,11 +217,21 @@ export class MediaFlowController {
       return;
     }
     const run = async () => {
+      if (this.closed) {
+        return;
+      }
       this.quotaLoading = true;
       this.emit();
       try {
-        this.freeQuota = await this.api.getFreeQuota();
+        const next = await this.api.getFreeQuota(this.quotaAbort.signal);
+        if (this.closed) {
+          return;
+        }
+        this.freeQuota = next;
       } catch (err) {
+        if (isAbortError(err) || this.closed) {
+          return;
+        }
         if (!silent) {
           throw err;
         }
@@ -278,6 +293,9 @@ export class MediaFlowController {
   }
 
   private emit(): void {
+    if (this.closed) {
+      return;
+    }
     this.onChange?.(this.snapshot());
   }
 
@@ -404,6 +422,8 @@ export class MediaFlowController {
   }
 
   disconnect(): void {
+    this.closed = true;
+    this.quotaAbort.abort();
     this.abort?.abort();
     this.grantAbort?.abort();
     this.clearGrantRefreshTimer();

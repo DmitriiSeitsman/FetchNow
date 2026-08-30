@@ -66,6 +66,9 @@ function qualityRow(
 }
 
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
+  if (root instanceof Element && !root.isConnected) {
+    return;
+  }
   const quotaState = snapshot.freeQuota ?? null;
   const quota = root.querySelector<HTMLElement>("[data-flow-quota]");
   if (quota) {

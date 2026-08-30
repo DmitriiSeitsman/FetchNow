@@ -382,4 +382,70 @@ describe("controller cancellation and lifecycle", () => {
     expect(again.cancelDownloadJob).not.toHaveBeenCalled();
     expect(local.snapshot().phase).toBe("idle");
   });
+
+  it("quota bootstrap still applies when the controller remains open", async () => {
+    const onChange = vi.fn();
+    const api = {
+      ...mockApi(),
+      getFreeQuota: vi.fn(async () => ({
+        tier: "free" as const,
+        downloadLimit: 3,
+        downloadsUsed: 1,
+        downloadsReserved: 0,
+        downloadsRemaining: 2,
+        resetAt: null,
+      })),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(memoryStore()),
+      generateToken: generateAccessToken,
+      pickerSupported: () => true,
+      secureContext: () => true,
+      documentHidden: () => false,
+      onChange,
+    });
+    await controller.initializeQuota();
+    expect(controller.snapshot().freeQuota?.downloadsRemaining).toBe(2);
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it("stale quota completion does not emit after disconnect", async () => {
+    const onChange = vi.fn();
+    const gate = deferred<{
+      tier: "free";
+      downloadLimit: number;
+      downloadsUsed: number;
+      downloadsReserved: number;
+      downloadsRemaining: number;
+      resetAt: null;
+    }>();
+    const api = {
+      ...mockApi(),
+      getFreeQuota: vi.fn(async () => gate.promise),
+    };
+    const controller = new MediaFlowController({
+      api: api as unknown as MediaApi,
+      session: new FlowSession(memoryStore()),
+      generateToken: generateAccessToken,
+      pickerSupported: () => true,
+      secureContext: () => true,
+      documentHidden: () => false,
+      onChange,
+    });
+    const pending = controller.initializeQuota();
+    onChange.mockClear();
+    controller.disconnect();
+    gate.resolve({
+      tier: "free",
+      downloadLimit: 3,
+      downloadsUsed: 1,
+      downloadsReserved: 0,
+      downloadsRemaining: 2,
+      resetAt: null,
+    });
+    await pending;
+    expect(onChange).not.toHaveBeenCalled();
+    expect(controller.snapshot().freeQuota).toBeNull();
+  });
 });
