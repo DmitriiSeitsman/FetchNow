@@ -549,6 +549,33 @@ Workers continue consuming/releasing existing reservations. See
 throttling, Premium/payments, provider smoke, raw Compose activation, or manual
 container edits.
 
+#### Later PRD1E-B3 delivery-rate rollout (not performed by implementation task)
+
+1. Deploy the accepted B3 source with
+   `FREE_DELIVERY_RATE_LIMIT_ENABLED=false`,
+   `FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288`, and
+   `PUBLIC_SEARCH_INDEXING_ENABLED=false`. DB remains
+   `0007_free_download_quota`; B3 has no migration and requires no host Nginx
+   change.
+2. Run full release health and verify full/Range delivery while shaping remains
+   off. Reinitialize runtime config state for the new deployment with the
+   canonical `INIT_CONFIG=1` transaction; legacy schema-1 state is read but not
+   silently upgraded without this gate.
+3. In a separate operator-approved activation, keep rate `524288`, change only
+   `FREE_DELIVERY_RATE_LIMIT_ENABLED=true`, and run
+   `make production-release-config-rollout EXPECTED_REVISION=<active-sha>`.
+   Exactly `delivery` must be recreated with the same immutable image ID.
+4. Run official health, then controlled full and Range measurement smoke. At
+   512 KiB/s expect roughly 3m20s/100 MiB, 16m40s/500 MiB, and 34m08s/1 GiB.
+   Output cadence is about 125 ms per 64 KiB chunk, so existing gateway/host
+   inactivity timeouts remain unchanged.
+
+Rollback by restoring `FREE_DELIVERY_RATE_LIMIT_ENABLED=false` through the same
+canonical config transaction. API, worker, web, gateway, PostgreSQL, DB head,
+SEO, provider acquisition, and muxing configuration must remain unchanged.
+Parallel responses may aggregate approximately N × 512 KiB/s; B3 is not a
+global or per-identity bandwidth cap.
+
 ### Post-merge operator sequence
 
 Use only `make production-release-*`. No manual `docker compose up`, no

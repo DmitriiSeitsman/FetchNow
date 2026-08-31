@@ -1,4 +1,4 @@
-.PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check staging-config \
+.PHONY: setup up down logs lint format typecheck test build check migrate migration compose-check delivery-rate-integration staging-config \
 	pg-backup-test pg-backup-integration pg-backup-create pg-backup-verify pg-backup-list pg-backup-prune-dry \
 	release-test release-preflight release-health release-health-integration release-ancestry-integration \
 	release-build-test release-prepare release-verify release-build-integration \
@@ -68,6 +68,12 @@ build:
 
 compose-check:
 	python3 scripts/compose_contract_check.py
+
+delivery-rate-integration:
+	docker run --rm --entrypoint python \
+		-v "$(CURDIR)/scripts/delivery_rate_integration_test.py:/tmp/delivery_rate_integration_test.py:ro" \
+		"fetchnow-api:$${FETCHNOW_RELEASE_REVISION:-local}" \
+		/tmp/delivery_rate_integration_test.py
 
 pg-backup-test:
 	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup

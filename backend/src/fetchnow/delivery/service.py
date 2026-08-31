@@ -30,6 +30,7 @@ from fetchnow.jobs.credentials import hash_access_token, tokens_match
 from fetchnow.jobs.errors import JobError, JobErrorCode
 from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
+from fetchnow.quota.policy import EffectiveDownloadPolicy, effective_download_policy
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -49,7 +50,7 @@ class DeliveryAuthorization:
 class DeliveryService:
     """Parent-Bearer authorization + read-only artifact open."""
 
-    __slots__ = ("_settings", "_reader", "_semaphore")
+    __slots__ = ("_policy", "_reader", "_semaphore", "_settings")
 
     def __init__(
         self,
@@ -58,6 +59,7 @@ class DeliveryService:
         reader: ArtifactReader | None = None,
     ) -> None:
         self._settings = settings
+        self._policy = effective_download_policy(settings)
         if not settings.media_delivery_enabled:
             # Reader is only constructed when enabled so unsafe roots fail closed
             # at delivery startup, not at API import time.
@@ -77,6 +79,14 @@ class DeliveryService:
     @property
     def range_enabled(self) -> bool:
         return self._settings.media_delivery_range_enabled
+
+    @property
+    def policy(self) -> EffectiveDownloadPolicy:
+        return self._policy
+
+    @property
+    def delivery_rate_bytes_per_second(self) -> int | None:
+        return self._policy.delivery_rate_bytes_per_second
 
     async def authorize(
         self,

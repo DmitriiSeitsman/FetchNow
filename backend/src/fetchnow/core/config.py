@@ -401,6 +401,19 @@ class Settings(BaseSettings):
         alias="MEDIA_DELIVERY_RANGE_ENABLED",
     )
 
+    # Free delivery shaping (PRD1E-B3). The switch stays fail-closed for source
+    # rollout; the configured rate is validated even while shaping is off.
+    free_delivery_rate_limit_enabled: bool = Field(
+        default=False,
+        alias="FREE_DELIVERY_RATE_LIMIT_ENABLED",
+    )
+    free_delivery_rate_bytes_per_second: int = Field(
+        default=524_288,
+        alias="FREE_DELIVERY_RATE_BYTES_PER_SECOND",
+        ge=262_144,
+        le=67_108_864,
+    )
+
     # Browser-native delivery grants (PR14) — fail closed / disabled by default.
     # API issues grants; delivery authenticates the exact-path cookie.
     media_browser_delivery_enabled: bool = Field(

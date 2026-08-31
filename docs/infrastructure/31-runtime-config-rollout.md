@@ -22,7 +22,7 @@ direct call to the Python activation helper.
 
 `state/current.json` remains schema v2 and continues to describe application
 and database release identity. Config rollout adds the separate
-`state/runtime-config.json` authority. It is bound to the active revision and
+`state/runtime-config.json` authority. Schema 2 is bound to the active revision and
 deployment ID and contains only:
 
 - normalized values from the reviewed non-secret runtime allowlist;
@@ -48,6 +48,10 @@ make production-release-config-rollout \
 Initialization is health-gated and performs no recreation. It is refused after
 an allowlisted runtime value has already been edited. Repeat initialization
 after every normal source rollout because the deployment binding changes.
+Schema-1 state containing only `FREE_DOWNLOAD_QUOTA_ENABLED` remains readable
+and validates against its original exact key set and fingerprint domain. It is
+never silently padded with B3 values. After the B3 source rollout, explicit
+no-delta initialization writes schema 2 with the live delivery values.
 
 ## Config classification
 
@@ -56,6 +60,8 @@ The initial mutation allowlist is intentionally narrow:
 | Key | Classification | Runtime receiver | Config rollout |
 |---|---|---|---|
 | `FREE_DOWNLOAD_QUOTA_ENABLED` | runtime-only | `api` | allowed |
+| `FREE_DELIVERY_RATE_LIMIT_ENABLED` | runtime-only | `delivery` | allowed |
+| `FREE_DELIVERY_RATE_BYTES_PER_SECOND` | runtime-only bounded integer | `delivery` | allowed |
 | `FREE_DOWNLOAD_LIMIT` | runtime-wired | `api`, `worker` | classified, not allowlisted |
 | `FREE_DOWNLOAD_WINDOW_SECONDS` | runtime-wired | `api`, `worker` | classified, not allowlisted |
 | `FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS` | runtime-wired | `api`, `worker` | classified, not allowlisted |
@@ -112,6 +118,11 @@ Only then is `runtime-config.json` committed.
 A same-fingerprint request returns `already-active-config` and does not recreate
 containers.
 
+For either B3 key the affected set is exactly `delivery`. Changing the flag,
+the rate, or both recreates delivery once with the accepted immutable API image
+ID; API, worker, web, gateway, and PostgreSQL remain unchanged. The rate uses
+canonical unsigned decimal syntax and is bounded to 262144..67108864 bytes/s.
+
 ## Rollback
 
 If activation, verification, or health fails after mutation starts, the journal
@@ -156,4 +167,3 @@ make production-release-health \
 The config command performs its own global health gate; the second command is
 the explicit operator acceptance check. Quota semantic smoke remains a separate
 Stage 2 acceptance step.
-

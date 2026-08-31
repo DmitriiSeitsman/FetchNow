@@ -73,18 +73,33 @@ Deleting the cookie, private browsing, or using another browser/device can
 obtain another identity. IP addresses and invasive browser fingerprints are not
 used as the entitlement key. B3 delivery throttling remains separate.
 
-## Separate follow-up: delivery rate (PRD1E-B3)
+## Free delivery shaping (PRD1E-B3)
 
-The target Free delivery rate limit is not implemented by B1 and no commercial
-bytes-per-second value has been selected. B3 should add a validated configurable
-rate to a central effective-download-policy object and pace the dedicated
-delivery iterator using a monotonic clock. Acquisition by yt-dlp must remain
-unthrottled so workers release leases promptly.
+Free delivery shaping is implemented in the dedicated delivery process, after
+the worker has acquired and published the artifact. Provider acquisition by
+yt-dlp and stream-copy muxing remain unthrottled so the worker releases its
+lease promptly. Source rollout is fail-closed:
 
-Delivery pacing must preserve `Content-Length`, full and single-Range 200/206
-responses, disconnect cleanup, file-descriptor closure, semaphore ownership,
-and browser-grant authorization. A future Premium policy can represent an
-unlimited or higher delivery rate without changing the worker pipeline.
+```env
+FREE_DELIVERY_RATE_LIMIT_ENABLED=false
+FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288
+```
+
+The selected production candidate is 512 KiB/s per HTTP response. Validated
+rates are bounded to 256 KiB/s through 64 MiB/s. The central effective policy
+uses `delivery_rate_bytes_per_second=None` while shaping is disabled; the same
+representation can describe a future unlimited Premium policy without adding
+Premium entitlement behavior now.
+
+The shared Bearer and browser-grant iterator paces every chunk, including the
+first, with a monotonic virtual-finish deadline. Full and single-Range 200/206
+responses preserve `Content-Length`, `Content-Range`, resume, disconnect
+cleanup, file-descriptor closure, semaphore ownership, and grant authorization.
+Repeated short Range requests therefore do not receive a free initial chunk.
+
+The limit is deliberately per response. Parallel responses can achieve roughly
+N times the configured rate, bounded only by process-local delivery concurrency
+and infrastructure. Aggregate identity/IP shaping is not claimed or implemented.
 
 ## Future Premium boundary
 

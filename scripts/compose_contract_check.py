@@ -521,6 +521,16 @@ def check_production_config() -> None:
         "production example: MEDIA_DELIVERY_ENABLED must stay false",
     )
     _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "production example: Free delivery shaping must stay false",
+    )
+    _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", ""))
+        == "524288",
+        "production example: Free delivery rate candidate must be 524288",
+    )
+    _assert(
         str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
         "production: postgres image must remain pinned",
     )
@@ -700,6 +710,22 @@ def check_media_jobs_env_split() -> None:
         in {"false", "0"},
         "base: MEDIA_DELIVERY_ENABLED must default false on delivery",
     )
+    _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "false")).lower()
+        in {"false", "0"},
+        "base: Free delivery shaping must default false on delivery",
+    )
+    _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", ""))
+        == "524288",
+        "base: Free delivery rate candidate must default 524288",
+    )
+    for service_name, env in (("api", api_env), ("worker", worker_env)):
+        _assert(
+            "FREE_DELIVERY_RATE_LIMIT_ENABLED" not in env
+            and "FREE_DELIVERY_RATE_BYTES_PER_SECOND" not in env,
+            f"base: {service_name} must not receive Free delivery shaping config",
+        )
     _assert(
         str(api_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "false")).lower()
         in {"false", "0"},

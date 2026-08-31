@@ -1469,7 +1469,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         initialized = load_runtime_config_state(deploy_root)
         if initialized is None or initialized.runtime_values != {
-            "FREE_DOWNLOAD_QUOTA_ENABLED": "false"
+            "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
+            "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
+            "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
         }:
             raise RuntimeError("active runtime config state not initialized")
         print("OK: active runtime config initialized without recreation")
@@ -1516,7 +1518,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"quota config rollout recreated {svc}")
         active_config = load_runtime_config_state(deploy_root)
         if active_config is None or active_config.runtime_values != {
-            "FREE_DOWNLOAD_QUOTA_ENABLED": "true"
+            "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
+            "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
+            "FREE_DOWNLOAD_QUOTA_ENABLED": "true",
         }:
             raise RuntimeError("quota config rollout did not commit active state")
         if (

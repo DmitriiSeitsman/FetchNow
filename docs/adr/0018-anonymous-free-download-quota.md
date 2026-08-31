@@ -66,7 +66,7 @@ write and retention load, bounded by admission and cleanup.
 This is not an anti-fraud identity. Cookie deletion, private browsing, and a
 different browser or device can obtain another allowance. Stolen cookies remain
 usable until absolute expiry. FetchNow accepts those residual bypasses instead
-of IP entitlements or invasive fingerprinting. B3 delivery rate limiting,
+of IP entitlements or invasive fingerprinting. B3 per-response delivery shaping,
 Premium, payments, and separate audio/video products remain out of scope.
 
 ## Related

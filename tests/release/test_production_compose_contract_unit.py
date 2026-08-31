@@ -55,6 +55,8 @@ def test_production_env_example_is_placeholder_only() -> None:
     assert "MEDIA_JOBS_ENABLED=false" in text
     assert "MEDIA_DOWNLOADS_ENABLED=false" in text
     assert "MEDIA_DELIVERY_ENABLED=false" in text
+    assert "FREE_DELIVERY_RATE_LIMIT_ENABLED=false" in text
+    assert "FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288" in text
     assert "MEDIA_BROWSER_DELIVERY_ENABLED=false" in text
     assert "MEDIA_MUXING_ENABLED=false" in text
     assert "MEDIA_INSPECTION_YTDLP_PATH=/opt/venv/bin/yt-dlp" in text

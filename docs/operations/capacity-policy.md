@@ -68,6 +68,21 @@ Authenticated delivery (PR7) uses process-local
 `MEDIA_DELIVERY_CHUNK_BYTES`. This is **not** a cross-replica rate limit.
 `MEDIA_DELIVERY_ENABLED` defaults to false.
 
+PRD1E-B3 adds optional per-response Free shaping in the delivery iterator.
+`FREE_DELIVERY_RATE_LIMIT_ENABLED` defaults false; the selected candidate is
+`524288` bytes/s (512 KiB/s) with the existing 65536-byte chunk, so a full
+chunk is emitted about every 125 ms. Approximate body times are 3m20s for
+100 MiB, 16m40s for 500 MiB, and 34m08s for 1 GiB. At concurrency 8 the
+theoretical shaped aggregate is about 4 MiB/s per delivery process. Parallel
+responses multiply the per-response rate, and queued requests may retain
+additional proxy/socket connections while waiting for a delivery permit.
+
+Both gateway and production host Nginx disable response buffering. Their read
+timeouts are inactivity timeouts, not total-response deadlines; 125 ms output
+cadence does not require a timeout change. Authorization occurs once at request
+start. An already-open Linux file descriptor remains readable after expiry
+cleanup unlinks its pathname, so shaping does not extend artifact retention.
+
 PR8 does not add application-level rate limiting. The browser poller is
 client-bounded (adaptive backoff that resets on semantic progress changes,
 ≤1s while actively downloading on a visible tab, hidden-tab slowdown,

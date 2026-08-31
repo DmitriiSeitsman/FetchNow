@@ -10,7 +10,9 @@ from typing import Any
 
 from .c3_constants import STATE_DIRNAME
 from .config_contract import (
+    ConfigContractError,
     build_config_fingerprint,
+    legacy_runtime_config_fingerprint_schema1,
     normalize_build_values,
     normalize_runtime_values,
     runtime_config_fingerprint,
@@ -19,7 +21,8 @@ from .journal_io import atomic_write_json, read_json
 from .revision import validate_full_sha
 
 RUNTIME_CONFIG_STATE_NAME = "runtime-config.json"
-RUNTIME_CONFIG_STATE_SCHEMA = 1
+RUNTIME_CONFIG_STATE_SCHEMA = 2
+LEGACY_RUNTIME_CONFIG_STATE_SCHEMA = 1
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -86,7 +89,10 @@ def build_runtime_config_state(
 
 
 def validate_runtime_config_state(state: RuntimeConfigState) -> None:
-    if state.schema_version != RUNTIME_CONFIG_STATE_SCHEMA:
+    if state.schema_version not in {
+        LEGACY_RUNTIME_CONFIG_STATE_SCHEMA,
+        RUNTIME_CONFIG_STATE_SCHEMA,
+    }:
         raise ConfigStateError("unsupported runtime config state schema")
     validate_full_sha(state.revision)
     if not _UUID_RE.fullmatch(state.deployment_id):
@@ -101,10 +107,15 @@ def validate_runtime_config_state(state: RuntimeConfigState) -> None:
         raise ConfigStateError("runtime config fingerprint malformed")
     if not _HASH_RE.fullmatch(state.build_config_fingerprint):
         raise ConfigStateError("build config fingerprint malformed")
-    if (
-        runtime_config_fingerprint(state.runtime_values)
-        != state.runtime_config_fingerprint
-    ):
+    try:
+        expected_runtime_fingerprint = (
+            legacy_runtime_config_fingerprint_schema1(state.runtime_values)
+            if state.schema_version == LEGACY_RUNTIME_CONFIG_STATE_SCHEMA
+            else runtime_config_fingerprint(state.runtime_values)
+        )
+    except ConfigContractError as exc:
+        raise ConfigStateError("runtime config values violate schema") from exc
+    if expected_runtime_fingerprint != state.runtime_config_fingerprint:
         raise ConfigStateError("runtime config fingerprint mismatch")
     if build_config_fingerprint(state.build_values) != state.build_config_fingerprint:
         raise ConfigStateError("build config fingerprint mismatch")

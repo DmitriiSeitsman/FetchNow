@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 
@@ -198,14 +200,39 @@ async def _handle_content(
 
         async def body() -> AsyncIterator[bytes]:
             nonlocal permit_held
+            bytes_sent = 0
+            started = time.monotonic()
+            rate = service.delivery_rate_bytes_per_second
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
                     start=start,
                     length=length,
                     chunk_bytes=service.chunk_bytes,
+                    rate_bytes_per_second=service.delivery_rate_bytes_per_second,
                 ):
+                    bytes_sent += len(chunk)
                     yield chunk
+                logger.info(
+                    "media_delivery_completed outcome=ok mode=%s rate=%s "
+                    "range=%s bytes=%s duration_ms=%s",
+                    "throttled" if rate is not None else "unlimited",
+                    rate if rate is not None else "none",
+                    "partial" if selected is not None else "full",
+                    bytes_sent,
+                    round((time.monotonic() - started) * 1000),
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "media_delivery_completed outcome=disconnect mode=%s rate=%s "
+                    "range=%s bytes=%s duration_ms=%s",
+                    "throttled" if rate is not None else "unlimited",
+                    rate if rate is not None else "none",
+                    "partial" if selected is not None else "full",
+                    bytes_sent,
+                    round((time.monotonic() - started) * 1000),
+                )
+                raise
             finally:
                 if stream_owns_permit and permit_held:
                     service.semaphore.release()
@@ -391,20 +418,38 @@ async def _handle_browser_grant_content(
         async def body() -> AsyncIterator[bytes]:
             nonlocal permit_held
             bytes_sent = 0
+            started = time.monotonic()
+            rate = service.delivery_rate_bytes_per_second
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
                     start=start,
                     length=length,
                     chunk_bytes=service.chunk_bytes,
+                    rate_bytes_per_second=service.delivery_rate_bytes_per_second,
                 ):
                     bytes_sent += len(chunk)
                     yield chunk
                 logger.info(
-                    "browser_delivery_started outcome=ok range=%s bytes=%s",
+                    "browser_delivery_started outcome=ok mode=%s rate=%s "
+                    "range=%s bytes=%s duration_ms=%s",
+                    "throttled" if rate is not None else "unlimited",
+                    rate if rate is not None else "none",
                     "partial" if selected is not None else "full",
                     bytes_sent,
+                    round((time.monotonic() - started) * 1000),
                 )
+            except asyncio.CancelledError:
+                logger.info(
+                    "browser_delivery_failed outcome=disconnect mode=%s rate=%s "
+                    "range=%s bytes=%s duration_ms=%s",
+                    "throttled" if rate is not None else "unlimited",
+                    rate if rate is not None else "none",
+                    "partial" if selected is not None else "full",
+                    bytes_sent,
+                    round((time.monotonic() - started) * 1000),
+                )
+                raise
             except Exception:
                 logger.info("browser_delivery_failed outcome=stream_error")
                 raise

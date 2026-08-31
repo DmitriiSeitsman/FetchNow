@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from fetchnow.core.config import Settings
+from fetchnow.quota.policy import effective_download_policy
 
 _DB = "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
 
@@ -13,6 +14,8 @@ _DB = "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
 def test_feature_disabled_by_default() -> None:
     s = Settings(APP_ENV="test", DATABASE_URL=_DB)
     assert s.media_delivery_enabled is False
+    assert s.free_delivery_rate_limit_enabled is False
+    assert s.free_delivery_rate_bytes_per_second == 524_288
 
 
 def test_enabled_requires_root() -> None:
@@ -58,3 +61,42 @@ def test_chunk_and_concurrency_bounds() -> None:
     )
     assert s.media_delivery_chunk_bytes == 65536
     assert s.media_delivery_concurrency == 8
+
+
+@pytest.mark.parametrize("rate", [0, -1, 262_143, 67_108_865])
+def test_free_delivery_rate_rejects_invalid_and_absurd_values(rate: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL=_DB,
+            FREE_DELIVERY_RATE_BYTES_PER_SECOND=rate,
+        )
+
+
+@pytest.mark.parametrize("rate", [262_144, 67_108_864])
+def test_free_delivery_rate_accepts_validation_boundaries(rate: int) -> None:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL=_DB,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=rate,
+    )
+    assert settings.free_delivery_rate_bytes_per_second == rate
+
+
+def test_effective_free_policy_projects_delivery_and_capabilities() -> None:
+    disabled = effective_download_policy(Settings(APP_ENV="test", DATABASE_URL=_DB))
+    assert disabled.tier == "free"
+    assert disabled.delivery_rate_bytes_per_second is None
+    assert disabled.allow_combined is True
+    assert disabled.allow_audio_only is False
+    assert disabled.allow_video_only is False
+
+    enabled = effective_download_policy(
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL=_DB,
+            FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+            FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+        )
+    )
+    assert enabled.delivery_rate_bytes_per_second == 524_288

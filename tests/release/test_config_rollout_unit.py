@@ -22,6 +22,7 @@ from fetchnow_release.config_contract import (  # noqa: E402
     affected_services,
     build_config_fingerprint,
     changed_runtime_keys,
+    legacy_runtime_config_fingerprint_schema1,
     runtime_config_fingerprint,
     runtime_values_from_compose,
 )
@@ -36,7 +37,9 @@ from fetchnow_release.config_rollout import (  # noqa: E402
     run_config_rollout,
 )
 from fetchnow_release.config_state import (  # noqa: E402
+    RUNTIME_CONFIG_STATE_SCHEMA,
     ConfigStateError,
+    RuntimeConfigState,
     build_runtime_config_state,
     load_runtime_config_state,
     runtime_config_state_path,
@@ -66,20 +69,50 @@ def _build_values(*, indexing: str = "false") -> dict[str, str]:
     }
 
 
-def _rendered(quota: str, *, extra_api: dict[str, str] | None = None) -> dict:
+def _runtime(
+    quota: str,
+    *,
+    limiter: str = "false",
+    rate: str = "524288",
+) -> dict[str, str]:
+    return {
+        "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
+    }
+
+
+def _rendered(
+    quota: str,
+    *,
+    limiter: str = "false",
+    rate: str = "524288",
+    extra_api: dict[str, str] | None = None,
+) -> dict:
     api = {"FREE_DOWNLOAD_QUOTA_ENABLED": quota, **(extra_api or {})}
     return {
         "services": {
             "api": {"environment": api},
             "worker": {"environment": {}},
-            "delivery": {"environment": {}},
+            "delivery": {
+                "environment": {
+                    "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+                    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
+                }
+            },
             "web": {"environment": {}},
             "gateway": {"environment": {}},
         }
     }
 
 
-def _live(quota: str, *, extra_api: dict[str, str] | None = None):
+def _live(
+    quota: str,
+    *,
+    limiter: str = "false",
+    rate: str = "524288",
+    extra_api: dict[str, str] | None = None,
+):
     ids = {
         "api": "api-old",
         "worker": "worker-old",
@@ -92,19 +125,38 @@ def _live(quota: str, *, extra_api: dict[str, str] | None = None):
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
         **(extra_api or {}),
     }
+    env["delivery"] = {
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
+    }
     return ids, env
 
 
-def _after(quota: str):
-    ids, env = _live(quota)
-    ids["api"] = "api-new"
+def _after(
+    quota: str,
+    *,
+    limiter: str = "false",
+    rate: str = "524288",
+    changed_service: str = "api",
+):
+    ids, env = _live(quota, limiter=limiter, rate=rate)
+    ids[changed_service] = f"{changed_service}-new"
     return ids, env
 
 
-def _env_file(tmp_path: Path, *, quota: str, indexing: str = "false") -> Path:
+def _env_file(
+    tmp_path: Path,
+    *,
+    quota: str,
+    limiter: str = "false",
+    rate: str = "524288",
+    indexing: str = "false",
+) -> Path:
     path = tmp_path / ".env.production"
     values = {
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
         **_build_values(indexing=indexing),
     }
     path.write_text("".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
@@ -112,14 +164,40 @@ def _env_file(tmp_path: Path, *, quota: str, indexing: str = "false") -> Path:
     return path
 
 
-def _persist_state(deploy: Path, *, quota: str = "false") -> None:
+def _persist_state(
+    deploy: Path,
+    *,
+    quota: str = "false",
+    limiter: str = "false",
+    rate: str = "524288",
+) -> None:
     write_runtime_config_state(
         deploy,
         build_runtime_config_state(
             revision=REVISION,
             deployment_id=DEPLOYMENT_ID,
             latest_config_rollout_id=None,
-            runtime_values={"FREE_DOWNLOAD_QUOTA_ENABLED": quota},
+            runtime_values=_runtime(quota, limiter=limiter, rate=rate),
+            build_values=_build_values(),
+            updated_at_utc="2026-08-30T00:00:00Z",
+        ),
+    )
+
+
+def _persist_legacy_schema1_state(deploy: Path) -> None:
+    values = {"FREE_DOWNLOAD_QUOTA_ENABLED": "false"}
+    write_runtime_config_state(
+        deploy,
+        RuntimeConfigState(
+            schema_version=1,
+            revision=REVISION,
+            deployment_id=DEPLOYMENT_ID,
+            latest_config_rollout_id=None,
+            runtime_config_fingerprint=legacy_runtime_config_fingerprint_schema1(
+                values
+            ),
+            runtime_values=values,
+            build_config_fingerprint=build_config_fingerprint(_build_values()),
             build_values=_build_values(),
             updated_at_utc="2026-08-30T00:00:00Z",
         ),
@@ -131,6 +209,8 @@ def _patch_transaction(
     tmp_path: Path,
     *,
     target_quota: str,
+    target_limiter: str = "false",
+    target_rate: str = "524288",
     inspections: list[tuple[dict[str, str], dict[str, dict[str, str]]]],
     extra_target_api: dict[str, str] | None = None,
     indexing: str = "false",
@@ -146,7 +226,13 @@ def _patch_transaction(
     overlay = release / "source" / "compose.production.yaml"
     base.write_text("services: {}\n", encoding="utf-8")
     overlay.write_text("services: {}\n", encoding="utf-8")
-    env_file = _env_file(tmp_path, quota=target_quota, indexing=indexing)
+    env_file = _env_file(
+        tmp_path,
+        quota=target_quota,
+        limiter=target_limiter,
+        rate=target_rate,
+        indexing=indexing,
+    )
     ids = _image_ids()
     current = SimpleNamespace(
         revision=REVISION,
@@ -193,7 +279,12 @@ def _patch_transaction(
     monkeypatch.setattr(
         module,
         "compose_config_json",
-        lambda **_k: _rendered(target_quota, extra_api=extra_target_api),
+        lambda **_k: _rendered(
+            target_quota,
+            limiter=target_limiter,
+            rate=target_rate,
+            extra_api=extra_target_api,
+        ),
     )
     monkeypatch.setattr(module, "RolloutLock", lambda *_a, **_k: nullcontext())
     monkeypatch.setattr(module, "find_unresolved_deployments", lambda _d: [])
@@ -237,17 +328,36 @@ def _patch_transaction(
 
 
 def test_fingerprint_is_stable_and_domain_separated() -> None:
-    runtime_a = runtime_config_fingerprint({"FREE_DOWNLOAD_QUOTA_ENABLED": "false"})
-    runtime_b = runtime_config_fingerprint(
-        dict(reversed([("FREE_DOWNLOAD_QUOTA_ENABLED", "false")]))
-    )
+    runtime_a = runtime_config_fingerprint(_runtime("false"))
+    runtime_b = runtime_config_fingerprint(dict(reversed(list(_runtime("false").items()))))
     assert runtime_a == runtime_b
     assert runtime_a != build_config_fingerprint(_build_values())
 
 
+@pytest.mark.parametrize("rate", ["0", "-1", "262143", "67108865", "0524288"])
+def test_runtime_rate_normalization_rejects_invalid_values(rate: str) -> None:
+    with pytest.raises(ConfigContractError):
+        runtime_config_fingerprint(_runtime("false", rate=rate))
+
+
+@pytest.mark.parametrize("rate", ["262144", "524288", "67108864"])
+def test_runtime_rate_normalization_accepts_reviewed_bounds(rate: str) -> None:
+    assert len(runtime_config_fingerprint(_runtime("false", rate=rate))) == 64
+
+
 def test_allowlist_and_wiring_are_narrow() -> None:
-    assert set(RUNTIME_CONFIG_ALLOWLIST) == {"FREE_DOWNLOAD_QUOTA_ENABLED"}
+    assert set(RUNTIME_CONFIG_ALLOWLIST) == {
+        "FREE_DOWNLOAD_QUOTA_ENABLED",
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED",
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND",
+    }
     assert affected_services(("FREE_DOWNLOAD_QUOTA_ENABLED",)) == ("api",)
+    assert affected_services(
+        (
+            "FREE_DELIVERY_RATE_BYTES_PER_SECOND",
+            "FREE_DELIVERY_RATE_LIMIT_ENABLED",
+        )
+    ) == ("delivery",)
     assert set(BUILD_TIME_CONFIG) >= {
         "PUBLIC_MEDIA_FLOW_ENABLED",
         "PUBLIC_SEARCH_INDEXING_ENABLED",
@@ -280,7 +390,7 @@ def test_service_without_environment_is_an_empty_runtime_map() -> None:
     rendered = _rendered("false")
     del rendered["services"]["gateway"]["environment"]
     assert runtime_values_from_compose(rendered) == {
-        "FREE_DOWNLOAD_QUOTA_ENABLED": "false"
+        **_runtime("false")
     }
 
 
@@ -295,6 +405,38 @@ def test_state_round_trip_and_tamper_rejection(tmp_path: Path) -> None:
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ConfigStateError, match="fingerprint mismatch"):
         load_runtime_config_state(tmp_path)
+
+
+def test_existing_schema1_runtime_state_remains_readable(tmp_path: Path) -> None:
+    _persist_legacy_schema1_state(tmp_path)
+    state = load_runtime_config_state(tmp_path)
+    assert state is not None
+    assert state.schema_version == 1
+    assert state.runtime_values == {"FREE_DOWNLOAD_QUOTA_ENABLED": "false"}
+
+
+def test_schema1_state_requires_explicit_no_delta_reinitialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        inspections=[_live("false"), _live("false")],
+    )
+    _persist_legacy_schema1_state(inp.deploy_root)
+    result = run_config_rollout(inp)
+    assert not result.ok
+    assert "not initialized" in result.messages[0]
+    assert calls["activate"] == []
+
+    inp = ConfigRolloutInput(**{**inp.__dict__, "initialize_active_config": True})
+    result = run_config_rollout(inp)
+    assert result.ok and result.already_active_config
+    state = load_runtime_config_state(inp.deploy_root)
+    assert state is not None
+    assert state.schema_version == RUNTIME_CONFIG_STATE_SCHEMA
+    assert state.runtime_values == _runtime("false")
 
 
 def test_no_delta_initializes_state_without_recreation(
@@ -375,7 +517,7 @@ def test_quota_false_to_true_recreates_only_api_and_commits(
     assert calls["wait"] == [("api",)]
     state = load_runtime_config_state(inp.deploy_root)
     assert state is not None
-    assert state.runtime_values == {"FREE_DOWNLOAD_QUOTA_ENABLED": "true"}
+    assert state.runtime_values == _runtime("true")
     assert state.revision == REVISION
     assert state.deployment_id == DEPLOYMENT_ID
     assert result.config_rollout_id == state.latest_config_rollout_id
@@ -387,6 +529,78 @@ def test_quota_false_to_true_recreates_only_api_and_commits(
             assert "DATABASE_URL" not in text
             assert "POSTGRES_PASSWORD" not in text
             assert "do-not-print" not in text
+
+
+@pytest.mark.parametrize(
+    ("target_limiter", "target_rate"),
+    [("true", "524288"), ("false", "1048576"), ("true", "1048576")],
+)
+def test_delivery_runtime_changes_recreate_only_delivery_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_limiter: str,
+    target_rate: str,
+) -> None:
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        target_limiter=target_limiter,
+        target_rate=target_rate,
+        inspections=[
+            _live("false"),
+            _after(
+                "false",
+                limiter=target_limiter,
+                rate=target_rate,
+                changed_service="delivery",
+            ),
+        ],
+    )
+    _persist_state(inp.deploy_root)
+    result = run_config_rollout(inp)
+    assert result.ok and result.status == STATUS_COMMITTED
+    assert calls["activate"] == [("delivery",)]
+    assert calls["wait"] == [("delivery",)]
+    state = load_runtime_config_state(inp.deploy_root)
+    assert state is not None
+    assert state.runtime_values == _runtime(
+        "false", limiter=target_limiter, rate=target_rate
+    )
+
+
+def test_delivery_runtime_health_failure_rolls_back_delivery_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fetchnow_release.config_rollout as module
+
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        target_limiter="true",
+        inspections=[
+            _live("false"),
+            _after("false", limiter="true", changed_service="delivery"),
+            _after("false", changed_service="delivery"),
+        ],
+    )
+    _persist_state(inp.deploy_root)
+    health_calls = 0
+
+    def health(*_a, **_k):
+        nonlocal health_calls
+        health_calls += 1
+        if health_calls == 1:
+            raise RuntimeError("simulated target health failure")
+
+    monkeypatch.setattr(module, "stabilize_full_health", health)
+    result = run_config_rollout(inp)
+    assert not result.ok and result.status == STATUS_ROLLED_BACK
+    assert calls["activate"] == [("delivery",), ("delivery",)]
+    state = load_runtime_config_state(inp.deploy_root)
+    assert state is not None
+    assert state.runtime_values == _runtime("false")
 
 
 def test_live_runtime_drift_from_persisted_state_fails_closed(
@@ -482,7 +696,7 @@ def test_health_failure_restores_previous_config_and_marks_rolled_back(
     assert calls["activate"] == [("api",), ("api",)]
     state = load_runtime_config_state(inp.deploy_root)
     assert state is not None
-    assert state.runtime_values == {"FREE_DOWNLOAD_QUOTA_ENABLED": "false"}
+    assert state.runtime_values == _runtime("false")
     result_path = (
         inp.deploy_root
         / "config-rollouts"
@@ -595,8 +809,8 @@ def test_pre_mutation_identity_gates_fail_closed(
 
 def test_changed_keys_exact() -> None:
     assert changed_runtime_keys(
-        {"FREE_DOWNLOAD_QUOTA_ENABLED": "false"},
-        {"FREE_DOWNLOAD_QUOTA_ENABLED": "true"},
+        _runtime("false"),
+        _runtime("true"),
     ) == ("FREE_DOWNLOAD_QUOTA_ENABLED",)
 
 

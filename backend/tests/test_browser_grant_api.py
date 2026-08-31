@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -18,6 +19,7 @@ from fetchnow.core.config import Settings
 from fetchnow.delivery.main import create_delivery_app
 from fetchnow.delivery.reader import ArtifactReader
 from fetchnow.delivery.service import DeliveryAuthorization, DeliveryService
+from fetchnow.delivery.stream import MonotonicBytePacer
 from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.browser_grant_tokens import (
     COOKIE_NAME,
@@ -413,6 +415,90 @@ async def test_native_range_requires_grant(grant_delivery_client: Any) -> None:
     )
     assert ok.status_code == 206
     assert ok.content == meta["payload"][:4]
+
+
+@pytest.mark.asyncio
+async def test_browser_grant_delivery_uses_server_side_pacer(
+    grant_delivery_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, meta, grant_id, raw_token, service = grant_delivery_client
+    monkeypatch.setattr(
+        type(service),
+        "delivery_rate_bytes_per_second",
+        property(lambda _self: 524_288),
+    )
+    paced: list[int] = []
+
+    async def record_pace(self: MonotonicBytePacer, byte_count: int) -> None:
+        paced.append(byte_count)
+
+    monkeypatch.setattr(MonotonicBytePacer, "pace", record_pace)
+    response = await client.get(
+        f"/api/v1/media/browser-grants/{grant_id}/content",
+        headers={
+            "Cookie": f"{COOKIE_NAME}={raw_token}; delivery_rate=unlimited",
+            "Range": "bytes=0-3",
+            "X-Tier": "premium",
+        },
+    )
+    assert response.status_code == 206
+    assert response.content == meta["payload"][:4]
+    assert paced == [4]
+
+
+@pytest.mark.asyncio
+async def test_grant_expiry_after_stream_start_does_not_kill_active_response(
+    grant_delivery_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, meta, grant_id, raw_token, service = grant_delivery_client
+    monkeypatch.setattr(
+        type(service),
+        "delivery_rate_bytes_per_second",
+        property(lambda _self: 524_288),
+    )
+    expired = False
+    authorize_calls = 0
+    pacing_entered = asyncio.Event()
+    release_pacing = asyncio.Event()
+
+    async def authorize(
+        self: DeliveryService, **_kwargs: Any
+    ) -> DeliveryAuthorization:
+        nonlocal authorize_calls
+        authorize_calls += 1
+        if expired:
+            raise DownloadError(DownloadErrorCode.DOWNLOAD_EXPIRED)
+        return DeliveryAuthorization(job=_job_row(meta), now=datetime.now(tz=UTC))
+
+    async def gate_pacing(
+        self: MonotonicBytePacer, _byte_count: int
+    ) -> None:
+        pacing_entered.set()
+        await release_pacing.wait()
+
+    monkeypatch.setattr(type(service), "authorize_browser_grant", authorize)
+    monkeypatch.setattr(MonotonicBytePacer, "pace", gate_pacing)
+    headers = {"Cookie": f"{COOKIE_NAME}={raw_token}"}
+    active = asyncio.create_task(
+        client.get(
+            f"/api/v1/media/browser-grants/{grant_id}/content",
+            headers=headers,
+        )
+    )
+    await asyncio.wait_for(pacing_entered.wait(), timeout=1)
+    expired = True
+    release_pacing.set()
+    completed = await asyncio.wait_for(active, timeout=1)
+    assert completed.status_code == 200
+    assert completed.content == meta["payload"]
+    assert authorize_calls == 1
+
+    rejected = await client.get(
+        f"/api/v1/media/browser-grants/{grant_id}/content",
+        headers=headers,
+    )
+    assert rejected.status_code == 410
+    assert authorize_calls == 2
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,8 @@
 - **PRD1E-B2:** database-backed anonymous Free quota (3 successful downloads in
   a rolling 24 hours), atomic reservation/admission, and successful-`ready`
   accounting. Feature default off pending separate operator activation.
-- **PRD1E-B3 (separate):** configurable Free throttling at artifact delivery,
-  preserving Range requests and worker throughput.
+- **PRD1E-B3:** fail-closed configurable Free throttling at artifact delivery
+  (selected candidate 512 KiB/s per response), preserving Range requests and
+  worker throughput. Parallel streams can aggregate; identity-wide shaping is
+  out of scope.
 - Payments and Premium entitlements arrive in subsequent PRs.

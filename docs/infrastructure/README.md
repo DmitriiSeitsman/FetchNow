@@ -34,7 +34,11 @@ Internet
 
 Реализованы URL validation, probe, resolve, inspection/jobs/downloads/delivery foundations, browser orchestration (PR8), и **bounded stream-copy muxing** (PR9) для split video/audio. `MEDIA_MUXING_ENABLED=false` по умолчанию; ffmpeg/ffprobe paths только у worker. UI flag `PUBLIC_MEDIA_FLOW_ENABLED=false` по умолчанию; он **не** включает server flags. Staging enablement этих path не выполнен этим PR.
 
-Пока не реализованы transcoding, Turbo/payments/recovery links, runtime file lifecycle/cleanup worker как отдельный сервис, application-level rate limiting, host Nginx/TLS staging publish automation beyond existing operator tooling, отдельный StorageProvider или S3 implementation.
+Пока не реализованы transcoding, Turbo/payments/recovery links, aggregate
+identity/IP/cross-replica bandwidth limiting, runtime file lifecycle/cleanup
+worker как отдельный сервис, host Nginx/TLS staging publish automation beyond
+existing operator tooling, отдельный StorageProvider или S3 implementation.
+PRD1E-B3 предоставляет только fail-closed per-response Free shaping.
 
 **PRD1A (Compose contract):** staging file set + project-name volume isolation реализованы в репозитории.
 
