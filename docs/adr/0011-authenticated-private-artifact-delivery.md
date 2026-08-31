@@ -100,6 +100,19 @@ failure is confined to a 502 on the content route.
 `MEDIA_DELIVERY_CONCURRENCY` is a **process-local** semaphore only. It is not a
 cross-replica rate limit.
 
+### Free response shaping (PRD1E-B3 amendment)
+
+The shared FD iterator accepts an effective server-side delivery policy and,
+when enabled, applies a monotonic virtual-finish scheduler after each bounded
+`pread` and before `yield`. The first chunk is paced. Idle or downstream stalls
+do not accumulate credit. The same path serves full/Range and Bearer/browser-
+grant responses, so there is no alternate unshaped artifact endpoint.
+
+The policy is resolved at request start. Active streams may finish after grant
+or artifact expiry; later requests reauthorize normally. This is a per-response
+product control, not aggregate bandwidth enforcement. Parallel streams may
+multiply throughput up to concurrency/infrastructure limits.
+
 ## Consequences
 
 - Clients can download ready artifacts without expanding the API attack surface.
@@ -114,7 +127,7 @@ cross-replica rate limit.
 ## Residual risks
 
 1. Stolen parent Bearer still yields bytes until TTL.
-2. No application-layer download rate limiting across replicas.
+2. Free shaping is per response; no aggregate identity/IP or cross-replica cap.
 3. Full-file digest is not recomputed per request (see integrity model).
 4. Shared volume semantics still require worker reconciliation grace floors.
 5. Gateway must be rebuilt whenever nginx routing changes.

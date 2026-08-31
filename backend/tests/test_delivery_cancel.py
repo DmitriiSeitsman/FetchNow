@@ -18,7 +18,7 @@ from fetchnow.delivery import routes as delivery_routes
 from fetchnow.delivery.main import create_delivery_app
 from fetchnow.delivery.reader import ArtifactReader, OpenArtifactHandle
 from fetchnow.delivery.service import DeliveryAuthorization, DeliveryService
-from fetchnow.delivery.stream import iter_fd_range
+from fetchnow.delivery.stream import MonotonicBytePacer, iter_fd_range
 from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.models import MediaDownloadJob
@@ -376,6 +376,115 @@ async def test_streaming_response_constructor_failure_cleans_prestream(
 
 
 @pytest.mark.asyncio
+async def test_real_asgi_disconnect_during_pacing_closes_fd_and_permit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _prepare_root(tmp_path / "root")
+    meta = _publish(root, payload=b"x" * 8192)
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://unused@127.0.0.1:5432/unused",
+        MEDIA_DELIVERY_ENABLED=True,
+        MEDIA_DELIVERY_ROOT=str(root),
+        MEDIA_DELIVERY_CHUNK_BYTES=4096,
+        MEDIA_DELIVERY_CONCURRENCY=1,
+        MEDIA_DELIVERY_RANGE_ENABLED=True,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+    )
+    app = create_delivery_app(settings)
+    reader = ArtifactReader(str(root))
+    opened_fd = {"value": -1}
+    pacing_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    class _Stub(DeliveryService):
+        async def authorize(self, **_kwargs: Any) -> DeliveryAuthorization:
+            return DeliveryAuthorization(
+                job=_job_row(meta), now=datetime.now(tz=UTC)
+            )
+
+        def open_artifact(self, authz: DeliveryAuthorization) -> OpenArtifactHandle:
+            handle = super().open_artifact(authz)
+            opened_fd["value"] = handle.fd
+            return handle
+
+    class _FakeSession:
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def blocked_pace(
+        self: MonotonicBytePacer, _byte_count: int
+    ) -> None:
+        pacing_entered.set()
+        await never.wait()
+
+    monkeypatch.setattr(MonotonicBytePacer, "pace", blocked_pace)
+    service = _Stub(settings, reader=reader)
+    _wire_app(
+        app,
+        settings=settings,
+        service=service,
+        session_factory=lambda: _FakeSession(),
+    )
+
+    token = generate_access_token()
+    path = f"/api/v1/media/download-jobs/{meta['job_id']}/content"
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
+        "client": ("127.0.0.1", 50000),
+        "server": ("test", 443),
+    }
+    first_receive = True
+    sent: list[dict[str, Any]] = []
+    baseline_tasks = set(asyncio.all_tasks())
+
+    async def receive() -> dict[str, Any]:
+        nonlocal first_receive
+        if first_receive:
+            first_receive = False
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await pacing_entered.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async with asyncio.timeout(2):
+        await app(scope, receive, send)  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+
+    assert any(
+        message["type"] == "http.response.start" and message["status"] == 200
+        for message in sent
+    )
+    assert pacing_entered.is_set()
+    assert opened_fd["value"] >= 0
+    with pytest.raises(OSError):
+        os.fstat(opened_fd["value"])
+    assert service.semaphore._value == 1
+    assert (root / "published" / str(meta["artifact_id"])).is_dir()
+    leaked = {
+        task
+        for task in asyncio.all_tasks()
+        if task not in baseline_tasks and task is not asyncio.current_task()
+    }
+    assert leaked == set()
+
+
+@pytest.mark.asyncio
 async def test_short_read_aborts_not_clean_completion(tmp_path: Path) -> None:
     root = _prepare_root(tmp_path / "root")
     meta = _publish(root, payload=b"0123456789abcdef")
@@ -396,6 +505,46 @@ async def test_short_read_aborts_not_clean_completion(tmp_path: Path) -> None:
         ):
             pass
     assert exc.value.code == DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE
+    with pytest.raises(OSError):
+        os.fstat(handle.fd)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unlink_does_not_corrupt_already_open_stream(
+    tmp_path: Path,
+) -> None:
+    root = _prepare_root(tmp_path / "root")
+    meta = _publish(root, payload=b"0123456789abcdef")
+    reader = ArtifactReader(str(root))
+    handle = reader.open_published(
+        artifact_id=meta["artifact_id"],
+        download_job_id=meta["job_id"],
+        format_option_id="fmt_x",
+        expected_bytes=meta["bytes"],
+        expected_container="mp4",
+        expected_content_type=meta["content_type"],
+        expected_expires_at=meta["expires"],
+        expected_fence=meta["fence"],
+    )
+    store = ArtifactStore(
+        root=str(root),
+        max_bytes=1024 * 1024,
+        orphan_grace_seconds=MIN_ORPHAN_GRACE_SECONDS,
+    )
+    assert store.delete_artifact(meta["artifact_id"]) is True
+
+    streamed = b"".join(
+        [
+            chunk
+            async for chunk in iter_fd_range(
+                handle,
+                start=0,
+                length=meta["bytes"],
+                chunk_bytes=4,
+            )
+        ]
+    )
+    assert streamed == meta["payload"]
     with pytest.raises(OSError):
         os.fstat(handle.fd)
 

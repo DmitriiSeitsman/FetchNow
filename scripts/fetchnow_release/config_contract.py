@@ -21,10 +21,28 @@ BUILD_FINGERPRINT_DOMAIN = b"fetchnow:build-config:v1\0"
 class RuntimeConfigSpec:
     services: tuple[str, ...]
     kind: str
+    minimum: int | None = None
+    maximum: int | None = None
 
 
 # Deliberately narrow. Extending this map is a reviewed release-tooling change.
 RUNTIME_CONFIG_ALLOWLIST: dict[str, RuntimeConfigSpec] = {
+    "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
+    "FREE_DELIVERY_RATE_LIMIT_ENABLED": RuntimeConfigSpec(
+        ("delivery",), "boolean"
+    ),
+    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": RuntimeConfigSpec(
+        ("delivery",),
+        "integer",
+        minimum=262_144,
+        maximum=67_108_864,
+    ),
+}
+
+# Schema-1 runtime-config.json used this exact reviewed set. Keep its parser and
+# fingerprint path frozen so existing state/evidence remains readable without
+# silently treating absent B3 keys as values.
+LEGACY_RUNTIME_CONFIG_SCHEMA1: dict[str, RuntimeConfigSpec] = {
     "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
 }
 
@@ -40,6 +58,8 @@ BUILD_TIME_CONFIG: dict[str, tuple[str, ...]] = {
 # review. Only keys also present in RUNTIME_CONFIG_ALLOWLIST may change.
 RUNTIME_WIRING: dict[str, tuple[str, ...]] = {
     "FREE_DOWNLOAD_QUOTA_ENABLED": ("api",),
+    "FREE_DELIVERY_RATE_LIMIT_ENABLED": ("delivery",),
+    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": ("delivery",),
     "FREE_DOWNLOAD_LIMIT": ("api", "worker"),
     "FREE_DOWNLOAD_WINDOW_SECONDS": ("api", "worker"),
     "FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS": ("api", "worker"),
@@ -61,17 +81,66 @@ def _normalize_boolean(value: object, *, key: str) -> str:
     return normalized
 
 
-def normalize_runtime_values(values: Mapping[str, object]) -> dict[str, str]:
-    if set(values) != set(RUNTIME_CONFIG_ALLOWLIST):
+def _normalize_integer(
+    value: object,
+    *,
+    key: str,
+    minimum: int | None,
+    maximum: int | None,
+) -> str:
+    if not isinstance(value, str):
+        raise ConfigContractError(f"{key} must be a string integer")
+    raw = value.strip()
+    if not raw or not raw.isascii() or not raw.isdigit():
+        raise ConfigContractError(f"{key} must be an unsigned decimal integer")
+    if len(raw) > 1 and raw.startswith("0"):
+        raise ConfigContractError(f"{key} must use canonical decimal form")
+    parsed = int(raw)
+    if minimum is not None and parsed < minimum:
+        raise ConfigContractError(f"{key} is below the reviewed minimum")
+    if maximum is not None and parsed > maximum:
+        raise ConfigContractError(f"{key} exceeds the reviewed maximum")
+    return str(parsed)
+
+
+def _normalize_runtime_values_for_specs(
+    values: Mapping[str, object],
+    *,
+    specs: Mapping[str, RuntimeConfigSpec],
+) -> dict[str, str]:
+    if set(values) != set(specs):
         raise ConfigContractError("runtime config keys do not match reviewed allowlist")
     normalized: dict[str, str] = {}
-    for key in sorted(RUNTIME_CONFIG_ALLOWLIST):
-        spec = RUNTIME_CONFIG_ALLOWLIST[key]
+    for key in sorted(specs):
+        spec = specs[key]
         if spec.kind == "boolean":
             normalized[key] = _normalize_boolean(values[key], key=key)
+        elif spec.kind == "integer":
+            normalized[key] = _normalize_integer(
+                values[key],
+                key=key,
+                minimum=spec.minimum,
+                maximum=spec.maximum,
+            )
         else:  # pragma: no cover - fail closed if a future kind lacks a parser
             raise ConfigContractError(f"unsupported config kind for {key}")
     return normalized
+
+
+def normalize_runtime_values(values: Mapping[str, object]) -> dict[str, str]:
+    return _normalize_runtime_values_for_specs(
+        values,
+        specs=RUNTIME_CONFIG_ALLOWLIST,
+    )
+
+
+def normalize_legacy_runtime_values_schema1(
+    values: Mapping[str, object],
+) -> dict[str, str]:
+    return _normalize_runtime_values_for_specs(
+        values,
+        specs=LEGACY_RUNTIME_CONFIG_SCHEMA1,
+    )
 
 
 def normalize_build_values(values: Mapping[str, object]) -> dict[str, str]:
@@ -101,6 +170,15 @@ def _fingerprint(domain: bytes, values: dict[str, str]) -> str:
 
 def runtime_config_fingerprint(values: Mapping[str, object]) -> str:
     return _fingerprint(FINGERPRINT_DOMAIN, normalize_runtime_values(values))
+
+
+def legacy_runtime_config_fingerprint_schema1(
+    values: Mapping[str, object],
+) -> str:
+    return _fingerprint(
+        FINGERPRINT_DOMAIN,
+        normalize_legacy_runtime_values_schema1(values),
+    )
 
 
 def build_config_fingerprint(values: Mapping[str, object]) -> str:

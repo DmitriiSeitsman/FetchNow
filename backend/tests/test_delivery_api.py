@@ -16,10 +16,12 @@ from fetchnow.core.config import Settings
 from fetchnow.delivery.main import create_delivery_app
 from fetchnow.delivery.reader import ArtifactReader
 from fetchnow.delivery.service import DeliveryAuthorization, DeliveryService
+from fetchnow.delivery.stream import MonotonicBytePacer
 from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.jobs.credentials import generate_access_token
+from fetchnow.quota.repository import QuotaRepository
 
 
 def _settings(root: Path, **overrides: Any) -> Settings:
@@ -218,6 +220,120 @@ async def test_single_range_partial(delivery_client: Any) -> None:
     assert response.content == meta["payload"][:5]
     assert response.headers["content-range"] == f"bytes 0-4/{meta['bytes']}"
     assert response.headers["content-length"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_suffix_and_open_ended_ranges_preserve_http_contract(
+    delivery_client: Any,
+) -> None:
+    client, meta, _service = delivery_client
+    token = generate_access_token()
+    suffix = await client.get(
+        f"/api/v1/media/download-jobs/{meta['job_id']}/content",
+        headers={"Authorization": f"Bearer {token}", "Range": "bytes=-4"},
+    )
+    assert suffix.status_code == 206
+    assert suffix.content == meta["payload"][-4:]
+    assert suffix.headers["content-length"] == "4"
+    assert suffix.headers["content-range"] == (
+        f"bytes {meta['bytes'] - 4}-{meta['bytes'] - 1}/{meta['bytes']}"
+    )
+
+    opened = await client.get(
+        f"/api/v1/media/download-jobs/{meta['job_id']}/content",
+        headers={"Authorization": f"Bearer {token}", "Range": "bytes=5-"},
+    )
+    assert opened.status_code == 206
+    assert opened.content == meta["payload"][5:]
+    assert opened.headers["content-length"] == str(meta["bytes"] - 5)
+    assert opened.headers["content-range"] == (
+        f"bytes 5-{meta['bytes'] - 1}/{meta['bytes']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bearer_full_and_fresh_ranges_use_trusted_pacer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _prepare_root(tmp_path / "paced-root")
+    meta = _publish(root, payload=b"0123456789abcdef")
+    settings = _settings(
+        root,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+    )
+    app = create_delivery_app(settings)
+    reader = ArtifactReader(str(root))
+
+    class _StubDelivery(DeliveryService):
+        async def authorize(self, **_kwargs: Any) -> DeliveryAuthorization:
+            return DeliveryAuthorization(job=_job_row(meta), now=datetime.now(tz=UTC))
+
+    class _FakeSession:
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    service = _StubDelivery(settings, reader=reader)
+    app.state.engine = MagicMock()
+    app.state.session_factory = lambda: _FakeSession()
+    app.state.settings = settings
+    app.state.delivery_service = service
+    paced: list[int] = []
+
+    async def record_pace(self: MonotonicBytePacer, byte_count: int) -> None:
+        paced.append(byte_count)
+
+    monkeypatch.setattr(MonotonicBytePacer, "pace", record_pace)
+    transport = ASGITransport(app=app)
+    token = generate_access_token()
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        full = await client.get(
+            f"/api/v1/media/download-jobs/{meta['job_id']}/content?rate=unlimited",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Tier": "premium",
+                "Cookie": "delivery_rate=unlimited",
+            },
+        )
+        assert full.status_code == 200
+        for _ in range(2):
+            partial = await client.get(
+                f"/api/v1/media/download-jobs/{meta['job_id']}/content",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Range": "bytes=0-3",
+                    "X-Tier": "premium",
+                },
+            )
+            assert partial.status_code == 206
+            assert partial.content == b"0123"
+
+    assert paced == [16, 4, 4]
+
+
+@pytest.mark.asyncio
+async def test_full_range_and_resume_delivery_do_not_touch_quota(
+    delivery_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, meta, _service = delivery_client
+
+    def forbidden_quota(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("artifact delivery must not mutate quota")
+
+    monkeypatch.setattr(QuotaRepository, "__init__", forbidden_quota)
+    token = generate_access_token()
+    path = f"/api/v1/media/download-jobs/{meta['job_id']}/content"
+    headers = {"Authorization": f"Bearer {token}"}
+    full = await client.get(path, headers=headers)
+    first = await client.get(path, headers={**headers, "Range": "bytes=0-3"})
+    resumed = await client.get(path, headers={**headers, "Range": "bytes=4-"})
+    assert full.status_code == 200
+    assert first.status_code == 206
+    assert resumed.status_code == 206
+    assert first.content + resumed.content == meta["payload"]
 
 
 @pytest.mark.asyncio

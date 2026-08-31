@@ -49,6 +49,7 @@ from .config_journal import (
     write_config_result,
 )
 from .config_state import (
+    RUNTIME_CONFIG_STATE_SCHEMA,
     ConfigStateError,
     RuntimeConfigState,
     build_runtime_config_state,
@@ -469,6 +470,7 @@ def run_config_rollout(inp: ConfigRolloutInput) -> ConfigRolloutResult:
             if state is None or (
                 state.revision != revision
                 or state.deployment_id != current.deployment_id
+                or state.schema_version != RUNTIME_CONFIG_STATE_SCHEMA
             ):
                 if not inp.initialize_active_config:
                     raise ConfigRolloutError(

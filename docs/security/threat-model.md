@@ -175,7 +175,7 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 | Impact | Unfair Free usage, excess worker/disk load, stranded or incorrectly consumed reservations |
 | Mitigation | Server-minted 32-byte opaque token; Secure/HttpOnly/SameSite=Lax `__Host-` cookie; only domain-separated SHA-256 stored; download POST requires pre-bootstrapped valid identity; anonymous-client row serializes admission; unique download idempotency and unique quota job FK; job + quota terminal state commit atomically; DB clock; bounded reconciliation; admission flag defaults off |
 | Residual risk | Cookie deletion, private mode, different browser/device, or stolen cookie until absolute one-year expiry; no invasive fingerprinting; B3 rate limiting is separate |
-| Planned PR | **PRD1E-B2** (implemented foundation); B3 delivery limiting later |
+| Planned PR | **PRD1E-B2** and per-response **PRD1E-B3** implemented; stronger identity-level shaping deferred |
 
 ### Download cancel / progress oracle (PR10)
 
@@ -204,8 +204,8 @@ Legend for **Planned PR**: documentation/spec = this PR or policy docs; implemen
 |---|---|
 | Attack | Guess download UUID for content; steal parent Bearer; path/symlink escape; Range abuse; API process reads private store |
 | Impact | Unauthorized byte exfiltration; resource exhaustion |
-| Mitigation | Dedicated `delivery` service; parent Bearer required; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; FD-relative `O_NOFOLLOW` opens; single bounded Range; API/gateway do not mount artifact root; delivery mount read-only; feature default off; process-local concurrency only |
-| Residual risk | Stolen Bearer until TTL; no cross-replica download rate limit; full-file digest not recomputed per GET; shared image still contains yt-dlp (delivery never invokes / no configured path); shared `DATABASE_URL` is not an enforced read-only DB role |
+| Mitigation | Dedicated `delivery` service; parent Bearer required; UUID alone → identical `DOWNLOAD_JOB_NOT_FOUND`; FD-relative `O_NOFOLLOW` opens; single bounded Range; API/gateway do not mount artifact root; delivery mount read-only; feature default off; process-local concurrency; optional server-derived per-response Free pacing covers Bearer and browser-grant paths and paces the first chunk |
+| Residual risk | Stolen Bearer until TTL; parallel responses multiply the configured per-response rate; no aggregate identity/IP or cross-replica bandwidth cap; full-file digest not recomputed per GET; shared image still contains yt-dlp (delivery never invokes / no configured path); shared `DATABASE_URL` is not an enforced read-only DB role |
 
 ### Browser-native delivery grant abuse (PR14)
 
