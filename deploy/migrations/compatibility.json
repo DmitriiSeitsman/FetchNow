@@ -102,6 +102,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create anonymous_clients and free_download_quota_entries with indexes and constraints only. Existing media, download, and delivery-grant tables are unchanged, so the previous application ignores the additive schema safely during migration and rollback. Admission remains disabled by default until a separate operator activation."
+    },
+    {
+      "from_heads": [
+        "0007_free_download_quota"
+      ],
+      "to_heads": [
+        "0008_payment_orders"
+      ],
+      "included_revisions": [
+        "0008_payment_orders"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the new payment_orders table, its private invoice sequence, indexes, and constraints only. Existing application tables and columns remain unchanged, so the previous application safely ignores the additive schema during migration and application rollback. Robokassa remains disabled by default and test activation is a separate deploy-time operation."
     }
   ]
 }

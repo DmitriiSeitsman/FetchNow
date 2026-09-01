@@ -375,6 +375,20 @@ def test_allowlist_and_wiring_are_narrow() -> None:
         "MEDIA_BROWSER_DELIVERY_ENABLED",
         "MEDIA_MUXING_ENABLED",
     }
+    payment_keys = {
+        "ROBOKASSA_MODE",
+        "ROBOKASSA_MERCHANT_LOGIN",
+        "ROBOKASSA_SIGNATURE_ALGORITHM",
+        "ROBOKASSA_TEST_PASSWORD1",
+        "ROBOKASSA_TEST_PASSWORD2",
+        "ROBOKASSA_TEST_AMOUNT_MINOR",
+        "ROBOKASSA_RECEIPT_TAX",
+        "ROBOKASSA_RECEIPT_PAYMENT_METHOD",
+        "ROBOKASSA_ORDER_TTL_SECONDS",
+    }
+    assert payment_keys.isdisjoint(RUNTIME_CONFIG_ALLOWLIST)
+    assert payment_keys.isdisjoint(RUNTIME_WIRING)
+    assert payment_keys.isdisjoint(BUILD_TIME_CONFIG)
 
 
 def test_rendered_compose_receiver_drift_fails_closed() -> None:

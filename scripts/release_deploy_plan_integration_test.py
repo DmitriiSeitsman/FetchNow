@@ -59,8 +59,8 @@ INTEGRATION_SUCCESS_MARKER = "OK: deploy-plan integration passed"
 
 MIGRATION_FILE = """\"\"\"Online expand migration for deploy-plan integration.\"\"\"
 
-revision = "0008_expand"
-down_revision = "0007_free_download_quota"
+revision = "0009_expand"
+down_revision = "0008_payment_orders"
 
 
 def upgrade() -> None:
@@ -75,9 +75,9 @@ CONTRACT_WITH_MIGRATION = """{
   "schema_version": 1,
   "transitions": [
     {
-      "from_heads": ["0007_free_download_quota"],
-      "to_heads": ["0008_expand"],
-      "included_revisions": ["0008_expand"],
+      "from_heads": ["0008_payment_orders"],
+      "to_heads": ["0009_expand"],
+      "included_revisions": ["0009_expand"],
       "execution_mode": "online_expand",
       "online_with_previous_application": true,
       "previous_application_rollback_compatible": true,
@@ -415,10 +415,10 @@ def main(argv: list[str] | None = None) -> int:
 
         # Migration release commit in isolated clone only.
         mig_versions = clone / "backend" / "migrations" / "versions"
-        (mig_versions / "0008_expand.py").write_text(MIGRATION_FILE, encoding="utf-8")
+        (mig_versions / "0009_expand.py").write_text(MIGRATION_FILE, encoding="utf-8")
         contract_path = clone / "deploy" / "migrations" / "compatibility.json"
         contract_path.write_text(CONTRACT_WITH_MIGRATION, encoding="utf-8")
-        run(["git", "add", "backend/migrations/versions/0008_expand.py", str(contract_path)], cwd=clone)
+        run(["git", "add", "backend/migrations/versions/0009_expand.py", str(contract_path)], cwd=clone)
         run(["git", "commit", "-m", "test: deploy-plan expand migration"], cwd=clone)
         migrate_rev = run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip()
         run(["git", "update-ref", "refs/remotes/origin/main", migrate_rev], cwd=clone)
@@ -455,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         plan3 = json.loads(plan_json3)
         if plan3["migration_required"] is not True:
             raise RuntimeError("expected migration_required=true")
-        if plan3["included_revisions"] != ["0008_expand"]:
+        if plan3["included_revisions"] != ["0009_expand"]:
             raise RuntimeError(f"unexpected included revisions: {plan3['included_revisions']}")
         if plan3["verified_backup_required"] is not True:
             raise RuntimeError("expected verified_backup_required=true")
@@ -473,9 +473,9 @@ def main(argv: list[str] | None = None) -> int:
                     "schema_version": 1,
                     "transitions": [
                         {
-                            "from_heads": ["0009_wrong"],
-                            "to_heads": ["0008_expand"],
-                            "included_revisions": ["0008_expand"],
+                            "from_heads": ["0011_wrong"],
+                            "to_heads": ["0009_expand"],
+                            "included_revisions": ["0009_expand"],
                             "execution_mode": "online_expand",
                             "online_with_previous_application": True,
                             "previous_application_rollback_compatible": True,
@@ -526,9 +526,9 @@ def main(argv: list[str] | None = None) -> int:
                     "schema_version": 1,
                     "transitions": [
                         {
-                            "from_heads": ["0007_free_download_quota"],
-                            "to_heads": ["0008_expand"],
-                            "included_revisions": ["0009_wrong"],
+                            "from_heads": ["0008_payment_orders"],
+                            "to_heads": ["0009_expand"],
+                            "included_revisions": ["0010_wrong"],
                             "execution_mode": "online_expand",
                             "online_with_previous_application": True,
                             "previous_application_rollback_compatible": True,
@@ -579,9 +579,9 @@ def main(argv: list[str] | None = None) -> int:
                     "schema_version": 1,
                     "transitions": [
                         {
-                            "from_heads": ["0007_free_download_quota"],
-                            "to_heads": ["0008_expand"],
-                            "included_revisions": ["0008_expand"],
+                            "from_heads": ["0008_payment_orders"],
+                            "to_heads": ["0009_expand"],
+                            "included_revisions": ["0009_expand"],
                             "execution_mode": "online_expand",
                             "online_with_previous_application": False,
                             "previous_application_rollback_compatible": True,
@@ -659,15 +659,15 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("prepare without compatibility.json published a release")
         print("OK: missing compatibility contract rejected at prepare")
 
-        # Divergent target: DB/current at 0008_expand, target graph head is sibling 0008_diverge only.
+        # Divergent target: DB/current at 0009_expand, target graph head is sibling 0010_diverge only.
         run(["git", "checkout", "--detach", migrate_rev], cwd=clone)
         run(compose + ["run", "--rm", "api", "alembic", "upgrade", "head"], cwd=clone)
         seed_current_state(
             deploy_root, release_dir(deploy_root, migrate_rev), migrate_rev
         )
-        (mig_versions / "0008_expand.py").unlink()
-        (mig_versions / "0008_diverge.py").write_text(
-            'revision = "0008_diverge"\ndown_revision = "0007_free_download_quota"\n',
+        (mig_versions / "0009_expand.py").unlink()
+        (mig_versions / "0010_diverge.py").write_text(
+            'revision = "0010_diverge"\ndown_revision = "0008_payment_orders"\n',
             encoding="utf-8",
         )
         diverge_contract = clone / "deploy" / "migrations" / "compatibility.json"
@@ -677,9 +677,9 @@ def main(argv: list[str] | None = None) -> int:
                     "schema_version": 1,
                     "transitions": [
                         {
-                            "from_heads": ["0008_expand"],
-                            "to_heads": ["0008_diverge"],
-                            "included_revisions": ["0008_diverge"],
+                            "from_heads": ["0009_expand"],
+                            "to_heads": ["0010_diverge"],
+                            "included_revisions": ["0010_diverge"],
                             "execution_mode": "online_expand",
                             "online_with_previous_application": True,
                             "previous_application_rollback_compatible": True,
@@ -694,10 +694,10 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         run(
-            ["git", "add", str(mig_versions / "0008_diverge.py"), str(diverge_contract)],
+            ["git", "add", str(mig_versions / "0010_diverge.py"), str(diverge_contract)],
             cwd=clone,
         )
-        run(["git", "rm", str(mig_versions / "0008_expand.py")], cwd=clone)
+        run(["git", "rm", str(mig_versions / "0009_expand.py")], cwd=clone)
         run(["git", "commit", "-m", "test: divergent sibling migration head"], cwd=clone)
         diverge_rev = run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip()
         run(["git", "update-ref", "refs/remotes/origin/main", diverge_rev], cwd=clone)
@@ -729,7 +729,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"divergent rejection message unexpected: {diverge_messages}")
         print("OK: divergent target rejected")
 
-        # Downgrade rejection: current release + DB at 0008_expand, target v2 baseline release.
+        # Downgrade rejection: current release + DB at 0009_expand, target v2 baseline release.
         run(["git", "checkout", "--detach", migrate_rev], cwd=clone)
         run(compose + ["build", "api"], cwd=clone)
         run(compose + ["run", "--rm", "api", "alembic", "upgrade", "head"], cwd=clone)

@@ -6,7 +6,7 @@ import os
 from functools import lru_cache
 from typing import Annotated, Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -465,6 +465,35 @@ class Settings(BaseSettings):
         le=2_592_000,
     )
 
+    # Robokassa A1 is deliberately test-only. Credentials and fiscal settings
+    # are deploy-time API configuration and are never runtime-config values.
+    robokassa_mode: str = Field(default="disabled", alias="ROBOKASSA_MODE")
+    robokassa_merchant_login: str = Field(
+        default="", alias="ROBOKASSA_MERCHANT_LOGIN", repr=False
+    )
+    robokassa_signature_algorithm: str = Field(
+        default="", alias="ROBOKASSA_SIGNATURE_ALGORITHM"
+    )
+    robokassa_test_password1: SecretStr = Field(
+        default=SecretStr(""), alias="ROBOKASSA_TEST_PASSWORD1", repr=False
+    )
+    robokassa_test_password2: SecretStr = Field(
+        default=SecretStr(""), alias="ROBOKASSA_TEST_PASSWORD2", repr=False
+    )
+    robokassa_test_amount_minor: int = Field(
+        default=0, alias="ROBOKASSA_TEST_AMOUNT_MINOR", ge=0
+    )
+    robokassa_receipt_tax: str = Field(default="", alias="ROBOKASSA_RECEIPT_TAX")
+    robokassa_receipt_payment_method: str = Field(
+        default="", alias="ROBOKASSA_RECEIPT_PAYMENT_METHOD"
+    )
+    robokassa_order_ttl_seconds: int = Field(
+        default=3_600,
+        alias="ROBOKASSA_ORDER_TTL_SECONDS",
+        ge=300,
+        le=86_400,
+    )
+
     # Bounded stream-copy muxing (PR9) — fail closed / disabled by default.
     # ffmpeg/ffprobe paths are worker-only; API and delivery must not receive them.
     media_muxing_enabled: bool = Field(
@@ -632,6 +661,73 @@ class Settings(BaseSettings):
                 "FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS must be greater than "
                 "FREE_DOWNLOAD_WINDOW_SECONDS"
             )
+        mode = self.robokassa_mode.strip().lower()
+        if mode not in {"disabled", "test"}:
+            raise ValueError(
+                "ROBOKASSA_MODE must be disabled or test; live is unavailable"
+            )
+        self.robokassa_mode = mode
+        algorithm = self.robokassa_signature_algorithm.strip().lower()
+        self.robokassa_signature_algorithm = algorithm
+        if mode == "test":
+            merchant_login = self.robokassa_merchant_login.strip()
+            if (
+                not merchant_login
+                or len(merchant_login) > 128
+                or ":" in merchant_login
+                or any(char in merchant_login for char in ("\r", "\n", "\0"))
+            ):
+                raise ValueError("ROBOKASSA_MERCHANT_LOGIN is required in test mode")
+            self.robokassa_merchant_login = merchant_login
+            password1 = self.robokassa_test_password1.get_secret_value()
+            if not password1 or any(
+                char in password1 for char in ("\r", "\n", "\0")
+            ):
+                raise ValueError("ROBOKASSA_TEST_PASSWORD1 is required in test mode")
+            password2 = self.robokassa_test_password2.get_secret_value()
+            if not password2 or any(
+                char in password2 for char in ("\r", "\n", "\0")
+            ):
+                raise ValueError("ROBOKASSA_TEST_PASSWORD2 is required in test mode")
+            if algorithm != "sha256":
+                raise ValueError(
+                    "ROBOKASSA_SIGNATURE_ALGORITHM must be sha256 in A1 test mode"
+                )
+            if self.robokassa_test_amount_minor <= 0:
+                raise ValueError(
+                    "ROBOKASSA_TEST_AMOUNT_MINOR must be positive in test mode"
+                )
+            allowed_taxes = {
+                "none",
+                "vat0",
+                "vat5",
+                "vat7",
+                "vat10",
+                "vat20",
+                "vat22",
+                "vat105",
+                "vat107",
+                "vat110",
+                "vat120",
+                "vat122",
+            }
+            if self.robokassa_receipt_tax not in allowed_taxes:
+                raise ValueError("ROBOKASSA_RECEIPT_TAX is required and unsupported")
+            allowed_methods = {
+                "full_prepayment",
+                "prepayment",
+                "advance",
+                "full_payment",
+                "partial_payment",
+                "credit",
+                "credit_payment",
+            }
+            if self.robokassa_receipt_payment_method not in allowed_methods:
+                raise ValueError(
+                    "ROBOKASSA_RECEIPT_PAYMENT_METHOD is required and unsupported"
+                )
+        elif algorithm and algorithm != "sha256":
+            raise ValueError("unsupported ROBOKASSA_SIGNATURE_ALGORITHM")
         delivery_root = self.media_delivery_root.strip()
         if delivery_root and not os.path.isabs(delivery_root):
             raise ValueError("MEDIA_DELIVERY_ROOT must be absolute when set")

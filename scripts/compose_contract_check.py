@@ -851,6 +851,42 @@ def check_free_quota_env_split() -> None:
     print("OK: Free quota admission flag is API-only and defaults fail-closed")
 
 
+def check_robokassa_env_split() -> None:
+    """A1 payment settings are API-only, deploy-time, and disabled by default."""
+    cfg = _run_compose(
+        ["-f", "compose.yaml"],
+        env={"COMPOSE_PROJECT_NAME": "fetchnow"},
+    )
+    services = _services(cfg)
+    api_env = _service_env(services["api"])
+    payment_keys = {
+        "ROBOKASSA_MODE",
+        "ROBOKASSA_MERCHANT_LOGIN",
+        "ROBOKASSA_SIGNATURE_ALGORITHM",
+        "ROBOKASSA_TEST_PASSWORD1",
+        "ROBOKASSA_TEST_PASSWORD2",
+        "ROBOKASSA_TEST_AMOUNT_MINOR",
+        "ROBOKASSA_RECEIPT_TAX",
+        "ROBOKASSA_RECEIPT_PAYMENT_METHOD",
+        "ROBOKASSA_ORDER_TTL_SECONDS",
+    }
+    _assert(
+        api_env.get("ROBOKASSA_MODE") == "disabled",
+        "base: Robokassa mode must default disabled on api",
+    )
+    _assert(
+        api_env.get("ROBOKASSA_TEST_AMOUNT_MINOR") == "0",
+        "base: Robokassa test amount must not imply a commercial price",
+    )
+    for name in ("worker", "delivery", "web", "gateway", "storage-init"):
+        leaked = payment_keys.intersection(_service_env(services[name]))
+        _assert(
+            not leaked,
+            f"base: {name} must not receive Robokassa settings: {sorted(leaked)}",
+        )
+    print("OK: Robokassa is API-only and defaults disabled without a price")
+
+
 def _service_env(svc: dict[str, Any]) -> dict[str, str]:
     raw = svc.get("environment") or {}
     if isinstance(raw, dict):
@@ -1418,6 +1454,7 @@ def main() -> int:
     check_isolation_render()
     check_media_jobs_env_split()
     check_free_quota_env_split()
+    check_robokassa_env_split()
     check_muxing_and_storage_init()
     check_media_flow_flag()
     check_production_media_activation_interpolation()

@@ -1,0 +1,1 @@
+"""Robokassa test-payment foundation."""
