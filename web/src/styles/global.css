@@ -26,6 +26,17 @@
   --lift: -1px;
   --ring-primary: 0 6px 16px rgba(15, 81, 50, 0.24);
   --ring-quiet: 0 4px 12px rgba(18, 54, 95, 0.14);
+  /* Soft dimensional elevation (ambient + contact + inset highlight). */
+  --elev-surface:
+    0 1px 2px rgba(7, 26, 49, 0.04), 0 4px 14px rgba(7, 26, 49, 0.06);
+  --elev-raised:
+    0 2px 4px rgba(7, 26, 49, 0.05), 0 10px 22px rgba(7, 26, 49, 0.09);
+  --elev-primary:
+    0 2px 5px rgba(15, 81, 50, 0.22), 0 8px 20px rgba(15, 81, 50, 0.16);
+  --elev-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+  --elev-inset-pressed: inset 0 2px 5px rgba(7, 26, 49, 0.1);
+  --elev-border-light: rgba(18, 54, 95, 0.12);
+  --glow-green-soft: 0 0 0 1px rgba(20, 108, 67, 0.1), 0 6px 18px rgba(20, 108, 67, 0.14);
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: var(--font-sans);
@@ -48,6 +59,8 @@ body {
   font-family: var(--font-body);
   color: var(--ink);
   background:
+    radial-gradient(1100px 560px at 8% -8%, rgba(219, 231, 245, 0.9) 0%, transparent 58%),
+    radial-gradient(880px 480px at 100% 0%, rgba(227, 242, 233, 0.55) 0%, transparent 52%),
     radial-gradient(1200px 600px at 10% -10%, #dbe7f5 0%, transparent 55%),
     radial-gradient(900px 500px at 100% 0%, #e6eef7 0%, transparent 50%),
     linear-gradient(165deg, #eef3fa 0%, var(--paper) 45%, #e3ecf6 100%);
@@ -93,8 +106,8 @@ body.page-root {
   height: 70%;
   background:
     radial-gradient(circle at 30% 40%, var(--glow), transparent 45%),
-    radial-gradient(circle at 70% 30%, rgba(20, 108, 67, 0.12), transparent 40%);
-  filter: blur(8px);
+    radial-gradient(circle at 70% 30%, rgba(20, 108, 67, 0.1), transparent 40%);
+  filter: blur(10px);
   animation: drift 14s ease-in-out infinite alternate;
   pointer-events: none;
 }
@@ -106,15 +119,32 @@ body.page-root {
   animation: rise 0.8s ease-out both;
 }
 
-.brand {
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
   margin: 0 0 0.65rem;
+  animation: brand-in 1s ease-out both;
+  filter: drop-shadow(0 3px 10px rgba(15, 81, 50, 0.12));
+}
+
+.brand-mark {
+  display: block;
+  width: clamp(2.75rem, 7.5vw, 3.25rem);
+  height: clamp(2.75rem, 7.5vw, 3.25rem);
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.brand {
+  margin: 0;
   font-family: var(--font-display);
   font-size: clamp(2.1rem, 6vw, 3.2rem);
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 0.95;
   color: var(--navy-deep);
-  animation: brand-in 1s ease-out both;
 }
 
 .tagline {
@@ -268,10 +298,10 @@ body.page-root {
   margin-inline: auto;
   padding: 1.35rem 1.2rem 1.4rem;
   text-align: center;
-  border: 1px solid rgba(18, 54, 95, 0.14);
+  border: 1px solid var(--elev-border-light);
   border-radius: 20px;
   background: var(--surface);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.65) inset;
+  box-shadow: var(--elev-surface), var(--elev-inset-highlight);
   transition:
     border-color var(--motion-base) var(--ease-out),
     box-shadow var(--motion-base) var(--ease-out);
@@ -279,8 +309,8 @@ body.page-root {
 
 @media (hover: hover) and (pointer: fine) {
   .trust-item:hover {
-    border-color: rgba(29, 78, 137, 0.32);
-    box-shadow: var(--ring-quiet);
+    border-color: rgba(29, 78, 137, 0.28);
+    box-shadow: var(--elev-raised), var(--elev-inset-highlight);
   }
 }
 
@@ -553,14 +583,14 @@ body.page-root {
 
 .field-input {
   width: 100%;
-  border: 1px solid var(--mist);
+  border: 1px solid rgba(18, 54, 95, 0.2);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.9);
   color: var(--ink-muted);
   padding: 0.95rem 1.05rem;
   font: inherit;
   font-size: 1rem;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  box-shadow: var(--elev-inset-pressed), var(--elev-inset-highlight);
   cursor: not-allowed;
   opacity: 0.85;
 }
@@ -573,6 +603,14 @@ body.page-root {
   color: var(--ink);
   cursor: text;
   opacity: 1;
+  border-color: rgba(18, 54, 95, 0.22);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.field-input-live:focus-visible {
+  box-shadow:
+    0 0 0 1px rgba(29, 78, 137, 0.15),
+    var(--elev-inset-highlight);
 }
 
 .field-input-live:disabled {
@@ -605,12 +643,13 @@ body.page-root {
   padding: 0;
   transform: translateY(-50%);
   appearance: none;
-  border: 1px solid rgba(29, 78, 137, 0.28);
+  border: 1px solid rgba(29, 78, 137, 0.22);
   border-radius: 10px;
-  background: var(--blue-wash);
+  background: linear-gradient(180deg, #f0f6fc 0%, var(--blue-wash) 100%);
   color: var(--navy-deep);
   line-height: 0;
   cursor: pointer;
+  box-shadow: var(--elev-surface), var(--elev-inset-highlight);
   transition:
     background-color var(--motion-base) var(--ease-out),
     border-color var(--motion-base) var(--ease-out),
@@ -672,6 +711,11 @@ body.page-root {
 .flow-form {
   display: grid;
   gap: 0.85rem;
+  padding: 1rem 1rem 1.05rem;
+  border: 1px solid var(--elev-border-light);
+  border-radius: calc(var(--radius) + 2px);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: var(--elev-surface), var(--elev-inset-highlight);
 }
 
 .flow-submit-row {
@@ -738,26 +782,34 @@ body.page-root {
 }
 
 .btn-primary {
-  background: var(--leaf);
+  background: linear-gradient(180deg, #1a7d4c 0%, var(--leaf) 48%, var(--leaf-deep) 100%);
   color: #ffffff;
+  border-color: rgba(15, 81, 50, 0.32);
+  box-shadow: var(--elev-primary), var(--elev-inset-highlight);
 }
 
 .btn-primary:not(:disabled):not([aria-disabled="true"]):hover {
-  background: var(--leaf-deep);
-  box-shadow: var(--ring-primary);
+  background: linear-gradient(180deg, #1f8a54 0%, var(--leaf) 52%, #0c4a2e 100%);
+  box-shadow: var(--elev-primary), var(--ring-primary), var(--glow-green-soft);
+}
+
+.btn-primary:not(:disabled):not([aria-disabled="true"]):active {
+  transform: translateY(1px);
+  box-shadow: var(--elev-inset-pressed);
 }
 
 .btn-ghost {
-  background: transparent;
-  border-color: var(--mist);
+  background: rgba(255, 255, 255, 0.45);
+  border-color: rgba(109, 130, 155, 0.45);
   color: var(--ink-muted);
+  box-shadow: var(--elev-surface);
 }
 
 .btn-ghost:not(:disabled):not([aria-disabled="true"]):hover {
   border-color: var(--blue-accent);
   color: var(--navy);
   background: var(--blue-wash);
-  box-shadow: var(--ring-quiet);
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
 }
 
 .status {
@@ -797,10 +849,11 @@ body.page-root {
 }
 
 .meta-card {
-  border: 1px solid var(--mist);
+  border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.88);
   padding: 1rem 1.1rem;
+  box-shadow: var(--elev-surface), var(--elev-inset-highlight);
 }
 
 .meta-title {
@@ -835,10 +888,11 @@ body.page-root {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-  border: 1px solid var(--mist);
+  border: 1px solid rgba(20, 108, 67, 0.22);
   border-radius: var(--radius);
-  background: var(--leaf-wash);
+  background: linear-gradient(180deg, #edf7f1 0%, var(--leaf-wash) 100%);
   padding: 0.85rem 1.1rem;
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
 }
 
 .ready-summary-badge {
@@ -866,11 +920,11 @@ body.page-root {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  border: 1px solid var(--mist);
+  border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.94);
   padding: 1.15rem;
-  box-shadow: var(--ring-quiet);
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
 }
 
 .ready-card--free {
@@ -917,10 +971,11 @@ body.page-root {
 
 .quality-card {
   margin: 0;
-  border: 1px solid var(--mist);
+  border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.9);
   padding: 0.35rem 0.9rem 0.9rem;
+  box-shadow: var(--elev-surface), var(--elev-inset-highlight);
 }
 
 .quality-list {
@@ -934,10 +989,11 @@ body.page-root {
   column-gap: 0.65rem;
   row-gap: 0.1rem;
   align-items: center;
-  border: 1px solid var(--mist);
+  border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
   padding: 0.5rem 0.75rem;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--elev-surface);
   cursor: pointer;
   transition:
     background-color var(--motion-base) var(--ease-out),
@@ -947,8 +1003,8 @@ body.page-root {
 
 .format:not(.format-disabled):hover {
   border-color: var(--blue-accent);
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: var(--ring-quiet);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
 }
 
 .format input {
@@ -992,16 +1048,17 @@ body.page-root {
 .format-selected {
   border-color: var(--blue-accent);
   background: var(--leaf-wash);
-  box-shadow: inset 0 0 0 1px var(--blue-accent);
+  box-shadow: var(--elev-raised), inset 0 0 0 1px var(--blue-accent), var(--elev-inset-highlight);
 }
 
 .progress-card {
   display: grid;
   gap: 0.55rem;
-  border: 1px solid var(--mist);
+  border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.92);
   padding: 0.85rem 1rem;
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
 }
 
 /* The spinner column stays reserved so short status changes never shift the row. */
@@ -1027,10 +1084,11 @@ body.page-root {
 
 .progress-track {
   position: relative;
-  height: 0.5rem;
+  height: 0.55rem;
   border-radius: 999px;
-  background: var(--blue-wash);
-  border: 1px solid var(--mist);
+  background: linear-gradient(180deg, #dce8f4 0%, var(--blue-wash) 100%);
+  border: 1px solid rgba(18, 54, 95, 0.14);
+  box-shadow: var(--elev-inset-pressed);
   overflow: hidden;
 }
 
@@ -1040,7 +1098,7 @@ body.page-root {
   height: 100%;
   width: 0;
   overflow: hidden;
-  background: var(--leaf);
+  background: linear-gradient(180deg, #1f8a54 0%, var(--leaf) 55%, var(--leaf-deep) 100%);
   transition:
     width var(--motion-entrance) var(--ease-out),
     background-color var(--motion-base) var(--ease-out);
@@ -1243,7 +1301,7 @@ body.page-root {
 
   .atmosphere,
   .hero,
-  .brand,
+  .brand-lockup,
   .spinner,
   .meta-card:not([hidden]),
   .quality-card:not([hidden]),
@@ -1265,6 +1323,10 @@ body.page-root {
   /* Colour, border, and shadow feedback stays; only the movement is dropped. */
   .btn:not(:disabled):not([aria-disabled="true"]):hover,
   .btn:not(:disabled):not([aria-disabled="true"]):active {
+    transform: none;
+  }
+
+  .btn-primary:not(:disabled):not([aria-disabled="true"]):active {
     transform: none;
   }
 
