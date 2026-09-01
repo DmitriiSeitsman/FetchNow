@@ -100,7 +100,7 @@ describe("UI motion polish", () => {
       "var(--ring-primary)",
     );
     expect(ruleBody('.btn-ghost:not(:disabled):not([aria-disabled="true"]):hover')).toContain(
-      "var(--ring-quiet)",
+      "var(--elev-raised)",
     );
     expect(cssSource).toContain(".btn:focus-visible");
     expect(cssSource).toContain(".btn-paste:focus-visible:enabled");
@@ -143,6 +143,7 @@ describe("UI motion polish", () => {
     expect(reduced).toMatch(/--motion-entrance:\s*1ms/u);
     for (const selector of [
       ".spinner",
+      ".brand-lockup",
       ".meta-card:not([hidden])",
       ".quality-card:not([hidden])",
       ".progress-card:not([hidden])",
