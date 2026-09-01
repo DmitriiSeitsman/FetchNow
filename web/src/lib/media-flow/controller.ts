@@ -47,6 +47,8 @@ export type FlowSnapshot = {
   result: InspectionResult | null;
   formats: MediaFormat[];
   selectedFormatId: string | null;
+  selectedFormat?: MediaFormat | null;
+  deliveryRateBytesPerSecond?: number | null;
   downloadEligible: boolean;
   canSelectQuality?: boolean;
   muxingBlocked: boolean;
@@ -138,6 +140,9 @@ export class MediaFlowController {
     const muxingBlocked = result?.muxingRequired === true;
     const capabilities = projectCapabilityUi(this.mediaJob?.providerCapabilities);
     const selected = formats.find((f) => f.formatOptionId === this.selectedFormatId);
+    const selectedFormat = this.downloadJob?.selectedFormat ?? selected ?? null;
+    const deliveryRateBytesPerSecond =
+      this.downloadJob?.deliveryRateBytesPerSecond ?? null;
     const downloadEligible =
       capabilities.canDownloadVideo &&
       !muxingBlocked &&
@@ -163,6 +168,8 @@ export class MediaFlowController {
       result,
       formats,
       selectedFormatId: this.selectedFormatId,
+      selectedFormat,
+      deliveryRateBytesPerSecond,
       downloadEligible,
       canSelectQuality: capabilities.canSelectQuality,
       muxingBlocked,

@@ -81,7 +81,7 @@ export function qualityTierLabel(format: MediaFormat): string {
   return "Низкое";
 }
 
-function qualityTechnicalLabel(format: MediaFormat): string {
+export function qualityTechnicalLabel(format: MediaFormat): string {
   const height = finiteHeight(format);
   if (height !== null) {
     return `${height}p`;

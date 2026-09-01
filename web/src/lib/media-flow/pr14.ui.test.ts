@@ -90,7 +90,7 @@ function el(selector: string): HTMLElement {
 describe("PR14 native browser download", () => {
   it("pins a real anchor for native download, not a button or blob URL", () => {
     expect(astroSource).toContain('data-flow-native-download');
-    expect(astroSource).toContain("Скачать файл");
+    expect(astroSource).toContain("Скачать бесплатно");
     expect(astroSource).toContain("download");
     expect(astroSource).toContain("data-flow-save-as");
     expect(astroSource).not.toContain("data-flow-save hidden");
@@ -131,7 +131,7 @@ describe("PR14 native browser download", () => {
     expect(link.href).toContain(BROWSER_GRANT_PATH);
     expect(link.href).not.toMatch(/[?#]/);
     expect(link.hidden).toBe(false);
-    expect(link.textContent).toBe("Скачать файл");
+    expect(link.textContent).toBe("Скачать бесплатно");
   });
 
   it("shows grant arming and handoff copy without faking progress", () => {

@@ -90,6 +90,7 @@ export function downloadPayload(
     cancellable: true,
     progressPercent: null,
     artifactBytes: null,
+    deliveryRateBytesPerSecond: 524288,
     suggestedFilename: `fetchnow-${DOWNLOAD_ID}.mp4`,
     ...overrides,
   };

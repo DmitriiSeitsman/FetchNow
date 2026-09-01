@@ -45,6 +45,7 @@ from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
 from fetchnow.media_inspection.models import FormatCategory, MediaFormat
 from fetchnow.quota.errors import AnonymousIdentityRequiredError
+from fetchnow.quota.policy import effective_download_policy
 from fetchnow.quota.service import QuotaService
 
 
@@ -476,6 +477,7 @@ class DownloadJobService:
 
         Cache-Control: no-store is the API layer's responsibility.
         """
+        policy = effective_download_policy(self._settings)
         return {
             "id": str(view.id),
             "mediaJobId": str(view.media_job_id),
@@ -499,6 +501,7 @@ class DownloadJobService:
             "cancellable": view.cancellable,
             "progressPercent": view.progress_percent,
             "artifactBytes": view.artifact_bytes,
+            "deliveryRateBytesPerSecond": policy.delivery_rate_bytes_per_second,
             "suggestedFilename": view.suggested_filename,
             "providerCapabilities": project_provider_capabilities(
                 self._capabilities,
