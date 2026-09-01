@@ -129,6 +129,39 @@ const enabled = isMediaFlowEnabled();
       </button>
     </div>
   </section>
+
+  <section class="ready-choice" data-flow-ready hidden>
+    <div class="ready-summary">
+      <p class="ready-summary-badge" data-flow-ready-badge>✓ Готово к скачиванию</p>
+      <p class="ready-summary-details" data-flow-ready-details></p>
+    </div>
+    <div class="ready-choice-grid">
+      <article class="ready-card ready-card--free" data-flow-ready-free>
+        <h3 class="ready-card-title">Бесплатно</h3>
+        <div class="ready-card-body">
+          <p class="ready-card-speed" data-flow-ready-speed hidden></p>
+          <p class="ready-card-time" data-flow-ready-time hidden></p>
+        </div>
+        <div class="ready-card-actions">
+          <button class="btn btn-primary" type="button" data-flow-save-as hidden>
+            Сохранить как…
+          </button>
+          <a
+            class="btn btn-primary"
+            data-flow-native-download
+            hidden
+            download
+          >
+            Скачать бесплатно
+          </a>
+          <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>
+            Обновить доступ к скачиванию
+          </button>
+        </div>
+      </article>
+    </div>
+  </section>
+
   <p class="hint" data-flow-mux hidden>
     Не удалось подготовить совместимый единый файл с видео и звуком без
     перекодирования.
@@ -145,20 +178,6 @@ const enabled = isMediaFlowEnabled();
   <div class="flow-actions">
     <button class="btn btn-primary" type="button" data-flow-download hidden>
       Подготовить скачивание
-    </button>
-    <button class="btn btn-primary" type="button" data-flow-save-as hidden>
-      Сохранить как…
-    </button>
-    <a
-      class="btn btn-primary"
-      data-flow-native-download
-      hidden
-      download
-    >
-      Скачать файл
-    </a>
-    <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>
-      Обновить доступ к скачиванию
     </button>
   </div>
 </section>

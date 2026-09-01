@@ -179,6 +179,7 @@ const DOWNLOAD_KEYS = new Set([
   "cancellable",
   "progressPercent",
   "artifactBytes",
+  "deliveryRateBytesPerSecond",
   "suggestedFilename",
   "providerCapabilities",
 ]);
@@ -282,6 +283,7 @@ export type DownloadJob = {
   cancellable: boolean;
   progressPercent: number | null;
   artifactBytes: number | null;
+  deliveryRateBytesPerSecond?: number | null;
   suggestedFilename: string;
   providerCapabilities?: ProviderCapabilities | null;
 };
@@ -1187,6 +1189,7 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     typedDownloadState,
     artifactReady,
   );
+  const deliveryRateBytesPerSecond = parseDeliveryRate(value.deliveryRateBytesPerSecond);
   const suggestedFilename = value.suggestedFilename;
   if (!isSafeSuggestedFilename(suggestedFilename, selectedFormat.container)) {
     fail();
@@ -1223,9 +1226,17 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     cancellable,
     progressPercent,
     artifactBytes,
+    deliveryRateBytesPerSecond,
     suggestedFilename,
     providerCapabilities,
   };
+}
+
+function parseDeliveryRate(value: unknown): number | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return requireIntegerInRange(value, 1, 1_000_000_000);
 }
 
 function parseProgressPercent(

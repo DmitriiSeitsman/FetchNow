@@ -729,3 +729,130 @@ async def test_cancel_is_idempotent_and_does_not_run_tools(
     assert "yt-dlp" not in blob
     assert "ffmpeg" not in blob
     assert token not in first.text
+
+
+@pytest.mark.asyncio
+async def test_ready_response_contains_exact_artifact_bytes_and_policy_rate() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_DOWNLOADS_ENABLED=True,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288,
+        PROVIDER_VK_ENABLED=True,
+    )
+    async for client in _build_client(settings):
+        transport = client._transport
+        assert isinstance(transport, ASGITransport)
+        app = transport.app
+        now = datetime.now(tz=UTC)
+        ready_view = DownloadJobView(
+            id=uuid.uuid4(),
+            media_job_id=uuid.uuid4(),
+            public_state="ready",
+            provider_id="vk",
+            format_option_id="fmt_abc123",
+            selected_format={
+                "formatOptionId": "fmt_abc123",
+                "container": "mp4",
+                "qualityLabel": "p1080",
+                "freeTierEligible": True,
+            },
+            created_at=now - timedelta(minutes=2),
+            updated_at=now,
+            expires_at=now + timedelta(hours=1),
+            completed_at=now,
+            artifact_ready=True,
+            error_code=None,
+            progress_stage="ready",
+            attempt_count=1,
+            max_attempts=3,
+            next_attempt_at=None,
+            cancellable=False,
+            progress_percent=None,
+            artifact_bytes=576454656,
+            suggested_filename="video-1080p.mp4",
+            created=False,
+        )
+        token = generate_access_token()
+        service = MagicMock()
+        service.get = AsyncMock(return_value=ready_view)
+        service.to_public_dict = DownloadJobService(app.state.settings).to_public_dict
+        app.state.download_job_service = service
+
+        response = await client.get(
+            f"/api/v1/media/download-jobs/{ready_view.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["state"] == "ready"
+        assert data["artifactReady"] is True
+        assert data["artifactBytes"] == 576454656
+        assert data["deliveryRateBytesPerSecond"] == 524288
+
+
+@pytest.mark.asyncio
+async def test_delivery_rate_is_null_when_limiter_disabled() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_DOWNLOADS_ENABLED=True,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=False,
+        PROVIDER_VK_ENABLED=True,
+    )
+    async for client in _build_client(settings):
+        transport = client._transport
+        assert isinstance(transport, ASGITransport)
+        app = transport.app
+        view = _view()
+        token = generate_access_token()
+        service = MagicMock()
+        service.get = AsyncMock(return_value=view)
+        service.to_public_dict = DownloadJobService(app.state.settings).to_public_dict
+        app.state.download_job_service = service
+
+        response = await client.get(
+            f"/api/v1/media/download-jobs/{view.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deliveryRateBytesPerSecond"] is None
+
+
+@pytest.mark.asyncio
+async def test_forged_client_input_cannot_alter_delivery_rate() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        LOG_LEVEL="WARNING",
+        DATABASE_URL=_DB,
+        MEDIA_DOWNLOADS_ENABLED=True,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288,
+        PROVIDER_VK_ENABLED=True,
+    )
+    async for client in _build_client(settings):
+        transport = client._transport
+        assert isinstance(transport, ASGITransport)
+        app = transport.app
+        view = _view()
+        token = generate_access_token()
+        service = MagicMock()
+        service.get = AsyncMock(return_value=view)
+        service.to_public_dict = DownloadJobService(app.state.settings).to_public_dict
+        app.state.download_job_service = service
+
+        response = await client.get(
+            f"/api/v1/media/download-jobs/{view.id}?deliveryRateBytesPerSecond=99999999&rate=unlimited",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Delivery-Rate": "99999999",
+                "Cookie": "delivery_rate=99999999",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deliveryRateBytesPerSecond"] == 524288

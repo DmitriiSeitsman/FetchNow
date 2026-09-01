@@ -1,8 +1,17 @@
 import type { FlowSnapshot } from "./controller";
-import { formatApproxBytes } from "./bytes";
+import { formatApproxBytes, formatExactBytes } from "./bytes";
+import {
+  formatDeliverySpeed,
+  formatEstimatedDownloadTime,
+  estimateDownloadSeconds,
+} from "./estimate";
 import { providerDisplayName } from "./contracts";
 import { progressView } from "./progress";
-import { groupQualityOptions, type QualityOption } from "./quality";
+import {
+  groupQualityOptions,
+  qualityTechnicalLabel,
+  type QualityOption,
+} from "./quality";
 
 function setText(el: Element | null, text: string): void {
   if (el) {
@@ -10,7 +19,10 @@ function setText(el: Element | null, text: string): void {
   }
 }
 
-function disabledReason(format: FlowSnapshot["formats"][number], muxingBlocked: boolean): string {
+function disabledReason(
+  format: FlowSnapshot["formats"][number],
+  muxingBlocked: boolean,
+): string {
   if (muxingBlocked) {
     return "Это медиа недоступно как единый файл с видео и звуком.";
   }
@@ -29,6 +41,18 @@ function formatDetail(format: FlowSnapshot["formats"][number]): string {
     parts.push(`${Math.round(format.fps)} fps`);
   }
   parts.push(formatApproxBytes(format.approxBytes));
+  return parts.join(" · ");
+}
+
+function formatReadyDetails(snapshot: FlowSnapshot): string {
+  const parts: string[] = [];
+  if (snapshot.artifactBytes != null && snapshot.artifactBytes > 0) {
+    parts.push(formatExactBytes(snapshot.artifactBytes));
+  }
+  if (snapshot.selectedFormat) {
+    parts.push(snapshot.selectedFormat.container.toUpperCase());
+    parts.push(qualityTechnicalLabel(snapshot.selectedFormat));
+  }
   return parts.join(" · ");
 }
 
@@ -69,6 +93,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (root instanceof Element && !root.isConnected) {
     return;
   }
+  const isReady = snapshot.phase === "ready";
   const quotaState = snapshot.freeQuota ?? null;
   const quota = root.querySelector<HTMLElement>("[data-flow-quota]");
   if (quota) {
@@ -92,7 +117,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       : "";
   }
   const hideProgressAfterHandoff =
-    snapshot.phase === "ready" && snapshot.nativeDownloadHandoff;
+    isReady && snapshot.nativeDownloadHandoff;
   const progress = progressView(snapshot.phase, snapshot.progressStage, {
     progressPercent: snapshot.progressPercent,
     artifactBytes: snapshot.artifactBytes,
@@ -126,7 +151,9 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   // Save as… is the lead action wherever the picker exists, so the anchor steps
   // back to a secondary style there and stays primary everywhere else.
   const canPickLocation = !snapshot.browserUnsupported;
-  const nativeDownload = root.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
+  const nativeDownload = root.querySelector<HTMLAnchorElement>(
+    "[data-flow-native-download]",
+  );
   if (nativeDownload) {
     const showPrimary =
       snapshot.canNativeDownload ||
@@ -136,7 +163,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     nativeDownload.classList.toggle("btn-ghost", canPickLocation);
     nativeDownload.textContent = snapshot.nativeDownloadHandoff
       ? "Скачать снова"
-      : "Скачать файл";
+      : "Скачать бесплатно";
     if (snapshot.downloadHref) {
       nativeDownload.href = snapshot.downloadHref;
     } else {
@@ -205,9 +232,37 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     restored.hidden = !snapshot.restored;
   }
 
+  // READY dedicated choice section
+  const readySection = root.querySelector<HTMLElement>("[data-flow-ready]");
+  if (readySection) {
+    readySection.hidden = !isReady;
+    if (isReady) {
+      const readyDetails = readySection.querySelector("[data-flow-ready-details]");
+      setText(readyDetails, formatReadyDetails(snapshot));
+
+      const speedEl = readySection.querySelector<HTMLElement>("[data-flow-ready-speed]");
+      if (speedEl) {
+        const speedText = formatDeliverySpeed(snapshot.deliveryRateBytesPerSecond);
+        speedEl.hidden = speedText === null;
+        setText(speedEl, speedText ?? "");
+      }
+
+      const timeEl = readySection.querySelector<HTMLElement>("[data-flow-ready-time]");
+      if (timeEl) {
+        const estSeconds = estimateDownloadSeconds(
+          snapshot.artifactBytes,
+          snapshot.deliveryRateBytesPerSecond,
+        );
+        const timeText = formatEstimatedDownloadTime(estSeconds);
+        timeEl.hidden = timeText === null;
+        setText(timeEl, timeText ?? "");
+      }
+    }
+  }
+
   const progressCard = root.querySelector("[data-flow-progress]");
   if (progressCard instanceof HTMLElement) {
-    progressCard.hidden = !progressVisible;
+    progressCard.hidden = !progressVisible || (isReady && readySection !== null);
     progressCard.dataset.tone = progress.tone;
     setText(progressCard.querySelector("[data-flow-progress-label]"), progress.label);
   }
@@ -262,8 +317,12 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     selectedFormatId: snapshot.selectedFormatId,
   });
   // Hide with 0–1 grouped options: a single auto-selected format still downloads.
+  // Quality options only render during the inspected phase before preparation.
   const showQuality =
-    snapshot.canSelectQuality !== false && options.length > 1 && snapshot.result !== null;
+    snapshot.phase === "inspected" &&
+    snapshot.canSelectQuality !== false &&
+    options.length > 1 &&
+    snapshot.result !== null;
   const list = root.querySelector("[data-flow-formats]");
   if (list instanceof HTMLElement) {
     list.replaceChildren();
