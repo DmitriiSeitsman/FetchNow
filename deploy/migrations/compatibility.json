@@ -119,6 +119,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create the new payment_orders table, its private invoice sequence, indexes, and constraints only. Existing application tables and columns remain unchanged, so the previous application safely ignores the additive schema during migration and application rollback. Robokassa remains disabled by default and test activation is a separate deploy-time operation."
+    },
+    {
+      "from_heads": [
+        "0008_payment_orders"
+      ],
+      "to_heads": [
+        "0009_premium_entitlements"
+      ],
+      "included_revisions": [
+        "0009_premium_entitlements"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the new premium_entitlements table and indexes only. Existing payment_orders rows and application behavior remain unchanged until a new application issues entitlements on ResultURL. No entitlement data is backfilled by migration."
     }
   ]
 }

@@ -25,6 +25,22 @@ from fetchnow.payments.service import PaymentService
 from fetchnow.payments.states import PaymentOrderState, assert_payment_transition
 
 
+@pytest.fixture(autouse=True)
+def _stub_premium_issuance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fetchnow.payments import service as service_module
+
+    async def _noop_ensure_for_paid_order(
+        *_args: object, **_kwargs: object
+    ) -> tuple[None, bool]:
+        return None, False
+
+    monkeypatch.setattr(
+        service_module.PremiumEntitlementService,
+        "ensure_for_paid_order",
+        _noop_ensure_for_paid_order,
+    )
+
+
 def _settings() -> Settings:
     return Settings(
         APP_ENV="test",

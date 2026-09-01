@@ -31,6 +31,13 @@ def _split_csv_ports(value: Any) -> list[int]:
     return ports
 
 
+def _reject_wrapping_quotes(value: str, field_name: str) -> None:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        raise ValueError(
+            f"{field_name} must be stored unquoted; remove matching wrapper quotes"
+        )
+
+
 class Settings(BaseSettings):
     """Runtime settings for API and worker processes."""
 
@@ -684,11 +691,13 @@ class Settings(BaseSettings):
                 char in password1 for char in ("\r", "\n", "\0")
             ):
                 raise ValueError("ROBOKASSA_TEST_PASSWORD1 is required in test mode")
+            _reject_wrapping_quotes(password1, "ROBOKASSA_TEST_PASSWORD1")
             password2 = self.robokassa_test_password2.get_secret_value()
             if not password2 or any(
                 char in password2 for char in ("\r", "\n", "\0")
             ):
                 raise ValueError("ROBOKASSA_TEST_PASSWORD2 is required in test mode")
+            _reject_wrapping_quotes(password2, "ROBOKASSA_TEST_PASSWORD2")
             if algorithm != "sha256":
                 raise ValueError(
                     "ROBOKASSA_SIGNATURE_ALGORITHM must be sha256 in A1 test mode"

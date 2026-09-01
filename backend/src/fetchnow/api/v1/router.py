@@ -9,6 +9,7 @@ from fetchnow.api.v1 import (
     media_downloads,
     media_jobs,
     payments,
+    premium,
     quota,
 )
 
@@ -20,3 +21,4 @@ api_router.include_router(media_downloads.router)
 api_router.include_router(browser_grants.router)
 api_router.include_router(quota.router)
 api_router.include_router(payments.router)
+api_router.include_router(premium.router)

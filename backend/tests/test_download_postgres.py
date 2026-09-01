@@ -1663,7 +1663,7 @@ def test_alembic_sole_head_0005(database_url: str) -> None:
     )
     assert proc.returncode == 0
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    assert lines == ["0008_payment_orders (head)"]
+    assert lines == ["0009_premium_entitlements (head)"]
 
 
 @pytest.mark.asyncio

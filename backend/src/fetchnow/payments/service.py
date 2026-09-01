@@ -31,6 +31,7 @@ from fetchnow.payments.robokassa import (
     signature_matches,
 )
 from fetchnow.payments.states import PaymentOrderState
+from fetchnow.premium.service import PremiumEntitlementService
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +164,10 @@ class PaymentService:
         self._validate_callback_snapshot(row)
         now = await repo.database_now()
         transitioned = await repo.mark_paid(row, now=now)
+        if row.status == PaymentOrderState.PAID.value:
+            await PremiumEntitlementService().ensure_for_paid_order(
+                row, session=session
+            )
         return CallbackResult(inv_id=inv_id, transitioned=transitioned)
 
     @staticmethod

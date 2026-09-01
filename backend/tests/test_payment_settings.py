@@ -104,3 +104,28 @@ def test_invalid_secret_is_redacted_from_validation_error() -> None:
     with pytest.raises(ValidationError) as caught:
         _test_settings(ROBOKASSA_TEST_PASSWORD1=secret)
     assert secret.strip() not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ROBOKASSA_TEST_PASSWORD1", "'secret'"),
+        ("ROBOKASSA_TEST_PASSWORD1", '"secret"'),
+        ("ROBOKASSA_TEST_PASSWORD2", "'secret-two'"),
+        ("ROBOKASSA_TEST_PASSWORD2", '"secret-two"'),
+    ],
+)
+def test_wrapped_quotes_in_robokassa_passwords_are_rejected(
+    field: str, value: str
+) -> None:
+    with pytest.raises(ValidationError, match="unquoted"):
+        _test_settings(**{field: value})
+
+
+def test_unquoted_robokassa_passwords_are_accepted() -> None:
+    settings = _test_settings(
+        ROBOKASSA_TEST_PASSWORD1="plain-secret-one",
+        ROBOKASSA_TEST_PASSWORD2="plain-secret-two",
+    )
+    assert settings.robokassa_test_password1.get_secret_value() == "plain-secret-one"
+    assert settings.robokassa_test_password2.get_secret_value() == "plain-secret-two"
