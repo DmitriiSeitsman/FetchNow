@@ -122,6 +122,37 @@ _SAFE_PROCESS_EXIT_CATEGORIES = frozenset(
     {"ZERO", "NONZERO", "TIMEOUT", "SIGNALLED", "CANCELLED"}
 )
 
+_PAYMENT_AUDIT_LOGGER = "fetchnow.payments.audit"
+_PAYMENT_AUDIT_FIELDS = (
+    "payment_order_fingerprint",
+    "provider_invoice_id",
+    "previous_status",
+    "new_status",
+    "signature_valid",
+    "amount_match",
+    "is_test",
+)
+_SAFE_PAYMENT_FINGERPRINT = re.compile(r"^[0-9a-f]{16}$")
+_SAFE_PAYMENT_STATES = frozenset({"created", "pending", "paid", "expired"})
+
+
+def _safe_payment_audit_value(field: str, value: Any) -> Any | None:
+    if field == "payment_order_fingerprint":
+        if isinstance(value, str) and _SAFE_PAYMENT_FINGERPRINT.fullmatch(value):
+            return value
+        return None
+    if field == "provider_invoice_id":
+        return (
+            value
+            if type(value) is int and 1 <= value <= 9_223_372_036_854_775_807
+            else None
+        )
+    if field in {"previous_status", "new_status"}:
+        return value if value in _SAFE_PAYMENT_STATES else None
+    if field in {"signature_valid", "amount_match", "is_test"}:
+        return value if type(value) is bool else None
+    return None
+
 
 def _safe_download_diagnostic_value(field: str, value: Any) -> Any | None:
     """Validate diagnostic extras again at the final serialization boundary."""
@@ -179,6 +210,11 @@ class JsonFormatter(logging.Formatter):
                 value = _safe_download_diagnostic_value(field, value)
             if value is not None:
                 payload[field] = value
+        if record.name == _PAYMENT_AUDIT_LOGGER:
+            for field in _PAYMENT_AUDIT_FIELDS:
+                value = _safe_payment_audit_value(field, getattr(record, field, None))
+                if value is not None:
+                    payload[field] = value
         if record.name == _DOWNLOAD_DIAGNOSTICS_LOGGER:
             for field in _DOWNLOAD_DIAGNOSTIC_FIELDS:
                 value = _safe_download_diagnostic_value(

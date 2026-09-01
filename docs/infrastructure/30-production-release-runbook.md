@@ -576,6 +576,59 @@ SEO, provider acquisition, and muxing configuration must remain unchanged.
 Parallel responses may aggregate approximately N × 512 KiB/s; B3 is not a
 global or per-identity bandwidth cap.
 
+#### Later PRD2-A1 Robokassa test-mode activation (not performed by implementation task)
+
+A1 is test-only. Live merchant activation (`Запрос на активацию`) is **not**
+required for A1 test integration. The FetchNow merchant exists with separate
+test Password #1 and Password #2 configured; live payments remain impossible
+(`ROBOKASSA_MODE=live` is rejected at startup).
+
+**Confirmed merchant cabinet settings (operator evidence, 2026-09-01):**
+
+| Setting | Value | Method |
+|---|---|---|
+| MerchantLogin | `fetchnow` | — |
+| Classic TEST signature algorithm | SHA256 | — |
+| ResultURL | `https://fetchnow.online/api/v1/payments/robokassa/result` | POST |
+| SuccessURL | `https://fetchnow.online/payment/success/` | GET |
+| FailURL | `https://fetchnow.online/payment/fail/` | GET |
+
+ResultURL is the **only** payment-authoritative transition source. SuccessURL and
+FailURL are browser UX only and must not mutate order state.
+
+**Operator test activation env bundle** (deploy-time API recreate only; never
+runtime-config; passwords live only in host secrets):
+
+```env
+ROBOKASSA_MODE=test
+ROBOKASSA_MERCHANT_LOGIN=fetchnow
+ROBOKASSA_SIGNATURE_ALGORITHM=sha256
+ROBOKASSA_TEST_AMOUNT_MINOR=100
+ROBOKASSA_RECEIPT_TAX=<verify separately>
+ROBOKASSA_RECEIPT_PAYMENT_METHOD=<verify separately>
+ROBOKASSA_ORDER_TTL_SECONDS=3600
+PUBLIC_SEARCH_INDEXING_ENABLED=false
+```
+
+`ROBOKASSA_TEST_AMOUNT_MINOR=100` means **1.00 RUB** and is explicitly
+test-only. It is not the future Premium price, a commercial offer, or a
+production/live tariff. Production commercial pricing remains undecided.
+
+**Fiscalization — open until verified separately** (does not block committing
+A1 code; may block later fiscal/live acceptance):
+
+- Робочеки СМЗ configuration
+- connection/authorization with «Мой налог»
+- exact `ROBOKASSA_RECEIPT_TAX` value
+- exact `ROBOKASSA_RECEIPT_PAYMENT_METHOD` value (`full_payment` vs
+  `full_prepayment`)
+- whether buyer email is required
+- test-mode receipt behavior in Robokassa
+
+Schema rollout may ship with `ROBOKASSA_MODE=disabled` and migration
+`0008_payment_orders`. Test activation is a separate operator-approved API
+recreate after fiscal profile values are chosen for the test receipt.
+
 ### Post-merge operator sequence
 
 Use only `make production-release-*`. No manual `docker compose up`, no
