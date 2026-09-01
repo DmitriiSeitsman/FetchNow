@@ -97,6 +97,7 @@ def _settings(url: str) -> Settings:
 
 
 async def _cleanup(session: AsyncSession) -> None:
+    await session.execute(text("DELETE FROM premium_entitlements"))
     await session.execute(text("DELETE FROM payment_orders"))
     await session.execute(text("DELETE FROM free_download_quota_entries"))
     await session.execute(text("DELETE FROM anonymous_clients"))

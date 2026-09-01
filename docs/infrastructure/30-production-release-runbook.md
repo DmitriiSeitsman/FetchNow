@@ -610,6 +610,11 @@ ROBOKASSA_ORDER_TTL_SECONDS=3600
 PUBLIC_SEARCH_INDEXING_ENABLED=false
 ```
 
+Store `ROBOKASSA_TEST_PASSWORD1` and `ROBOKASSA_TEST_PASSWORD2` **without**
+surrounding single or double quotes in `.env.production`. Literal quote
+characters in the secret value cause Robokassa signature error 29; the API
+rejects wrapped secrets at startup rather than stripping them silently.
+
 `ROBOKASSA_TEST_AMOUNT_MINOR=100` means **1.00 RUB** and is explicitly
 test-only. It is not the future Premium price, a commercial offer, or a
 production/live tariff. Production commercial pricing remains undecided.
