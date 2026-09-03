@@ -89,7 +89,12 @@ def _rendered(
     rate: str = "524288",
     extra_api: dict[str, str] | None = None,
 ) -> dict:
-    api = {"FREE_DOWNLOAD_QUOTA_ENABLED": quota, **(extra_api or {})}
+    api = {
+        "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
+        **(extra_api or {}),
+    }
     return {
         "services": {
             "api": {"environment": api},
@@ -123,6 +128,8 @@ def _live(
     env = {service: {} for service in ids}
     env["api"] = {
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
         **(extra_api or {}),
     }
     env["delivery"] = {
@@ -138,9 +145,12 @@ def _after(
     limiter: str = "false",
     rate: str = "524288",
     changed_service: str = "api",
+    changed_services: tuple[str, ...] | None = None,
 ):
     ids, env = _live(quota, limiter=limiter, rate=rate)
-    ids[changed_service] = f"{changed_service}-new"
+    services = changed_services if changed_services is not None else (changed_service,)
+    for service in services:
+        ids[service] = f"{service}-new"
     return ids, env
 
 
@@ -329,7 +339,9 @@ def _patch_transaction(
 
 def test_fingerprint_is_stable_and_domain_separated() -> None:
     runtime_a = runtime_config_fingerprint(_runtime("false"))
-    runtime_b = runtime_config_fingerprint(dict(reversed(list(_runtime("false").items()))))
+    runtime_b = runtime_config_fingerprint(
+        dict(reversed(list(_runtime("false").items())))
+    )
     assert runtime_a == runtime_b
     assert runtime_a != build_config_fingerprint(_build_values())
 
@@ -357,7 +369,7 @@ def test_allowlist_and_wiring_are_narrow() -> None:
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND",
             "FREE_DELIVERY_RATE_LIMIT_ENABLED",
         )
-    ) == ("delivery",)
+    ) == ("api", "delivery")
     assert set(BUILD_TIME_CONFIG) >= {
         "PUBLIC_MEDIA_FLOW_ENABLED",
         "PUBLIC_SEARCH_INDEXING_ENABLED",
@@ -400,12 +412,20 @@ def test_rendered_compose_receiver_drift_fails_closed() -> None:
         runtime_values_from_compose(rendered)
 
 
+def test_missing_api_free_rate_receivers_fail_closed() -> None:
+    rendered = _rendered("true")
+    del rendered["services"]["api"]["environment"]["FREE_DELIVERY_RATE_LIMIT_ENABLED"]
+    del rendered["services"]["api"]["environment"][
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND"
+    ]
+    with pytest.raises(ConfigContractError, match="receiver drift"):
+        runtime_values_from_compose(rendered)
+
+
 def test_service_without_environment_is_an_empty_runtime_map() -> None:
     rendered = _rendered("false")
     del rendered["services"]["gateway"]["environment"]
-    assert runtime_values_from_compose(rendered) == {
-        **_runtime("false")
-    }
+    assert runtime_values_from_compose(rendered) == {**_runtime("false")}
 
 
 def test_state_round_trip_and_tamper_rejection(tmp_path: Path) -> None:
@@ -549,7 +569,7 @@ def test_quota_false_to_true_recreates_only_api_and_commits(
     ("target_limiter", "target_rate"),
     [("true", "524288"), ("false", "1048576"), ("true", "1048576")],
 )
-def test_delivery_runtime_changes_recreate_only_delivery_once(
+def test_delivery_runtime_changes_recreate_api_and_delivery_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     target_limiter: str,
@@ -567,15 +587,15 @@ def test_delivery_runtime_changes_recreate_only_delivery_once(
                 "false",
                 limiter=target_limiter,
                 rate=target_rate,
-                changed_service="delivery",
+                changed_services=("api", "delivery"),
             ),
         ],
     )
     _persist_state(inp.deploy_root)
     result = run_config_rollout(inp)
     assert result.ok and result.status == STATUS_COMMITTED
-    assert calls["activate"] == [("delivery",)]
-    assert calls["wait"] == [("delivery",)]
+    assert calls["activate"] == [("api", "delivery")]
+    assert calls["wait"] == [("api", "delivery")]
     state = load_runtime_config_state(inp.deploy_root)
     assert state is not None
     assert state.runtime_values == _runtime(
@@ -583,7 +603,7 @@ def test_delivery_runtime_changes_recreate_only_delivery_once(
     )
 
 
-def test_delivery_runtime_health_failure_rolls_back_delivery_only(
+def test_delivery_runtime_health_failure_rolls_back_api_and_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import fetchnow_release.config_rollout as module
@@ -595,8 +615,12 @@ def test_delivery_runtime_health_failure_rolls_back_delivery_only(
         target_limiter="true",
         inspections=[
             _live("false"),
-            _after("false", limiter="true", changed_service="delivery"),
-            _after("false", changed_service="delivery"),
+            _after(
+                "false",
+                limiter="true",
+                changed_services=("api", "delivery"),
+            ),
+            _after("false", changed_services=("api", "delivery")),
         ],
     )
     _persist_state(inp.deploy_root)
@@ -611,7 +635,7 @@ def test_delivery_runtime_health_failure_rolls_back_delivery_only(
     monkeypatch.setattr(module, "stabilize_full_health", health)
     result = run_config_rollout(inp)
     assert not result.ok and result.status == STATUS_ROLLED_BACK
-    assert calls["activate"] == [("delivery",), ("delivery",)]
+    assert calls["activate"] == [("api", "delivery"), ("api", "delivery")]
     state = load_runtime_config_state(inp.deploy_root)
     assert state is not None
     assert state.runtime_values == _runtime("false")

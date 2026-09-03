@@ -99,6 +99,24 @@ def test_option_id_mismatch_rejected() -> None:
     assert exc.value.code == DownloadErrorCode.FORMAT_UNAVAILABLE
 
 
+def test_internal_free_policy_roundtrip_persists_rate() -> None:
+    payload = attach_effective_policy_snapshot(
+        encode_selected_format_snapshot(_format()),
+        EffectiveDownloadPolicy(
+            tier="free",
+            download_limit=3,
+            quota_window_seconds=86_400,
+            delivery_rate_bytes_per_second=524_288,
+            premium_expires_at=None,
+        ),
+    )
+    policy = decode_effective_policy_snapshot(payload)
+    assert policy is not None
+    assert policy.tier == "free"
+    assert policy.delivery_rate_bytes_per_second == 524_288
+    assert payload["effectiveDownloadPolicy"]["deliveryRateBytesPerSecond"] == 524_288
+
+
 def test_internal_premium_policy_roundtrip_is_not_in_public_format() -> None:
     expires_at = datetime(2026, 9, 4, tzinfo=UTC)
     payload = attach_effective_policy_snapshot(

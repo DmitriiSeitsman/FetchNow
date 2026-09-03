@@ -107,6 +107,10 @@ services:
       FREE_DOWNLOAD_WINDOW_SECONDS: ${FREE_DOWNLOAD_WINDOW_SECONDS:-86400}
       ANONYMOUS_CLIENT_TTL_SECONDS: ${ANONYMOUS_CLIENT_TTL_SECONDS:-31536000}
       FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS: ${FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS:-172800}
+      # Same non-secret product-policy inputs as delivery: API snapshots the
+      # effective Free/Premium rate at admission. Defaults stay fail-closed.
+      FREE_DELIVERY_RATE_LIMIT_ENABLED: ${FREE_DELIVERY_RATE_LIMIT_ENABLED:-false}
+      FREE_DELIVERY_RATE_BYTES_PER_SECOND: ${FREE_DELIVERY_RATE_BYTES_PER_SECOND:-524288}
       # PRD2-A1 Robokassa is API-only, deploy-time, test-only, and disabled by
       # default. SHA256 confirmed for FetchNow test merchant (MerchantLogin
       # fetchnow). Live merchant activation is not required for A1 test mode. Secrets never reach worker/delivery/web or runtime-config.

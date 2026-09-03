@@ -60,8 +60,8 @@ The initial mutation allowlist is intentionally narrow:
 | Key | Classification | Runtime receiver | Config rollout |
 |---|---|---|---|
 | `FREE_DOWNLOAD_QUOTA_ENABLED` | runtime-only | `api` | allowed |
-| `FREE_DELIVERY_RATE_LIMIT_ENABLED` | runtime-only | `delivery` | allowed |
-| `FREE_DELIVERY_RATE_BYTES_PER_SECOND` | runtime-only bounded integer | `delivery` | allowed |
+| `FREE_DELIVERY_RATE_LIMIT_ENABLED` | runtime-only | `api`, `delivery` | allowed |
+| `FREE_DELIVERY_RATE_BYTES_PER_SECOND` | runtime-only bounded integer | `api`, `delivery` | allowed |
 | `FREE_DOWNLOAD_LIMIT` | runtime-wired | `api`, `worker` | classified, not allowlisted |
 | `FREE_DOWNLOAD_WINDOW_SECONDS` | runtime-wired | `api`, `worker` | classified, not allowlisted |
 | `FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS` | runtime-wired | `api`, `worker` | classified, not allowlisted |
@@ -118,10 +118,12 @@ Only then is `runtime-config.json` committed.
 A same-fingerprint request returns `already-active-config` and does not recreate
 containers.
 
-For either B3 key the affected set is exactly `delivery`. Changing the flag,
-the rate, or both recreates delivery once with the accepted immutable API image
-ID; API, worker, web, gateway, and PostgreSQL remain unchanged. The rate uses
-canonical unsigned decimal syntax and is bounded to 262144..67108864 bytes/s.
+For either B3 key the affected set is `api` and `delivery`. Changing the flag,
+the rate, or both recreates those two services once with the accepted immutable
+API image ID; worker, web, gateway, and PostgreSQL remain unchanged. The rate
+uses canonical unsigned decimal syntax and is bounded to 262144..67108864
+bytes/s. API and delivery must receive identical product-policy values so
+admission snapshots match live delivery fallback.
 
 ## Rollback
 

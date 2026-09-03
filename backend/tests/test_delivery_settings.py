@@ -129,3 +129,32 @@ def test_delivery_uses_admission_policy_snapshot_without_expiry_polling() -> Non
         job=MagicMock(), now=now, policy=effective_download_policy(settings)
     )
     assert service.delivery_rate_bytes_per_second_for(new_free_authz) == 524_288
+
+    legacy_authz = DeliveryAuthorization(job=MagicMock(), now=now, policy=None)
+    assert service.delivery_rate_bytes_per_second_for(legacy_authz) == 524_288
+
+
+def test_legacy_fallback_respects_disabled_free_rate_switch() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL=_DB,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=False,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+    )
+    service = DeliveryService(settings)
+    now = datetime.now(tz=UTC)
+    assert service.delivery_rate_bytes_per_second is None
+    assert (
+        service.delivery_rate_bytes_per_second_for(
+            DeliveryAuthorization(job=MagicMock(), now=now, policy=None)
+        )
+        is None
+    )
+    assert (
+        service.delivery_rate_bytes_per_second_for(
+            DeliveryAuthorization(
+                job=MagicMock(), now=now, policy=effective_download_policy(settings)
+            )
+        )
+        is None
+    )

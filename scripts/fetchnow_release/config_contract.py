@@ -29,10 +29,10 @@ class RuntimeConfigSpec:
 RUNTIME_CONFIG_ALLOWLIST: dict[str, RuntimeConfigSpec] = {
     "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
     "FREE_DELIVERY_RATE_LIMIT_ENABLED": RuntimeConfigSpec(
-        ("delivery",), "boolean"
+        ("api", "delivery"), "boolean"
     ),
     "FREE_DELIVERY_RATE_BYTES_PER_SECOND": RuntimeConfigSpec(
-        ("delivery",),
+        ("api", "delivery"),
         "integer",
         minimum=262_144,
         maximum=67_108_864,
@@ -58,8 +58,8 @@ BUILD_TIME_CONFIG: dict[str, tuple[str, ...]] = {
 # review. Only keys also present in RUNTIME_CONFIG_ALLOWLIST may change.
 RUNTIME_WIRING: dict[str, tuple[str, ...]] = {
     "FREE_DOWNLOAD_QUOTA_ENABLED": ("api",),
-    "FREE_DELIVERY_RATE_LIMIT_ENABLED": ("delivery",),
-    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": ("delivery",),
+    "FREE_DELIVERY_RATE_LIMIT_ENABLED": ("api", "delivery"),
+    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": ("api", "delivery"),
     "FREE_DOWNLOAD_LIMIT": ("api", "worker"),
     "FREE_DOWNLOAD_WINDOW_SECONDS": ("api", "worker"),
     "FREE_DOWNLOAD_QUOTA_RETENTION_SECONDS": ("api", "worker"),
