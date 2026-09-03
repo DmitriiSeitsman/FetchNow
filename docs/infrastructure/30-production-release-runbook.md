@@ -564,7 +564,7 @@ container edits.
 3. In a separate operator-approved activation, keep rate `524288`, change only
    `FREE_DELIVERY_RATE_LIMIT_ENABLED=true`, and run
    `make production-release-config-rollout EXPECTED_REVISION=<active-sha>`.
-   Exactly `delivery` must be recreated with the same immutable image ID.
+   Exactly `api` and `delivery` must be recreated with the same immutable image ID.
 4. Run official health, then controlled full and Range measurement smoke. At
    512 KiB/s expect roughly 3m20s/100 MiB, 16m40s/500 MiB, and 34m08s/1 GiB.
    Output cadence is about 125 ms per 64 KiB chunk, so existing gateway/host

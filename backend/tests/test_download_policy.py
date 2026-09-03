@@ -40,6 +40,51 @@ def _settings(*, robokassa_mode: str = "disabled") -> Settings:
     )
 
 
+def test_disabled_free_rate_switch_projects_none() -> None:
+    policy = effective_download_policy(
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL=_DB,
+            FREE_DOWNLOAD_LIMIT=3,
+            FREE_DOWNLOAD_WINDOW_SECONDS=86_400,
+            FREE_DELIVERY_RATE_LIMIT_ENABLED=False,
+            FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+        )
+    )
+    assert policy.tier == "free"
+    assert policy.delivery_rate_bytes_per_second is None
+
+
+def test_disabled_free_rate_switch_agrees_with_delivery() -> None:
+    from fetchnow.delivery.service import DeliveryService
+
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL=_DB,
+        FREE_DOWNLOAD_LIMIT=3,
+        FREE_DOWNLOAD_WINDOW_SECONDS=86_400,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=False,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+    )
+    policy = effective_download_policy(settings)
+    delivery = DeliveryService(settings)
+    assert policy.delivery_rate_bytes_per_second is None
+    assert delivery.delivery_rate_bytes_per_second is None
+
+
+def test_free_policy_rate_matches_delivery_fallback() -> None:
+    from fetchnow.delivery.service import DeliveryService
+
+    settings = _settings()
+    policy = effective_download_policy(settings)
+    delivery = DeliveryService(settings)
+    assert policy.delivery_rate_bytes_per_second == 524_288
+    assert delivery.delivery_rate_bytes_per_second == 524_288
+    assert (
+        policy.delivery_rate_bytes_per_second == delivery.delivery_rate_bytes_per_second
+    )
+
+
 def test_absent_or_inactive_entitlement_projects_free_policy() -> None:
     settings = _settings()
     for capability in (

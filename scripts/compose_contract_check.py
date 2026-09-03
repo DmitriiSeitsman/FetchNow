@@ -18,7 +18,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run_compose(args: list[str], *, env: dict[str, str] | None = None) -> dict[str, Any]:
+def _run_compose(
+    args: list[str], *, env: dict[str, str] | None = None
+) -> dict[str, Any]:
     cmd = ["docker", "compose", *args, "config", "--format", "json"]
     merged = os.environ.copy()
     if env:
@@ -142,9 +144,7 @@ def _check_no_bind_mounts(cfg: dict[str, Any], label: str) -> None:
                 continue
             source = mount.split(":", 1)[0]
             if source.startswith(".") or source.startswith("/"):
-                raise SystemExit(
-                    f"FAIL: {label}: service {name} bind mount {mount!r}"
-                )
+                raise SystemExit(f"FAIL: {label}: service {name} bind mount {mount!r}")
 
 
 def _check_no_reload_command(cfg: dict[str, Any], label: str) -> None:
@@ -169,11 +169,21 @@ def check_dev_config() -> None:
     _check_no_container_name(cfg, "dev")
     _check_volumes_project_scoped(cfg, "dev")
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
+    for required in (
+        "gateway",
+        "api",
+        "worker",
+        "postgres",
+        "web",
+        "delivery",
+        "storage-init",
+    ):
         _assert(required in services, f"dev: missing service {required}")
     # Local override publishes gateway 8080 and api 8000.
     _assert(_has_host_ports(services["gateway"]), "dev: gateway should publish a port")
-    _assert(_has_host_ports(services["api"]), "dev: api debug port expected via override")
+    _assert(
+        _has_host_ports(services["api"]), "dev: api debug port expected via override"
+    )
     _assert(not _has_host_ports(services["postgres"]), "dev: postgres must not publish")
     _assert(not _has_host_ports(services["worker"]), "dev: worker must not publish")
     _assert(not _has_host_ports(services["delivery"]), "dev: delivery must not publish")
@@ -263,7 +273,15 @@ def check_staging_config() -> None:
     _check_no_reload_command(cfg, "staging")
 
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
+    for required in (
+        "gateway",
+        "api",
+        "worker",
+        "postgres",
+        "web",
+        "delivery",
+        "storage-init",
+    ):
         _assert(required in services, f"staging: missing service {required}")
 
     for name in ("api", "worker", "web", "postgres", "delivery", "storage-init"):
@@ -449,7 +467,15 @@ def check_production_config() -> None:
     _check_no_reload_command(cfg, "production")
 
     services = _services(cfg)
-    for required in ("gateway", "api", "worker", "postgres", "web", "delivery", "storage-init"):
+    for required in (
+        "gateway",
+        "api",
+        "worker",
+        "postgres",
+        "web",
+        "delivery",
+        "storage-init",
+    ):
         _assert(required in services, f"production: missing service {required}")
 
     for name in ("api", "worker", "web", "postgres", "delivery", "storage-init"):
@@ -498,8 +524,7 @@ def check_production_config() -> None:
         "production example: PUBLIC_MEDIA_FLOW_ENABLED must stay false",
     )
     _assert(
-        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower()
-        == "false",
+        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower() == "false",
         "production example: PUBLIC_SEARCH_INDEXING_ENABLED must stay false",
     )
     worker_env = _service_environment(services["worker"])
@@ -526,9 +551,28 @@ def check_production_config() -> None:
         "production example: Free delivery shaping must stay false",
     )
     _assert(
-        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", ""))
-        == "524288",
+        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
         "production example: Free delivery rate candidate must be 524288",
+    )
+    api_env = _service_environment(services["api"])
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "production example: Free delivery shaping must stay false on api",
+    )
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
+        "production example: Free delivery rate candidate must be 524288 on api",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED")
+        == delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED"),
+        "production example: API and delivery Free rate switch must match",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND")
+        == delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND"),
+        "production example: API and delivery Free rate candidate must match",
     )
     _assert(
         str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
@@ -637,7 +681,6 @@ def check_production_missing_revision_fails() -> None:
     print("OK: production fail-closed for missing FETCHNOW_RELEASE_REVISION")
 
 
-
 def check_isolation_render() -> None:
     a = _run_compose(
         ["-f", "compose.yaml"],
@@ -647,8 +690,12 @@ def check_isolation_render() -> None:
         ["-f", "compose.yaml"],
         env={"COMPOSE_PROJECT_NAME": "fetchnow-isolation-b"},
     )
-    a_vols = {k: v.get("name") for k, v in _volume_defs(a).items() if isinstance(v, dict)}
-    b_vols = {k: v.get("name") for k, v in _volume_defs(b).items() if isinstance(v, dict)}
+    a_vols = {
+        k: v.get("name") for k, v in _volume_defs(a).items() if isinstance(v, dict)
+    }
+    b_vols = {
+        k: v.get("name") for k, v in _volume_defs(b).items() if isinstance(v, dict)
+    }
     _assert(
         a_vols.get("pgdata") == "fetchnow-isolation-a_pgdata",
         f"isolation-a pgdata unexpected: {a_vols}",
@@ -701,8 +748,7 @@ def check_media_jobs_env_split() -> None:
         "base: MEDIA_JOBS_ENABLED must default false on api",
     )
     _assert(
-        str(api_env.get("MEDIA_DOWNLOADS_ENABLED", "false")).lower()
-        in {"false", "0"},
+        str(api_env.get("MEDIA_DOWNLOADS_ENABLED", "false")).lower() in {"false", "0"},
         "base: MEDIA_DOWNLOADS_ENABLED must default false on api",
     )
     _assert(
@@ -716,16 +762,33 @@ def check_media_jobs_env_split() -> None:
         "base: Free delivery shaping must default false on delivery",
     )
     _assert(
-        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", ""))
-        == "524288",
+        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
         "base: Free delivery rate candidate must default 524288",
     )
-    for service_name, env in (("api", api_env), ("worker", worker_env)):
-        _assert(
-            "FREE_DELIVERY_RATE_LIMIT_ENABLED" not in env
-            and "FREE_DELIVERY_RATE_BYTES_PER_SECOND" not in env,
-            f"base: {service_name} must not receive Free delivery shaping config",
-        )
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "true")).lower()
+        in {"false", "0"},
+        "base: Free delivery shaping must default false on api",
+    )
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
+        "base: Free delivery rate candidate must default 524288 on api",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED")
+        == delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED"),
+        "base: API and delivery Free rate switch must match",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND")
+        == delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND"),
+        "base: API and delivery Free rate candidate must match",
+    )
+    _assert(
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED" not in worker_env
+        and "FREE_DELIVERY_RATE_BYTES_PER_SECOND" not in worker_env,
+        "base: worker must not receive Free delivery shaping config",
+    )
     _assert(
         str(api_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "false")).lower()
         in {"false", "0"},
@@ -810,9 +873,7 @@ def check_media_jobs_env_split() -> None:
         "base: delivery must not publish host ports",
     )
     print("OK: media jobs env split (api vs worker)")
-    print(
-        "OK: delivery isolation (ro volume, no configured yt-dlp path, no host port)"
-    )
+    print("OK: delivery isolation (ro volume, no configured yt-dlp path, no host port)")
 
 
 def check_free_quota_env_split() -> None:
@@ -1148,8 +1209,7 @@ def check_media_flow_flag() -> None:
     )
     staging_args = _web_build_args(_services(staging)["web"])
     _assert(
-        str(staging_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "false")).lower()
-        == "false",
+        str(staging_args.get("PUBLIC_MEDIA_FLOW_ENABLED", "false")).lower() == "false",
         "staging: PUBLIC_MEDIA_FLOW_ENABLED must default false",
     )
     production = _run_compose(
@@ -1199,6 +1259,9 @@ def check_production_media_activation_interpolation() -> None:
             "\nMEDIA_BROWSER_DELIVERY_ENABLED=false\n": (
                 "\nMEDIA_BROWSER_DELIVERY_ENABLED=true\n"
             ),
+            "\nFREE_DELIVERY_RATE_LIMIT_ENABLED=false\n": (
+                "\nFREE_DELIVERY_RATE_LIMIT_ENABLED=true\n"
+            ),
         }
         for old, new in replacements.items():
             _assert(old in text, f"activation fixture missing {old}")
@@ -1227,8 +1290,7 @@ def check_production_media_activation_interpolation() -> None:
         "activation: web build arg PUBLIC_MEDIA_FLOW_ENABLED must interpolate true",
     )
     _assert(
-        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower()
-        == "false",
+        str(web_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "true")).lower() == "false",
         "activation: PUBLIC_SEARCH_INDEXING_ENABLED must stay false",
     )
     _assert_loopback_gateway(services["gateway"], label="activation")
@@ -1268,8 +1330,7 @@ def check_production_media_activation_interpolation() -> None:
         "activation: worker MEDIA_DOWNLOADS_ENABLED must interpolate true",
     )
     _assert(
-        str(worker_env.get("MEDIA_MUXING_ENABLED", "true")).lower()
-        in {"false", "0"},
+        str(worker_env.get("MEDIA_MUXING_ENABLED", "true")).lower() in {"false", "0"},
         "activation: MEDIA_MUXING_ENABLED must stay false",
     )
     _assert(
@@ -1282,9 +1343,39 @@ def check_production_media_activation_interpolation() -> None:
         f"activation: delivery root must be absolute, got {delivery_root!r}",
     )
     _assert(
-        str(delivery_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "")).lower()
-        == "true",
+        str(delivery_env.get("MEDIA_BROWSER_DELIVERY_ENABLED", "")).lower() == "true",
         "activation: delivery MEDIA_BROWSER_DELIVERY_ENABLED must interpolate true",
+    )
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "")).lower() == "true",
+        "activation: api FREE_DELIVERY_RATE_LIMIT_ENABLED must interpolate true",
+    )
+    _assert(
+        str(api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
+        "activation: api FREE_DELIVERY_RATE_BYTES_PER_SECOND must interpolate 524288",
+    )
+    _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED", "")).lower() == "true",
+        "activation: delivery FREE_DELIVERY_RATE_LIMIT_ENABLED must interpolate true",
+    )
+    _assert(
+        str(delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND", "")) == "524288",
+        "activation: delivery FREE_DELIVERY_RATE_BYTES_PER_SECOND must interpolate 524288",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED")
+        == delivery_env.get("FREE_DELIVERY_RATE_LIMIT_ENABLED"),
+        "activation: API and delivery Free rate switch must match",
+    )
+    _assert(
+        api_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND")
+        == delivery_env.get("FREE_DELIVERY_RATE_BYTES_PER_SECOND"),
+        "activation: API and delivery Free rate candidate must match",
+    )
+    _assert(
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED" not in worker_env
+        and "FREE_DELIVERY_RATE_BYTES_PER_SECOND" not in worker_env,
+        "activation: worker must not receive Free delivery shaping config",
     )
     print("OK: production media activation interpolates UI on, indexing/muxing off")
 
@@ -1297,8 +1388,7 @@ def check_search_indexing_flag() -> None:
     )
     args = _web_build_args(_services(cfg)["web"])
     _assert(
-        str(args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "false")).lower()
-        == "false",
+        str(args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "false")).lower() == "false",
         "base: PUBLIC_SEARCH_INDEXING_ENABLED must default false",
     )
     staging = _run_compose(
@@ -1316,8 +1406,7 @@ def check_search_indexing_flag() -> None:
     )
     staging_args = _web_build_args(_services(staging)["web"])
     _assert(
-        str(staging_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "")).lower()
-        == "false",
+        str(staging_args.get("PUBLIC_SEARCH_INDEXING_ENABLED", "")).lower() == "false",
         "staging: PUBLIC_SEARCH_INDEXING_ENABLED must be hard-coded false",
     )
     production_off = _run_compose(
@@ -1361,9 +1450,7 @@ def check_search_indexing_flag() -> None:
 def check_browser_grant_uuid4_route() -> None:
     """Public grant delivery paths must use exact lowercase canonical UUID4."""
     text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
-    exact = (
-        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-    )
+    exact = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
     _assert(
         f"/api/v1/media/browser-grants/{exact}/content" in text,
         "gateway: browser-grants location must use exact UUID4 grammar",
