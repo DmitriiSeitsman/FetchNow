@@ -54,7 +54,7 @@ async def test_quota_bootstrap_returns_safe_status_and_secure_cookie() -> None:
         raw_token=token,
         cookie_max_age=31_536_000,
     )
-    status = QuotaStatus("free", 3, 1, 1, 1, None)
+    status = QuotaStatus("free", 3, 1, 1, 1, None, 86_400, None)
 
     class StubQuotaService(QuotaService):
         async def bootstrap_identity(self, **_kwargs: object) -> AnonymousIdentity:
@@ -73,6 +73,8 @@ async def test_quota_bootstrap_returns_safe_status_and_secure_cookie() -> None:
         "downloadsUsed": 1,
         "downloadsReserved": 1,
         "downloadsRemaining": 1,
+        "windowSeconds": 86_400,
+        "premiumExpiresAt": None,
         "resetAt": None,
     }
     cookie = response.headers["set-cookie"]
@@ -83,6 +85,41 @@ async def test_quota_bootstrap_returns_safe_status_and_secure_cookie() -> None:
     assert "Path=/" in cookie
     assert "Domain=" not in cookie
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_quota_endpoint_returns_safe_nullable_premium_contract() -> None:
+    settings = Settings(APP_ENV="test", FREE_DOWNLOAD_QUOTA_ENABLED=True)
+    expires_at = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    identity = AnonymousIdentity(
+        id=uuid.uuid4(), expires_at=expires_at + timedelta(days=365)
+    )
+    status = QuotaStatus("premium", None, None, None, None, None, None, expires_at)
+
+    class StubQuotaService(QuotaService):
+        async def bootstrap_identity(self, **_kwargs: object) -> AnonymousIdentity:
+            return identity
+
+        async def status(self, **_kwargs: object) -> QuotaStatus:
+            return status
+
+    client, _app = await _client_with_state(settings, StubQuotaService(settings))
+    async with client:
+        response = await client.get("/api/v1/media/quota")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "tier": "premium",
+        "downloadLimit": None,
+        "downloadsUsed": None,
+        "downloadsReserved": None,
+        "downloadsRemaining": None,
+        "windowSeconds": None,
+        "premiumExpiresAt": "2026-09-04T12:00:00Z",
+        "resetAt": None,
+    }
+    assert "entitlement" not in response.text
+    assert "payment" not in response.text
 
 
 @pytest.mark.asyncio

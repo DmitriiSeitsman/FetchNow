@@ -9,11 +9,13 @@ from datetime import datetime
 @dataclass(frozen=True, slots=True)
 class QuotaStatus:
     tier: str
-    download_limit: int
-    downloads_used: int
-    downloads_reserved: int
-    downloads_remaining: int
+    download_limit: int | None
+    downloads_used: int | None
+    downloads_reserved: int | None
+    downloads_remaining: int | None
     reset_at: datetime | None
+    window_seconds: int | None = None
+    premium_expires_at: datetime | None = None
 
 
 class AnonymousIdentityRequiredError(Exception):

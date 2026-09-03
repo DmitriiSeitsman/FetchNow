@@ -35,6 +35,8 @@ from fetchnow.downloads.progress import (
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import format_snapshot_from_media_format
 from fetchnow.downloads.snapshot_codec import (
+    attach_effective_policy_snapshot,
+    decode_effective_policy_snapshot,
     decode_selected_format_snapshot,
     encode_selected_format_snapshot,
 )
@@ -45,7 +47,7 @@ from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
 from fetchnow.media_inspection.models import FormatCategory, MediaFormat
 from fetchnow.quota.errors import AnonymousIdentityRequiredError
-from fetchnow.quota.policy import effective_download_policy
+from fetchnow.quota.policy import EffectiveDownloadPolicy, effective_download_policy
 from fetchnow.quota.service import QuotaService
 
 
@@ -74,6 +76,7 @@ class DownloadJobView:
     artifact_bytes: int | None = None
     suggested_filename: str = ""
     created: bool = False
+    effective_policy: EffectiveDownloadPolicy | None = None
 
     def __repr__(self) -> str:
         return (
@@ -218,14 +221,20 @@ class DownloadJobService:
             suggested_filename=filename,
             job_id=job_id,
         )
-        if created and self._settings.free_download_quota_enabled:
-            if anonymous_client_id is None:
-                raise AnonymousIdentityRequiredError()
-            await QuotaService(self._settings).admit_locked(
-                identity_id=anonymous_client_id,
-                download_job_id=job.id,
-                reservation_expires_at=job.expires_at,
-                session=session,
+        if created:
+            policy = effective_download_policy(self._settings)
+            if self._settings.free_download_quota_enabled:
+                if anonymous_client_id is None:
+                    raise AnonymousIdentityRequiredError()
+                admission = await QuotaService(self._settings).admit_locked(
+                    identity_id=anonymous_client_id,
+                    download_job_id=job.id,
+                    reservation_expires_at=job.expires_at,
+                    session=session,
+                )
+                policy = admission.policy
+            job.selected_format_snapshot = attach_effective_policy_snapshot(
+                snapshot, policy
             )
         await session.flush()
         return self._to_view(job, created=created)
@@ -328,6 +337,19 @@ class DownloadJobService:
                 internal_reason="PERSISTED_SNAPSHOT_INVALID",
             )
 
+    def _effective_policy_snapshot(
+        self, job: MediaDownloadJob
+    ) -> EffectiveDownloadPolicy:
+        """Read policy-at-admission; legacy rows retain fail-closed Free policy."""
+        try:
+            policy = decode_effective_policy_snapshot(job.selected_format_snapshot)
+        except DownloadError:
+            raise_download_error(
+                DownloadErrorCode.INTERNAL_ERROR,
+                internal_reason="PERSISTED_POLICY_SNAPSHOT_INVALID",
+            )
+        return policy or effective_download_policy(self._settings)
+
     def _to_view(
         self,
         job: MediaDownloadJob,
@@ -404,6 +426,7 @@ class DownloadJobService:
             artifact_bytes=self._public_artifact_bytes(job, state),
             suggested_filename=self._public_suggested_filename(job, selected),
             created=created,
+            effective_policy=self._effective_policy_snapshot(job),
         )
 
     @staticmethod
@@ -477,7 +500,7 @@ class DownloadJobService:
 
         Cache-Control: no-store is the API layer's responsibility.
         """
-        policy = effective_download_policy(self._settings)
+        policy = view.effective_policy or effective_download_policy(self._settings)
         return {
             "id": str(view.id),
             "mediaJobId": str(view.media_job_id),

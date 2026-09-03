@@ -62,11 +62,12 @@ reservations even when `FREE_DOWNLOAD_QUOTA_ENABLED` is later false; that flag
 controls only admission of new quota-governed downloads in the API.
 
 Status returns `tier`, `downloadLimit`, `downloadsUsed`, `downloadsReserved`,
-`downloadsRemaining`, and `resetAt`. Reservations reduce remaining capacity but
-cannot promise a reset time. Thus used=2/reserved=1 reports remaining=0 and
-`resetAt=null`; used=3/reserved=0 reports the oldest counted success plus 24
-hours. PostgreSQL time is authoritative for cutoff, reservation expiry,
-consumption, and reset calculation.
+`downloadsRemaining`, `windowSeconds`, `premiumExpiresAt`, and `resetAt`.
+Reservations reduce remaining capacity but cannot promise a reset time. Thus
+used=2/reserved=1 reports remaining=0 and `resetAt=null`; used=3/reserved=0
+reports the oldest counted success plus 24 hours. PostgreSQL time is
+authoritative for cutoff, reservation expiry, consumption, and reset
+calculation.
 
 This is a best-effort anonymous Free entitlement, not an anti-fraud identity.
 Deleting the cookie, private browsing, or using another browser/device can
@@ -88,8 +89,8 @@ FREE_DELIVERY_RATE_BYTES_PER_SECOND=524288
 The selected production candidate is 512 KiB/s per HTTP response. Validated
 rates are bounded to 256 KiB/s through 64 MiB/s. The central effective policy
 uses `delivery_rate_bytes_per_second=None` while shaping is disabled; the same
-representation can describe a future unlimited Premium policy without adding
-Premium entitlement behavior now.
+representation also describes the unlimited delivery policy of an active
+Premium admission.
 
 The shared Bearer and browser-grant iterator paces every chunk, including the
 first, with a monotonic virtual-finish deadline. Full and single-Range 200/206
@@ -101,9 +102,21 @@ The limit is deliberately per response. Parallel responses can achieve roughly
 N times the configured rate, bounded only by process-local delivery concurrency
 and infrastructure. Aggregate identity/IP shaping is not claimed or implemented.
 
-## Future Premium boundary
+## Premium policy integration (PRD2-A3.1)
 
-Premium and Robokassa are outside B1–B3. Future entitlement resolution should
-produce one effective policy containing the download limit, delivery rate, and
-allowed combined/audio-only/video-only products. Download, grant, and delivery
-code should consume that policy instead of scattering tier branches.
+The server resolves the A2 entitlement capability into one effective download
+policy. Free remains three successful downloads per rolling 86,400 seconds and
+512 KiB/s per response. While an entitlement is active, Premium has no download
+count limit and no FetchNow product-level delivery rate cap. Infrastructure
+safety limits and artifact authorization remain unchanged.
+
+Only Free admissions create quota reservations, so Premium downloads never
+increase the later Free rolling count. Existing Free successes remain intact
+and resume their normal rolling-window effect when Premium expires. Entitlement
+activity is evaluated with PostgreSQL time for each new admission; the resulting
+server-generated policy is stored in the download job snapshot. That snapshot
+governs subsequent delivery without polling entitlement state mid-stream.
+
+This integration is independent of Robokassa mode and adds no Premium media
+formats: combined Free-eligible selection rules remain unchanged. It also adds
+no Premium UI, account, second cookie, or client-authoritative policy input.

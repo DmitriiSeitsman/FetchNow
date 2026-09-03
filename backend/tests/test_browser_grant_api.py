@@ -30,6 +30,8 @@ from fetchnow.downloads.grant_service import BrowserGrantService, IssuedBrowserG
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.jobs.credentials import generate_access_token
 from fetchnow.network.client import SafeHTTPClient
+from fetchnow.premium.policy import PremiumCapability
+from fetchnow.quota.policy import effective_download_policy
 from fetchnow.resolution.defaults import build_wrapper_registry
 from fetchnow.resolution.service import ResolutionService
 from fetchnow.url.dns import FakeDnsResolver
@@ -444,6 +446,45 @@ async def test_browser_grant_delivery_uses_server_side_pacer(
     assert response.status_code == 206
     assert response.content == meta["payload"][:4]
     assert paced == [4]
+
+
+@pytest.mark.asyncio
+async def test_browser_grant_premium_snapshot_bypasses_product_pacer(
+    grant_delivery_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, meta, grant_id, raw_token, service = grant_delivery_client
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=1)
+    premium_policy = effective_download_policy(
+        _api_settings(
+            FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+            FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+        ),
+        PremiumCapability(True, expires_at, "premium_24h"),
+    )
+
+    async def authorize(
+        self: DeliveryService, **_kwargs: Any
+    ) -> DeliveryAuthorization:
+        return DeliveryAuthorization(
+            job=_job_row(meta),
+            now=datetime.now(tz=UTC),
+            policy=premium_policy,
+        )
+
+    paced: list[int] = []
+
+    async def record_pace(self: MonotonicBytePacer, byte_count: int) -> None:
+        paced.append(byte_count)
+
+    monkeypatch.setattr(type(service), "authorize_browser_grant", authorize)
+    monkeypatch.setattr(MonotonicBytePacer, "pace", record_pace)
+    response = await client.get(
+        f"/api/v1/media/browser-grants/{grant_id}/content",
+        headers={"Cookie": f"{COOKIE_NAME}={raw_token}"},
+    )
+    assert response.status_code == 200
+    assert response.content == meta["payload"]
+    assert paced == []
 
 
 @pytest.mark.asyncio

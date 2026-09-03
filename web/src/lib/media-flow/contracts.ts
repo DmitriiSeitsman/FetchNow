@@ -298,17 +298,34 @@ const FREE_QUOTA_KEYS = new Set([
   "downloadsUsed",
   "downloadsReserved",
   "downloadsRemaining",
+  "windowSeconds",
+  "premiumExpiresAt",
   "resetAt",
 ]);
 
-export type FreeQuota = {
+type FreeQuotaLimited = {
   tier: "free";
   downloadLimit: number;
   downloadsUsed: number;
   downloadsReserved: number;
   downloadsRemaining: number;
   resetAt: string | null;
+  windowSeconds?: number;
+  premiumExpiresAt?: null;
 };
+
+type PremiumQuota = {
+  tier: "premium";
+  downloadLimit: null;
+  downloadsUsed: null;
+  downloadsReserved: null;
+  downloadsRemaining: null;
+  resetAt: null;
+  windowSeconds: null;
+  premiumExpiresAt: string;
+};
+
+export type FreeQuota = FreeQuotaLimited | PremiumQuota;
 
 export function parseFreeQuota(value: unknown): FreeQuota {
   if (!isRecord(value)) {
@@ -316,6 +333,28 @@ export function parseFreeQuota(value: unknown): FreeQuota {
   }
   rejectForbidden(value);
   rejectUnknown(value, FREE_QUOTA_KEYS);
+  if (value.tier === "premium") {
+    if (
+      value.downloadLimit !== null ||
+      value.downloadsUsed !== null ||
+      value.downloadsReserved !== null ||
+      value.downloadsRemaining !== null ||
+      value.resetAt !== null ||
+      value.windowSeconds !== null
+    ) {
+      fail();
+    }
+    return {
+      tier: "premium",
+      downloadLimit: null,
+      downloadsUsed: null,
+      downloadsReserved: null,
+      downloadsRemaining: null,
+      resetAt: null,
+      windowSeconds: null,
+      premiumExpiresAt: requireIso(value.premiumExpiresAt),
+    };
+  }
   if (value.tier !== "free") {
     fail();
   }
@@ -340,6 +379,14 @@ export function parseFreeQuota(value: unknown): FreeQuota {
     downloadsReserved,
     downloadsRemaining,
     resetAt: value.resetAt === null ? null : requireIso(value.resetAt),
+    ...(value.windowSeconds === undefined
+      ? {}
+      : { windowSeconds: requireIntegerInRange(value.windowSeconds, 1, 31_536_000) }),
+    ...(value.premiumExpiresAt === undefined
+      ? {}
+      : value.premiumExpiresAt === null
+        ? { premiumExpiresAt: null }
+        : fail()),
   };
 }
 
