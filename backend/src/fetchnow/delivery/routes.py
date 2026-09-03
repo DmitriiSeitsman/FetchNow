@@ -148,6 +148,7 @@ async def _handle_content(
             )
         handle = service.open_artifact(authz)
         artifact = handle.artifact
+        delivery_rate = service.delivery_rate_bytes_per_second_for(authz)
 
         selected: ByteRange | None = None
         range_header = request.headers.get("range")
@@ -202,14 +203,14 @@ async def _handle_content(
             nonlocal permit_held
             bytes_sent = 0
             started = time.monotonic()
-            rate = service.delivery_rate_bytes_per_second
+            rate = delivery_rate
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
                     start=start,
                     length=length,
                     chunk_bytes=service.chunk_bytes,
-                    rate_bytes_per_second=service.delivery_rate_bytes_per_second,
+                    rate_bytes_per_second=delivery_rate,
                 ):
                     bytes_sent += len(chunk)
                     yield chunk
@@ -364,6 +365,7 @@ async def _handle_browser_grant_content(
             )
         handle = service.open_artifact(authz)
         artifact = handle.artifact
+        delivery_rate = service.delivery_rate_bytes_per_second_for(authz)
 
         selected: ByteRange | None = None
         range_header = request.headers.get("range")
@@ -419,14 +421,14 @@ async def _handle_browser_grant_content(
             nonlocal permit_held
             bytes_sent = 0
             started = time.monotonic()
-            rate = service.delivery_rate_bytes_per_second
+            rate = delivery_rate
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
                     start=start,
                     length=length,
                     chunk_bytes=service.chunk_bytes,
-                    rate_bytes_per_second=service.delivery_rate_bytes_per_second,
+                    rate_bytes_per_second=delivery_rate,
                 ):
                     bytes_sent += len(chunk)
                     yield chunk

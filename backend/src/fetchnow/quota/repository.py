@@ -77,7 +77,9 @@ class QuotaRepository:
         now: datetime,
         policy: EffectiveDownloadPolicy,
     ) -> QuotaStatus:
-        cutoff = now - timedelta(seconds=policy.window_seconds)
+        if policy.download_limit is None or policy.quota_window_seconds is None:
+            raise QuotaInvariantError("unlimited policy cannot enter Free accounting")
+        cutoff = now - timedelta(seconds=policy.quota_window_seconds)
         used = int(
             await self._session.scalar(
                 select(func.count(FreeDownloadQuotaEntry.id)).where(
@@ -117,7 +119,7 @@ class QuotaRepository:
             )
             if isinstance(releasing_consumption, datetime):
                 reset_at = releasing_consumption + timedelta(
-                    seconds=policy.window_seconds
+                    seconds=policy.quota_window_seconds
                 )
         return QuotaStatus(
             tier=policy.tier,
@@ -126,6 +128,8 @@ class QuotaRepository:
             downloads_reserved=reserved,
             downloads_remaining=max(0, policy.download_limit - used - reserved),
             reset_at=reset_at,
+            window_seconds=policy.quota_window_seconds,
+            premium_expires_at=None,
         )
 
     async def reserve_locked(

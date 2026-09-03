@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,7 +17,11 @@ from fetchnow.downloads.browser_grant_tokens import (
     hash_grant_token,
     parse_grant_token,
 )
-from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
+from fetchnow.downloads.errors import (
+    DownloadError,
+    DownloadErrorCode,
+    raise_download_error,
+)
 from fetchnow.downloads.filename import (
     content_disposition_header,
     fallback_filename,
@@ -25,12 +30,15 @@ from fetchnow.downloads.filename import (
 from fetchnow.downloads.grant_repository import BrowserGrantRepository
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.repository import MediaDownloadJobRepository
+from fetchnow.downloads.snapshot_codec import decode_effective_policy_snapshot
 from fetchnow.downloads.states import MediaDownloadJobState
 from fetchnow.jobs.credentials import hash_access_token, tokens_match
 from fetchnow.jobs.errors import JobError, JobErrorCode
 from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
 from fetchnow.quota.policy import EffectiveDownloadPolicy, effective_download_policy
+
+logger = logging.getLogger("fetchnow.delivery.service")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -39,6 +47,7 @@ class DeliveryAuthorization:
 
     job: MediaDownloadJob
     now: datetime
+    policy: EffectiveDownloadPolicy | None = None
 
     def __repr__(self) -> str:
         return (
@@ -87,6 +96,26 @@ class DeliveryService:
     @property
     def delivery_rate_bytes_per_second(self) -> int | None:
         return self._policy.delivery_rate_bytes_per_second
+
+    def delivery_rate_bytes_per_second_for(
+        self, authz: DeliveryAuthorization
+    ) -> int | None:
+        """Return the admission snapshot rate, or legacy fail-closed Free rate."""
+        if authz.policy is None:
+            return self.delivery_rate_bytes_per_second
+        return authz.policy.delivery_rate_bytes_per_second
+
+    def _policy_for_job(self, job: MediaDownloadJob) -> EffectiveDownloadPolicy:
+        try:
+            policy = decode_effective_policy_snapshot(job.selected_format_snapshot)
+        except DownloadError:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        resolved = policy or self._policy
+        logger.info("delivery_policy_applied tier=%s", resolved.tier)
+        return resolved
 
     async def authorize(
         self,
@@ -155,7 +184,7 @@ class DeliveryService:
             )
 
         self._assert_ready_pointer(job)
-        return DeliveryAuthorization(job=job, now=now)
+        return DeliveryAuthorization(job=job, now=now, policy=self._policy_for_job(job))
 
     async def authorize_browser_grant(
         self,
@@ -247,7 +276,7 @@ class DeliveryService:
                 internal_reason="GRANT_ARTIFACT_MISMATCH",
             )
 
-        return DeliveryAuthorization(job=job, now=now)
+        return DeliveryAuthorization(job=job, now=now, policy=self._policy_for_job(job))
 
     def open_artifact(self, authz: DeliveryAuthorization) -> OpenArtifactHandle:
         """Open the published artifact through the read-only reader."""

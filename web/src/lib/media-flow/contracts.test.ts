@@ -71,6 +71,25 @@ describe("contracts", () => {
     ).toThrow(FlowError);
   });
 
+  it("accepts nullable Premium quota policy", () => {
+    expect(
+      parseFreeQuota({
+        tier: "premium",
+        downloadLimit: null,
+        downloadsUsed: null,
+        downloadsReserved: null,
+        downloadsRemaining: null,
+        windowSeconds: null,
+        premiumExpiresAt: "2026-09-04T12:00:00Z",
+        resetAt: null,
+      }),
+    ).toMatchObject({
+      tier: "premium",
+      downloadsRemaining: null,
+      premiumExpiresAt: "2026-09-04T12:00:00Z",
+    });
+  });
+
   it("accepts valid create/status inspection payloads", () => {
     const queued = parseInspectionJob(inspectionPayload());
     expect(queued.state).toBe("queued");

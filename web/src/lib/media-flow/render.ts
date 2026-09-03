@@ -97,8 +97,8 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const quotaState = snapshot.freeQuota ?? null;
   const quota = root.querySelector<HTMLElement>("[data-flow-quota]");
   if (quota) {
-    quota.hidden = quotaState === null;
-    if (quotaState !== null) {
+    quota.hidden = quotaState === null || quotaState.tier === "premium";
+    if (quotaState !== null && quotaState.tier === "free") {
       quota.textContent =
         quotaState.downloadsRemaining === 0
           ? "Лимит бесплатных загрузок исчерпан."
@@ -107,7 +107,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   }
   const quotaReset = root.querySelector<HTMLElement>("[data-flow-quota-reset]");
   if (quotaReset) {
-    const resetAt = quotaState?.resetAt ?? null;
+    const resetAt = quotaState?.tier === "free" ? quotaState.resetAt : null;
     quotaReset.hidden = resetAt === null;
     quotaReset.textContent = resetAt
       ? `Следующая загрузка станет доступна ${new Intl.DateTimeFormat("ru-RU", {

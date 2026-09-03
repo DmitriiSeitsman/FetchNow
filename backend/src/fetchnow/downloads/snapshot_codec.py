@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import UTC, datetime
 from typing import Any
 
 from fetchnow.downloads.errors import (
@@ -12,6 +13,7 @@ from fetchnow.downloads.errors import (
     raise_download_error,
 )
 from fetchnow.media_inspection.models import CodecFamily, FormatCategory, MediaFormat
+from fetchnow.quota.policy import EffectiveDownloadPolicy
 
 _SNAPSHOT_KEYS = frozenset(
     {
@@ -28,6 +30,16 @@ _SNAPSHOT_KEYS = frozenset(
         "approxBytes",
         "qualityLabel",
         "freeTierEligible",
+    }
+)
+_POLICY_KEY = "effectiveDownloadPolicy"
+_POLICY_KEYS = frozenset(
+    {
+        "tier",
+        "downloadLimit",
+        "quotaWindowSeconds",
+        "deliveryRateBytesPerSecond",
+        "premiumExpiresAt",
     }
 )
 
@@ -69,6 +81,9 @@ _MAX_STRING_LEN = 64
 _MAX_DIMENSION = 16_384
 _MAX_FPS = 240.0
 _MAX_APPROX_BYTES = 10**12
+_MAX_DOWNLOAD_LIMIT = 100
+_MAX_QUOTA_WINDOW_SECONDS = 604_800
+_MAX_DELIVERY_RATE = 67_108_864
 
 
 def _json_byte_size(payload: Any) -> int:
@@ -90,7 +105,7 @@ def _reject_keys(mapping: dict[str, Any]) -> None:
                 DownloadErrorCode.FORMAT_UNAVAILABLE,
                 internal_reason="SNAPSHOT_FORBIDDEN_KEY",
             )
-        if key not in _SNAPSHOT_KEYS:
+        if key not in _SNAPSHOT_KEYS and key != _POLICY_KEY:
             raise_download_error(
                 DownloadErrorCode.FORMAT_UNAVAILABLE,
                 internal_reason="SNAPSHOT_UNKNOWN_KEY",
@@ -223,9 +238,11 @@ def decode_selected_format_snapshot(
             DownloadErrorCode.FORMAT_UNAVAILABLE,
             internal_reason="SNAPSHOT_TOO_LARGE",
         )
-    if set(payload) != _SNAPSHOT_KEYS:
+    actual_keys = set(payload)
+    allowed_key_sets = (_SNAPSHOT_KEYS, _SNAPSHOT_KEYS | {_POLICY_KEY})
+    if actual_keys not in allowed_key_sets:
         _reject_keys(payload)
-        if set(payload) != _SNAPSHOT_KEYS:
+        if actual_keys not in allowed_key_sets:
             raise_download_error(
                 DownloadErrorCode.FORMAT_UNAVAILABLE,
                 internal_reason="SNAPSHOT_KEY_SET",
@@ -282,3 +299,121 @@ def decode_selected_format_snapshot(
             internal_reason="SNAPSHOT_INVALID",
         )
     return fmt
+
+
+def attach_effective_policy_snapshot(
+    payload: dict[str, object], policy: EffectiveDownloadPolicy
+) -> dict[str, object]:
+    """Attach bounded server-generated policy data to a format snapshot."""
+    decode_selected_format_snapshot(
+        payload,
+        expected_format_option_id=str(payload.get("formatOptionId") or ""),
+    )
+    expires_at = policy.premium_expires_at
+    policy_payload: dict[str, object] = {
+        "tier": policy.tier,
+        "downloadLimit": policy.download_limit,
+        "quotaWindowSeconds": policy.quota_window_seconds,
+        "deliveryRateBytesPerSecond": policy.delivery_rate_bytes_per_second,
+        "premiumExpiresAt": (
+            expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            if expires_at is not None
+            else None
+        ),
+    }
+    result = dict(payload)
+    result[_POLICY_KEY] = policy_payload
+    # Decode the result before persistence so encoder and decoder invariants agree.
+    decode_effective_policy_snapshot(result)
+    if _json_byte_size(result) > _DEFAULT_MAX_JSON_BYTES:
+        raise_download_error(
+            DownloadErrorCode.INTERNAL_ERROR,
+            internal_reason="SNAPSHOT_TOO_LARGE",
+        )
+    return result
+
+
+def decode_effective_policy_snapshot(
+    payload: Any,
+) -> EffectiveDownloadPolicy | None:
+    """Decode an internal policy snapshot; ``None`` denotes a legacy job."""
+    if not isinstance(payload, dict):
+        raise_download_error(
+            DownloadErrorCode.FORMAT_UNAVAILABLE,
+            internal_reason="SNAPSHOT_PAYLOAD_TYPE",
+        )
+    raw = payload.get(_POLICY_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != _POLICY_KEYS:
+        raise_download_error(
+            DownloadErrorCode.FORMAT_UNAVAILABLE,
+            internal_reason="POLICY_SNAPSHOT_KEY_SET",
+        )
+    tier = raw.get("tier")
+    limit = raw.get("downloadLimit")
+    window = raw.get("quotaWindowSeconds")
+    rate = raw.get("deliveryRateBytesPerSecond")
+    expiry_raw = raw.get("premiumExpiresAt")
+    if tier == "free":
+        if (
+            type(limit) is not int
+            or not 1 <= limit <= _MAX_DOWNLOAD_LIMIT
+            or type(window) is not int
+            or not 60 <= window <= _MAX_QUOTA_WINDOW_SECONDS
+            or (
+                rate is not None
+                and (type(rate) is not int or not 262_144 <= rate <= _MAX_DELIVERY_RATE)
+            )
+            or expiry_raw is not None
+        ):
+            raise_download_error(
+                DownloadErrorCode.FORMAT_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        return EffectiveDownloadPolicy(
+            tier="free",
+            download_limit=limit,
+            quota_window_seconds=window,
+            delivery_rate_bytes_per_second=rate,
+            premium_expires_at=None,
+        )
+    if tier == "premium":
+        if limit is not None or window is not None or rate is not None:
+            raise_download_error(
+                DownloadErrorCode.FORMAT_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        if not isinstance(expiry_raw, str) or len(expiry_raw) > _MAX_STRING_LEN:
+            raise_download_error(
+                DownloadErrorCode.FORMAT_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        try:
+            expires_at = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise_download_error(
+                DownloadErrorCode.FORMAT_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        if expires_at.tzinfo is None:
+            raise_download_error(
+                DownloadErrorCode.FORMAT_UNAVAILABLE,
+                internal_reason="POLICY_SNAPSHOT_INVALID",
+            )
+        return EffectiveDownloadPolicy(
+            tier="premium",
+            download_limit=None,
+            quota_window_seconds=None,
+            delivery_rate_bytes_per_second=None,
+            premium_expires_at=expires_at,
+        )
+    raise_download_error(
+        DownloadErrorCode.FORMAT_UNAVAILABLE,
+        internal_reason="POLICY_SNAPSHOT_INVALID",
+    )
+
+
+def strip_effective_policy_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return only the immutable format portion for idempotency comparison."""
+    return {key: value for key, value in payload.items() if key != _POLICY_KEY}

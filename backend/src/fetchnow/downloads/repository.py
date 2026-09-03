@@ -16,6 +16,7 @@ from fetchnow.downloads.progress import (
     DownloadProgressStage,
     assert_progress_transition,
 )
+from fetchnow.downloads.snapshot_codec import strip_effective_policy_snapshot
 from fetchnow.downloads.states import (
     MediaDownloadJobState,
     assert_transition,
@@ -237,7 +238,8 @@ class MediaDownloadJobRepository:
             and existing.port == port
             and int(existing.schema_version) == 1
             and int(existing.max_attempts) == int(max_attempts)
-            and dict(stored_snapshot) == dict(selected_format_snapshot)
+            and strip_effective_policy_snapshot(stored_snapshot)
+            == strip_effective_policy_snapshot(selected_format_snapshot)
         )
 
     async def get_by_id(self, job_id: uuid.UUID) -> MediaDownloadJob | None:

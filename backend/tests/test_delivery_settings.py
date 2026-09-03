@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import ValidationError
 
 from fetchnow.core.config import Settings
+from fetchnow.delivery.service import DeliveryAuthorization, DeliveryService
+from fetchnow.premium.policy import PremiumCapability
 from fetchnow.quota.policy import effective_download_policy
 
 _DB = "postgresql+asyncpg://unused@127.0.0.1:5432/unused"
@@ -100,3 +105,27 @@ def test_effective_free_policy_projects_delivery_and_capabilities() -> None:
         )
     )
     assert enabled.delivery_rate_bytes_per_second == 524_288
+
+
+def test_delivery_uses_admission_policy_snapshot_without_expiry_polling() -> None:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL=_DB,
+        FREE_DELIVERY_RATE_LIMIT_ENABLED=True,
+        FREE_DELIVERY_RATE_BYTES_PER_SECOND=524_288,
+    )
+    service = DeliveryService(settings)
+    now = datetime.now(tz=UTC)
+    admitted_premium = effective_download_policy(
+        settings,
+        PremiumCapability(True, now - timedelta(seconds=1), "premium_24h"),
+    )
+    premium_authz = DeliveryAuthorization(
+        job=MagicMock(), now=now, policy=admitted_premium
+    )
+    assert service.delivery_rate_bytes_per_second_for(premium_authz) is None
+
+    new_free_authz = DeliveryAuthorization(
+        job=MagicMock(), now=now, policy=effective_download_policy(settings)
+    )
+    assert service.delivery_rate_bytes_per_second_for(new_free_authz) == 524_288

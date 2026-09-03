@@ -21,6 +21,8 @@ from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.jobs.credentials import generate_access_token
+from fetchnow.premium.policy import PremiumCapability
+from fetchnow.quota.policy import effective_download_policy
 from fetchnow.quota.repository import QuotaRepository
 
 
@@ -312,6 +314,40 @@ async def test_bearer_full_and_fresh_ranges_use_trusted_pacer(
             assert partial.content == b"0123"
 
     assert paced == [16, 4, 4]
+
+
+@pytest.mark.asyncio
+async def test_premium_admission_snapshot_bypasses_product_pacer(
+    delivery_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, meta, service = delivery_client
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=1)
+    premium_policy = effective_download_policy(
+        service._settings,  # noqa: SLF001 - focused policy boundary test
+        PremiumCapability(True, expires_at, "premium_24h"),
+    )
+
+    async def authorize(self: DeliveryService, **_kwargs: Any) -> DeliveryAuthorization:
+        return DeliveryAuthorization(
+            job=_job_row(meta),
+            now=datetime.now(tz=UTC),
+            policy=premium_policy,
+        )
+
+    paced: list[int] = []
+
+    async def record_pace(self: MonotonicBytePacer, byte_count: int) -> None:
+        paced.append(byte_count)
+
+    monkeypatch.setattr(type(service), "authorize", authorize)
+    monkeypatch.setattr(MonotonicBytePacer, "pace", record_pace)
+    response = await client.get(
+        f"/api/v1/media/download-jobs/{meta['job_id']}/content",
+        headers={"Authorization": f"Bearer {generate_access_token()}"},
+    )
+    assert response.status_code == 200
+    assert response.content == meta["payload"]
+    assert paced == []
 
 
 @pytest.mark.asyncio
