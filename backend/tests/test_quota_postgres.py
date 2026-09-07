@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from fetchnow.core.config import Settings
 from fetchnow.db.session import create_engine, create_session_factory
 from fetchnow.delivery.service import DeliveryService
+from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.service import DownloadJobService
@@ -188,6 +189,64 @@ async def _inspected_parent(session: AsyncSession) -> tuple[MediaJob, str]:
                 "freeTierEligible": True,
             }
         )
+    formats.extend(
+        [
+            {
+                "formatOptionId": "fmt_policy_video_720",
+                "container": "mp4",
+                "width": 1280,
+                "height": 720,
+                "fps": 30.0,
+                "hasVideo": True,
+                "hasAudio": False,
+                "category": "video_only",
+                "videoCodec": "avc",
+                "audioCodec": "none",
+                "approxBytes": 900_000,
+                "qualityLabel": "p720",
+                "freeTierEligible": False,
+                "mediaKind": "video_only",
+                "requiresPremium": True,
+                "bitrateKbps": 1200,
+            },
+            {
+                "formatOptionId": "fmt_policy_audio_128",
+                "container": "m4a",
+                "width": None,
+                "height": None,
+                "fps": None,
+                "hasVideo": False,
+                "hasAudio": True,
+                "category": "audio_only",
+                "videoCodec": "none",
+                "audioCodec": "aac",
+                "approxBytes": 100_000,
+                "qualityLabel": "audio",
+                "freeTierEligible": False,
+                "mediaKind": "audio_only",
+                "requiresPremium": True,
+                "bitrateKbps": 128,
+            },
+            {
+                "formatOptionId": "fmt_policy_audio_192",
+                "container": "webm",
+                "width": None,
+                "height": None,
+                "fps": None,
+                "hasVideo": False,
+                "hasAudio": True,
+                "category": "audio_only",
+                "videoCodec": "none",
+                "audioCodec": "opus",
+                "approxBytes": 150_000,
+                "qualityLabel": "audio",
+                "freeTierEligible": False,
+                "mediaKind": "audio_only",
+                "requiresPremium": True,
+                "bitrateKbps": 192,
+            },
+        ]
+    )
     assert await repo.complete(
         job_id=claimed[0].id,
         owner="policy-test",
@@ -479,6 +538,8 @@ async def test_premium_policy_full_lifecycle_and_snapshot_boundaries(
     settings = _settings(database_url)
     async with session_factory() as session:
         await _cleanup(session)
+
+
         parent = await _parent(session)
         client = await _identity(session)
         order = await _paid_order(session, client_id=client.id)
@@ -684,6 +745,129 @@ async def test_premium_policy_full_lifecycle_and_snapshot_boundaries(
         )
         assert aged_out.downloads_used == 0
         assert aged_out.downloads_remaining == 3
+        await _cleanup(session)
+
+
+@pytest.mark.asyncio
+async def test_media_capability_admission_matrix_and_identity_binding(
+    session_factory: async_sessionmaker[AsyncSession], database_url: str
+) -> None:
+    settings = _settings(database_url)
+    assert settings.robokassa_mode == "disabled"
+    async with session_factory() as session:
+        await _cleanup(session)
+        parent, access_token = await _inspected_parent(session)
+        free_client = await _identity(session)
+        await session.commit()
+        parent_id = parent.id
+        free_client_id = free_client.id
+
+    service = DownloadJobService(settings)
+    async with session_factory() as session:
+        free_normal = await service.create(
+            media_job_id=parent_id,
+            format_option_id="fmt_policy_p720",
+            access_token=access_token,
+            anonymous_client_id=free_client_id,
+            session=session,
+        )
+        assert free_normal.effective_policy is not None
+        assert free_normal.effective_policy.tier == "free"
+        await session.commit()
+
+    for option in ("fmt_policy_audio_128", "fmt_policy_video_720"):
+        with pytest.raises(DownloadError) as exc:
+            async with session_factory() as session:
+                await service.create(
+                    media_job_id=parent_id,
+                    format_option_id=option,
+                    access_token=access_token,
+                    anonymous_client_id=free_client_id,
+                    session=session,
+                )
+        assert exc.value.code is DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM
+        async with session_factory() as session:
+            # Each denied standalone request rolls back without reserving quota.
+            assert (
+                await session.scalar(select(func.count(FreeDownloadQuotaEntry.id)))
+                == 1
+            )
+
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count(FreeDownloadQuotaEntry.id))) == 1
+        premium_client = await _identity(session)
+        other_client = await _identity(session)
+        entitlement = await _active_entitlement(session, client_id=premium_client.id)
+        await session.commit()
+        premium_client_id = premium_client.id
+        other_client_id = other_client.id
+        entitlement_id = entitlement.id
+
+    premium_job_ids: list[uuid.UUID] = []
+    for option in ("fmt_policy_audio_128", "fmt_policy_video_720"):
+        async with session_factory() as session:
+            view = await service.create(
+                media_job_id=parent_id,
+                format_option_id=option,
+                access_token=access_token,
+                anonymous_client_id=premium_client_id,
+                session=session,
+            )
+            assert view.effective_policy is not None
+            assert view.effective_policy.tier == "premium"
+            assert view.effective_policy.delivery_rate_bytes_per_second is None
+            premium_job_ids.append(view.id)
+            await session.commit()
+
+    with pytest.raises(DownloadError) as unavailable_exc:
+        async with session_factory() as session:
+            await service.create(
+                media_job_id=parent_id,
+                format_option_id="fmt_policy_audio_unavailable",
+                access_token=access_token,
+                anonymous_client_id=premium_client_id,
+                session=session,
+            )
+    assert unavailable_exc.value.code is DownloadErrorCode.FORMAT_NOT_FOUND
+
+    async with session_factory() as session:
+        # Premium capability admissions did not add Free reservations.
+        assert await session.scalar(select(func.count(FreeDownloadQuotaEntry.id))) == 1
+        entitlement = await session.get(PremiumEntitlement, entitlement_id)
+        assert entitlement is not None
+        now = await QuotaRepository(session).database_now()
+        entitlement.starts_at = now - timedelta(hours=2)
+        entitlement.expires_at = now - timedelta(hours=1)
+        await session.commit()
+
+    async with session_factory() as session:
+        admitted = await service.create(
+            media_job_id=parent_id,
+            format_option_id="fmt_policy_audio_128",
+            access_token=access_token,
+            anonymous_client_id=premium_client_id,
+            session=session,
+        )
+        assert admitted.id == premium_job_ids[0]
+        assert admitted.effective_policy is not None
+        assert admitted.effective_policy.tier == "premium"
+
+    for identity_id, option in (
+        (premium_client_id, "fmt_policy_audio_192"),
+        (other_client_id, "fmt_policy_audio_128"),
+    ):
+        with pytest.raises(DownloadError) as exc:
+            async with session_factory() as session:
+                await service.create(
+                    media_job_id=parent_id,
+                    format_option_id=option,
+                    access_token=access_token,
+                    anonymous_client_id=identity_id,
+                    session=session,
+                )
+        assert exc.value.code is DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM
+
+    async with session_factory() as session:
         await _cleanup(session)
 
 

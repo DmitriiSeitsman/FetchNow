@@ -55,6 +55,7 @@ from fetchnow.downloads.tool_executable import validate_trusted_executable
 from fetchnow.downloads.ytdlp_download_argv import build_ytdlp_download_argv
 from fetchnow.jobs.target_rebuild import rebuild_resolution_result
 from fetchnow.media_inspection.errors import InspectionError
+from fetchnow.media_inspection.models import MediaKind
 from fetchnow.media_inspection.protocols import ProcessResult
 from fetchnow.media_inspection.registry import InspectionExtractorRegistry
 from fetchnow.media_inspection.service import MediaInspectionService
@@ -281,6 +282,7 @@ class DownloadExecutor:
                 job_id=snap.job_id,
                 format_option_id=snap.format_option_id,
                 expires_at=snap.expires_at,
+                media_kind=selection.media_kind,
             )
             published_orphan = True
 
@@ -421,10 +423,18 @@ class DownloadExecutor:
             provider_registry=self._providers,
             validator=self._validator,
         )
+        persisted = decode_selected_format_snapshot(
+            snap.selected_format_snapshot,
+            expected_format_option_id=snap.format_option_id,
+        )
         assert_operation_allowed(
             self._capabilities,
             provider_id=resolution.provider_id,
-            operation=MediaOperation.DOWNLOAD_VIDEO,
+            operation=(
+                MediaOperation.EXTRACT_AUDIO
+                if persisted.media_kind is MediaKind.AUDIO_ONLY
+                else MediaOperation.DOWNLOAD_VIDEO
+            ),
         )
         draft = await self._inspection.inspect_draft(resolution)
         if (
@@ -436,10 +446,6 @@ class DownloadExecutor:
                 DownloadErrorCode.FORMAT_UNAVAILABLE,
                 internal_reason="IDENTITY_DRIFT",
             )
-        persisted = decode_selected_format_snapshot(
-            snap.selected_format_snapshot,
-            expected_format_option_id=snap.format_option_id,
-        )
         return resolve_selection_from_draft(
             draft,
             self._settings,
@@ -475,6 +481,7 @@ class DownloadExecutor:
             output_template=_OUTPUT_TEMPLATE,
             output_dir=str(workspace.output),
             expected_bytes=selection.approx_bytes,
+            media_kind=selection.media_kind,
         )
 
     async def _run_muxed_download(
@@ -694,6 +701,7 @@ class DownloadExecutor:
         max_bytes: int | None = None,
         min_free_headroom: int = 0,
         expected_bytes: int | None = None,
+        media_kind: MediaKind = MediaKind.NORMAL_VIDEO,
     ) -> None:
         settings = self._settings
         cap = int(settings.media_download_max_bytes if max_bytes is None else max_bytes)
@@ -726,7 +734,9 @@ class DownloadExecutor:
             home_dir=str(workspace.home), tmp_dir=str(workspace.path)
         )
         assert_env_has_no_secrets(env)
-        started, completed, failed, progress = _ytdlp_stage(output_template)
+        started, completed, failed, progress = _ytdlp_stage(
+            output_template, media_kind=media_kind
+        )
         emit_stage_event(
             started,
             download_job_id=str(snap.job_id),
@@ -1126,10 +1136,12 @@ class DownloadExecutor:
 
 def _ytdlp_stage(
     output_template: str,
+    *,
+    media_kind: MediaKind = MediaKind.NORMAL_VIDEO,
 ) -> tuple[
     DownloadStageEvent, DownloadStageEvent, DownloadStageEvent, DownloadProgressStage
 ]:
-    if output_template.startswith("audio/"):
+    if media_kind is MediaKind.AUDIO_ONLY or output_template.startswith("audio/"):
         return (
             DownloadStageEvent.AUDIO_STARTED,
             DownloadStageEvent.AUDIO_COMPLETED,

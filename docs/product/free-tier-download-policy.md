@@ -14,8 +14,9 @@ Approved stream-copy outputs are deliberately narrow:
 
 Incompatible or unknown pairs fail closed. Direct progressive files remain the
 preferred execution path for a quality they already satisfy. Public format
-responses contain only finished combined choices; provider tokens, URLs, and
-standalone source streams remain internal. Free has no separate 720p product
+responses identify finished combined choices and source-native standalone
+choices without exposing provider tokens or URLs. Standalone choices are
+Premium-only at admission and remain hidden by the current Free UI. Free has no separate 720p product
 cap: compatible 1080p is eligible when it remains within configured inspection,
 duration, file-size, disk, and execution bounds.
 
@@ -117,6 +118,34 @@ activity is evaluated with PostgreSQL time for each new admission; the resulting
 server-generated policy is stored in the download job snapshot. That snapshot
 governs subsequent delivery without polling entitlement state mid-stream.
 
-This integration is independent of Robokassa mode and adds no Premium media
-formats: combined Free-eligible selection rules remain unchanged. It also adds
-no Premium UI, account, second cookie, or client-authoritative policy input.
+This integration is independent of Robokassa mode. Combined Free-eligible
+selection rules remain unchanged. It adds no Premium UI, account, second
+cookie, or client-authoritative policy input.
+
+## Premium media capabilities (PRD2-A3.2)
+
+Free continues to admit only ordinary video with audio. An active Premium
+entitlement may additionally admit a real source video-only stream or a real
+source audio-only stream when inspection exposes one. Availability is derived
+from track and codec metadata for the individual media item, not promised by
+provider name. The API marks standalone options with `requiresPremium=true`,
+but the server enforces the policy from the opaque inspected option at
+admission; the browser cannot grant a capability by changing request fields.
+
+Standalone downloads are source-format downloads. Audio-only may therefore be
+M4A/AAC, WebM/Opus, Ogg, or another explicitly supported source container; it
+is not guaranteed MP3. Video-only preserves the actual source video stream and
+does not strip audio from a progressive file. Neither path transcodes. The
+existing mux path remains only for producing normal video with audio and uses
+ffmpeg stream copy.
+
+The selected format and effective capability policy are frozen into the
+server-generated admission snapshot. A Premium standalone job admitted before
+entitlement expiry remains authorized for the same anonymous identity while it
+is prepared and delivered. New admissions after expiry use the Free matrix.
+Premium normal, video-only, and audio-only jobs create no Free quota entry and
+have no product delivery-rate cap; Free normal video retains the configured
+524288 bytes/second rate. Existing byte, duration, disk, timeout, lease,
+ownership, cleanup, and delivery authorization boundaries remain unchanged.
+
+No schema migration or Premium UI is part of A3.2.

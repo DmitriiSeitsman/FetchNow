@@ -57,6 +57,8 @@ const PROGRESS_FOR_STATE: Record<DownloadState, readonly ProgressStage[]> = {
 
 export const FORMAT_CATEGORIES = ["progressive", "video_only", "audio_only"] as const;
 export type FormatCategory = (typeof FORMAT_CATEGORIES)[number];
+export const MEDIA_KINDS = ["normal_video", "video_only", "audio_only"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
 
 export const DOWNLOAD_PERCENT_STAGES = [
   "downloading_video",
@@ -97,7 +99,16 @@ const MAX_FILENAME_CHARS = 255;
 const MAX_FILENAME_UTF8_BYTES = 240;
 const MAX_STEM_CHARS = 80;
 const MAX_STEM_UTF8_BYTES = 180;
-const ALLOWED_CONTAINERS = new Set(["mp4", "webm", "mkv", "m4a", "mp3", "ogg"]);
+const ALLOWED_CONTAINERS = new Set([
+  "mp4",
+  "webm",
+  "mkv",
+  "m4a",
+  "mp3",
+  "ogg",
+  "opus",
+  "aac",
+]);
 
 const FORBIDDEN_KEYS = new Set([
   "url",
@@ -133,6 +144,9 @@ const FORMAT_KEYS = new Set([
   "approxBytes",
   "qualityLabel",
   "freeTierEligible",
+  "mediaKind",
+  "requiresPremium",
+  "bitrateKbps",
 ]);
 
 const RESULT_KEYS = new Set([
@@ -218,6 +232,9 @@ export type MediaFormat = {
   approxBytes: number | null;
   qualityLabel: string;
   freeTierEligible: boolean;
+  mediaKind: MediaKind;
+  requiresPremium: boolean;
+  bitrateKbps: number | null;
 };
 
 export type InspectionResult = {
@@ -872,6 +889,27 @@ export function parseMediaFormat(value: unknown): MediaFormat {
   if (category === "audio_only" && !(!hasVideo && hasAudio)) {
     fail();
   }
+  // Older API payloads contained only ordinary finished A/V options. Missing
+  // A3.2 fields must not turn historical rows into Premium capabilities.
+  const legacyMediaKind: MediaKind = "normal_video";
+  const mediaKindValue = value.mediaKind ?? legacyMediaKind;
+  if (
+    typeof mediaKindValue !== "string" ||
+    !(MEDIA_KINDS as readonly string[]).includes(mediaKindValue) ||
+    (mediaKindValue === "normal_video" && !(hasVideo && hasAudio)) ||
+    (mediaKindValue === "video_only" && !(hasVideo && !hasAudio)) ||
+    (mediaKindValue === "audio_only" && !(!hasVideo && hasAudio))
+  ) {
+    fail();
+  }
+  const mediaKind = mediaKindValue as MediaKind;
+  const requiresPremium =
+    value.requiresPremium === undefined
+      ? mediaKind !== "normal_video"
+      : requireBoolean(value.requiresPremium);
+  if (requiresPremium !== (mediaKind !== "normal_video")) {
+    fail();
+  }
   const container = requireString(value.container, 16);
   if (!/^[a-z0-9]{2,8}$/.test(container)) {
     fail();
@@ -890,6 +928,12 @@ export function parseMediaFormat(value: unknown): MediaFormat {
     approxBytes: optionalFiniteNumber(value.approxBytes),
     qualityLabel: requireString(value.qualityLabel, 32),
     freeTierEligible: requireBoolean(value.freeTierEligible),
+    mediaKind,
+    requiresPremium,
+    bitrateKbps:
+      value.bitrateKbps === undefined
+        ? null
+        : optionalFiniteNumber(value.bitrateKbps),
   };
 }
 

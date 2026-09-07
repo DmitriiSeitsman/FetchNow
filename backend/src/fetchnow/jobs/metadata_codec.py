@@ -10,6 +10,7 @@ from fetchnow.media_inspection.models import (
     CodecFamily,
     FormatCategory,
     MediaFormat,
+    MediaKind,
     MediaMetadata,
 )
 
@@ -43,6 +44,9 @@ _FORMAT_KEYS = frozenset(
         "approxBytes",
         "qualityLabel",
         "freeTierEligible",
+        "mediaKind",
+        "requiresPremium",
+        "bitrateKbps",
     }
 )
 
@@ -132,6 +136,9 @@ def media_metadata_to_jsonable(
                 "approxBytes": fmt.approx_bytes,
                 "qualityLabel": fmt.quality_label,
                 "freeTierEligible": fmt.free_tier_eligible,
+                "mediaKind": fmt.media_kind.value,
+                "requiresPremium": fmt.requires_premium,
+                "bitrateKbps": fmt.bitrate_kbps,
             }
         )
     payload: dict[str, Any] = {
@@ -209,6 +216,11 @@ def media_metadata_from_jsonable(
             )
         _reject_forbidden(item, allow=_FORMAT_KEYS)
         try:
+            category = FormatCategory(str(item["category"]))
+            # Before A3.2, persisted public formats were ordinary finished A/V
+            # only. Missing semantic fields must never grant a Premium kind.
+            legacy_kind = MediaKind.NORMAL_VIDEO
+            media_kind = MediaKind(str(item.get("mediaKind", legacy_kind.value)))
             formats.append(
                 MediaFormat(
                     format_option_id=str(item["formatOptionId"]),
@@ -218,12 +230,20 @@ def media_metadata_from_jsonable(
                     fps=item.get("fps"),
                     has_video=bool(item["hasVideo"]),
                     has_audio=bool(item["hasAudio"]),
-                    category=FormatCategory(str(item["category"])),
+                    category=category,
                     video_codec=CodecFamily(str(item["videoCodec"])),
                     audio_codec=CodecFamily(str(item["audioCodec"])),
                     approx_bytes=item.get("approxBytes"),
                     quality_label=str(item["qualityLabel"]),
                     free_tier_eligible=bool(item["freeTierEligible"]),
+                    media_kind=media_kind,
+                    requires_premium=bool(
+                        item.get(
+                            "requiresPremium",
+                            media_kind is not MediaKind.NORMAL_VIDEO,
+                        )
+                    ),
+                    bitrate_kbps=item.get("bitrateKbps"),
                 )
             )
         except (KeyError, TypeError, ValueError):

@@ -11,6 +11,8 @@ import re
 import unicodedata
 import uuid
 
+from fetchnow.media_inspection.models import MediaKind
+
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _BIDI = dict.fromkeys(
     (
@@ -42,7 +44,9 @@ _RESERVED = frozenset(
     }
 )
 _CONTAINER_RE = re.compile(r"^[a-z0-9]{2,8}$")
-ALLOWED_CONTAINERS = frozenset({"mp4", "webm", "mkv", "m4a", "mp3", "ogg"})
+ALLOWED_CONTAINERS = frozenset(
+    {"mp4", "webm", "mkv", "m4a", "mp3", "ogg", "opus", "aac"}
+)
 MAX_STEM_CHARS = 80  # Unicode code points, not UTF-16 code units
 MAX_STEM_UTF8_BYTES = 180
 MAX_FILENAME_CHARS = 255  # Unicode code points
@@ -59,6 +63,7 @@ def suggested_filename_for(
     title: str | None,
     container: str,
     download_job_id: uuid.UUID,
+    media_kind: MediaKind = MediaKind.NORMAL_VIDEO,
 ) -> str:
     """Deterministic attachment name. Invalid titles use the UUID fallback."""
     ext = _validated_container(container)
@@ -66,6 +71,15 @@ def suggested_filename_for(
     stem = _sanitize_stem(title)
     if stem is None:
         return fallback
+    suffix = {
+        MediaKind.NORMAL_VIDEO: "",
+        MediaKind.VIDEO_ONLY: "-video",
+        MediaKind.AUDIO_ONLY: "-audio",
+    }[media_kind]
+    if suffix:
+        stem = _sanitize_stem(f"{stem}{suffix}")
+        if stem is None:
+            return fallback
     name = f"{stem}.{ext}"
     if not _filename_bounds_ok(name):
         return fallback

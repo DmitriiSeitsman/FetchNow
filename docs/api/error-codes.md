@@ -117,6 +117,8 @@ status exposes `artifactReady` only.
 | `FORMAT_NOT_FOUND` | 404 | Format not found | no | no | Full format lists |
 | `FORMAT_NOT_ELIGIBLE` | 422 | Format not eligible | no | no | Eligibility math, tokens |
 | `FORMAT_UNAVAILABLE` | 422 | Format no longer available | soft | yes (re-inspect) | Provider tokens, drift details |
+| `MEDIA_CAPABILITY_REQUIRES_PREMIUM` | 403 | Active Premium is required for this media option | no | no | Entitlement rows, identity, policy internals |
+| `MEDIA_CAPABILITY_UNAVAILABLE` | 422 | Requested media option is unavailable for this source | no | no | Raw extractor inventory, provider tokens |
 | `DOWNLOAD_TIMEOUT` | 504 | Download timed out | soft | yes (limited) | Tool stderr, argv |
 | `DOWNLOAD_TOO_LARGE` | 413 | Download exceeds allowed size | no | no | Exact byte counters beyond message |
 | `DOWNLOAD_TOOL_FAILED` | 422 | Download tool failed | soft | maybe later | stderr, paths, tokens |

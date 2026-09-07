@@ -41,13 +41,15 @@ _MANIFEST_KEYS = frozenset(
         "expiresAt",
     }
 )
-_ALLOWED_CONTAINERS: dict[str, str] = {
-    "mp4": "video/mp4",
-    "webm": "video/webm",
-    "mkv": "video/x-matroska",
-    "m4a": "audio/mp4",
-    "mp3": "audio/mpeg",
-    "ogg": "audio/ogg",
+_ALLOWED_CONTAINERS: dict[str, frozenset[str]] = {
+    "mp4": frozenset({"video/mp4", "audio/mp4"}),
+    "webm": frozenset({"video/webm", "audio/webm"}),
+    "mkv": frozenset({"video/x-matroska", "audio/x-matroska"}),
+    "m4a": frozenset({"audio/mp4"}),
+    "mp3": frozenset({"audio/mpeg"}),
+    "ogg": frozenset({"audio/ogg"}),
+    "opus": frozenset({"audio/ogg"}),
+    "aac": frozenset({"audio/aac"}),
 }
 _SHA256_HEX_LEN = 64
 _MAX_MANIFEST_BYTES = 4096
@@ -237,7 +239,7 @@ class ArtifactReader:
                 DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
                 internal_reason="DELIVERY_CONTAINER_NOT_ALLOWED",
             )
-        if expected_content_type != _ALLOWED_CONTAINERS[container]:
+        if expected_content_type not in _ALLOWED_CONTAINERS[container]:
             raise_download_error(
                 DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
                 internal_reason="DELIVERY_CONTENT_TYPE_MISMATCH",

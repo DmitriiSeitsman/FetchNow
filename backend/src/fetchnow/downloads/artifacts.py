@@ -21,6 +21,7 @@ from fetchnow.downloads.errors import (
     DownloadErrorCode,
     raise_download_error,
 )
+from fetchnow.media_inspection.models import MediaKind
 
 logger = logging.getLogger("fetchnow.downloads.artifacts")
 
@@ -40,7 +41,9 @@ _MANIFEST_KEYS = frozenset(
         "expiresAt",
     }
 )
-_ALLOWED_CONTAINERS = frozenset({"mp4", "webm", "mkv", "m4a", "mp3", "ogg"})
+_ALLOWED_CONTAINERS = frozenset(
+    {"mp4", "webm", "mkv", "m4a", "mp3", "ogg", "opus", "aac"}
+)
 _CONTENT_TYPES: dict[str, str] = {
     "mp4": "video/mp4",
     "webm": "video/webm",
@@ -48,7 +51,20 @@ _CONTENT_TYPES: dict[str, str] = {
     "m4a": "audio/mp4",
     "mp3": "audio/mpeg",
     "ogg": "audio/ogg",
+    "opus": "audio/ogg",
+    "aac": "audio/aac",
 }
+_ALLOWED_CONTENT_TYPES: dict[str, frozenset[str]] = {
+    container: frozenset({content_type})
+    for container, content_type in _CONTENT_TYPES.items()
+}
+_ALLOWED_CONTENT_TYPES.update(
+    {
+        "mp4": frozenset({"video/mp4", "audio/mp4"}),
+        "webm": frozenset({"video/webm", "audio/webm"}),
+        "mkv": frozenset({"video/x-matroska", "audio/x-matroska"}),
+    }
+)
 _SHA256_HEX_LEN = 64
 _MAX_MANIFEST_BYTES = 4096
 # A zero grace would let one worker delete a publication another worker created
@@ -86,7 +102,9 @@ class AttemptWorkspace:
     output: Path
 
 
-def content_type_for_container(container: str) -> str:
+def content_type_for_container(
+    container: str, media_kind: MediaKind = MediaKind.NORMAL_VIDEO
+) -> str:
     """Map a bounded container token to a safe content type."""
     key = container.strip().lower()
     if key not in _CONTENT_TYPES:
@@ -94,6 +112,13 @@ def content_type_for_container(container: str) -> str:
             DownloadErrorCode.DOWNLOAD_INVALID_OUTPUT,
             internal_reason="UNKNOWN_CONTAINER",
         )
+    if media_kind is MediaKind.AUDIO_ONLY:
+        if key == "mp4":
+            return "audio/mp4"
+        if key == "webm":
+            return "audio/webm"
+        if key == "mkv":
+            return "audio/x-matroska"
     return _CONTENT_TYPES[key]
 
 
@@ -913,6 +938,7 @@ class ArtifactStore:
         job_id: uuid.UUID,
         format_option_id: str,
         expires_at: datetime,
+        media_kind: MediaKind = MediaKind.NORMAL_VIDEO,
     ) -> PublishedArtifact:
         """Validate output/, write private manifest, atomically publish a directory."""
         container = expected_container.strip().lower()
@@ -925,7 +951,7 @@ class ArtifactStore:
         src_fd = self._open_validated_regular(workspace.output, source.name)
         try:
             size_bytes, sha256_hex = self._sha256_fd(src_fd, max_bytes=self._max_bytes)
-            content_type = content_type_for_container(container)
+            content_type = content_type_for_container(container, media_kind)
             artifact_id = uuid.uuid4()
             published_dir = self._published_dir()
             partial = self._resolve_under_root("published", f".partial_{artifact_id}")
@@ -1161,7 +1187,7 @@ class ArtifactStore:
             return None
         if container not in _ALLOWED_CONTAINERS:
             return None
-        if content_type != _CONTENT_TYPES.get(container):
+        if content_type not in _ALLOWED_CONTENT_TYPES.get(container, frozenset()):
             return None
         if not format_option_id or len(format_option_id) > 64:
             return None

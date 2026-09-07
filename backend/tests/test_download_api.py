@@ -200,6 +200,31 @@ async def test_create_response_has_no_path_token_url(
 
 
 @pytest.mark.asyncio
+async def test_create_ignores_client_media_kind_and_uses_format_option_id(
+    enabled_client: AsyncClient,
+) -> None:
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    view = _view()
+    service = MagicMock()
+    service.create = AsyncMock(return_value=view)
+    service.to_public_dict = DownloadJobService(app.state.settings).to_public_dict
+    app.state.download_job_service = service
+
+    response = await enabled_client.post(
+        f"/api/v1/media/jobs/{view.media_job_id}/downloads",
+        json={"formatOptionId": "fmt_abc123", "mediaKind": "audio_only"},
+        headers={"Authorization": f"Bearer {generate_access_token()}"},
+    )
+
+    assert response.status_code == 202
+    kwargs = service.create.await_args.kwargs
+    assert kwargs["format_option_id"] == "fmt_abc123"
+    assert "media_kind" not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_format_ineligible_maps_422(
     enabled_client: AsyncClient,
 ) -> None:
@@ -226,6 +251,38 @@ async def test_format_ineligible_maps_422(
     assert response.json()["error"]["code"] == "FORMAT_NOT_ELIGIBLE"
     assert response.headers.get("cache-control") == "no-store"
     assert _SECRET not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        (DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM, 403),
+        (DownloadErrorCode.MEDIA_CAPABILITY_UNAVAILABLE, 422),
+    ],
+)
+async def test_media_capability_authorization_and_availability_are_distinct(
+    enabled_client: AsyncClient,
+    code: DownloadErrorCode,
+    status: int,
+) -> None:
+    transport = enabled_client._transport
+    assert isinstance(transport, ASGITransport)
+    app = transport.app
+    token = generate_access_token()
+    service = MagicMock()
+    service.create = AsyncMock(side_effect=DownloadError(code))
+    app.state.download_job_service = service
+
+    response = await enabled_client.post(
+        f"/api/v1/media/jobs/{uuid.uuid4()}/downloads",
+        json={"formatOptionId": "fmt_premium_option"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code.value
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.asyncio
@@ -572,7 +629,11 @@ async def test_valid_persisted_snapshot_is_re_encoded_not_echoed(
     )
 
     assert response.status_code == 200
-    assert set(response.json()["selectedFormat"]) == set(_VALID_SNAPSHOT)
+    assert set(response.json()["selectedFormat"]) == set(_VALID_SNAPSHOT) | {
+        "mediaKind",
+        "requiresPremium",
+        "bitrateKbps",
+    }
 
 
 @pytest.mark.asyncio

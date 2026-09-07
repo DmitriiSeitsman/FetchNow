@@ -52,6 +52,9 @@ const SAMPLE_FORMAT: MediaFormat = {
   approxBytes: 1_400_000_000,
   qualityLabel: "1080p",
   freeTierEligible: true,
+  mediaKind: "normal_video",
+  requiresPremium: false,
+  bitrateKbps: null,
 };
 
 function baseSnapshot(overrides: Partial<FlowSnapshot> = {}): FlowSnapshot {

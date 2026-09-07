@@ -19,6 +19,7 @@ from fetchnow.media_inspection.models import (
     FormatCategory,
     InternalFormatCandidate,
     MediaFormat,
+    MediaKind,
     sanitize_title,
 )
 from fetchnow.media_inspection.normalize import (
@@ -414,8 +415,13 @@ def test_free_progressive_does_not_suppress_1080_muxed_quality() -> None:
     meta = _project(_parse(payload), MEDIA_MUXING_ENABLED=True)
 
     assert meta.muxing_required is False
-    assert {fmt.height for fmt in meta.formats} == {360, 1080}
-    assert all(fmt.has_video and fmt.has_audio for fmt in meta.formats)
+    normal = [fmt for fmt in meta.formats if fmt.media_kind is MediaKind.NORMAL_VIDEO]
+    assert {fmt.height for fmt in normal} == {360, 1080}
+    assert all(fmt.has_video and fmt.has_audio for fmt in normal)
+    assert {fmt.media_kind for fmt in meta.formats} >= {
+        MediaKind.VIDEO_ONLY,
+        MediaKind.AUDIO_ONLY,
+    }
 
 
 def test_direct_progressive_suppresses_same_quality_mux_option() -> None:
@@ -453,12 +459,13 @@ def test_direct_progressive_suppresses_same_quality_mux_option() -> None:
     draft = _parse(payload)
     meta = _project(draft, MEDIA_MUXING_ENABLED=True)
 
-    assert len(meta.formats) == 1
+    normal = [fmt for fmt in meta.formats if fmt.media_kind is MediaKind.NORMAL_VIDEO]
+    assert len(normal) == 1
     selection = resolve_selection_from_draft(
         draft,
         settings(MEDIA_MUXING_ENABLED=True),
-        meta.formats[0].format_option_id,
-        meta.formats[0],
+        normal[0].format_option_id,
+        normal[0],
     )
     assert isinstance(selection, DirectDownloadSelection)
 
@@ -604,13 +611,12 @@ def test_codec_aliases_and_lookalikes() -> None:
     assert normalize_codec(None, kind="video") is CodecFamily.NONE
 
 
-def test_public_formats_omit_split_streams() -> None:
+def test_public_formats_expose_split_streams_as_premium_options() -> None:
     draft = _parse(VK_FIXTURE)
     meta = _project(draft)
-    assert all(
-        f.category is FormatCategory.PROGRESSIVE and f.has_video and f.has_audio
-        for f in meta.formats
-    )
+    premium = [fmt for fmt in meta.formats if fmt.requires_premium]
+    assert premium
+    assert all(not fmt.free_tier_eligible for fmt in premium)
     payload = copy.deepcopy(VK_FIXTURE)
     payload["formats"] = [
         {
@@ -634,8 +640,80 @@ def test_public_formats_omit_split_streams() -> None:
     ]
     meta_split = _project(_parse(payload))
     assert meta_split.muxing_required is True
-    assert meta_split.formats == ()
+    assert {fmt.media_kind for fmt in meta_split.formats} == {
+        MediaKind.VIDEO_ONLY,
+        MediaKind.AUDIO_ONLY,
+    }
     meta_mux = _project(_parse(payload), MEDIA_MUXING_ENABLED=True)
     assert meta_mux.muxing_required is False
-    assert meta_mux.formats
-    assert all(f.has_video and f.has_audio for f in meta_mux.formats)
+    assert {fmt.media_kind for fmt in meta_mux.formats} == {
+        MediaKind.NORMAL_VIDEO,
+        MediaKind.VIDEO_ONLY,
+        MediaKind.AUDIO_ONLY,
+    }
+
+
+@pytest.mark.parametrize(
+    ("formats", "expected_kinds"),
+    [
+        (
+            [
+                {
+                    "format_id": "progressive",
+                    "ext": "mp4",
+                    "width": 1280,
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                    "protocol": "https",
+                    "url": "https://example.invalid/progressive",
+                }
+            ],
+            {MediaKind.NORMAL_VIDEO},
+        ),
+        (
+            [
+                {
+                    "format_id": "audio",
+                    "ext": "m4a",
+                    "vcodec": "none",
+                    "acodec": "mp4a",
+                    "abr": 128,
+                    "protocol": "https",
+                    "url": "https://example.invalid/audio",
+                }
+            ],
+            {MediaKind.AUDIO_ONLY},
+        ),
+        (
+            [
+                {
+                    "format_id": "video",
+                    "ext": "webm",
+                    "width": 1920,
+                    "height": 1080,
+                    "vcodec": "vp9",
+                    "acodec": "none",
+                    "protocol": "https",
+                    "url": "https://example.invalid/video",
+                }
+            ],
+            {MediaKind.VIDEO_ONLY},
+        ),
+    ],
+)
+def test_source_inventory_projects_only_real_available_media_kinds(
+    formats: list[dict[str, object]], expected_kinds: set[MediaKind]
+) -> None:
+    payload = copy.deepcopy(VK_FIXTURE)
+    payload["formats"] = formats
+    meta = _project(_parse(payload))
+    assert {fmt.media_kind for fmt in meta.formats} == expected_kinds
+    for fmt in meta.formats:
+        assert fmt.requires_premium is (fmt.media_kind is not MediaKind.NORMAL_VIDEO)
+    audio = next(
+        (fmt for fmt in meta.formats if fmt.media_kind is MediaKind.AUDIO_ONLY), None
+    )
+    if audio is not None:
+        assert audio.bitrate_kbps == 128
+        assert audio.quality_label == "audio"

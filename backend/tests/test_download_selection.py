@@ -15,6 +15,7 @@ from fetchnow.media_inspection.models import (
     FormatCategory,
     InternalFormatCandidate,
     MediaFormat,
+    MediaKind,
 )
 from fetchnow.media_inspection.normalize import format_option_id_for, quality_label_for
 
@@ -84,6 +85,15 @@ def _persisted(candidate: InternalFormatCandidate) -> MediaFormat:
         free_tier_eligible=bool(
             candidate.has_video and candidate.has_audio and candidate.height is not None
         ),
+        media_kind=(
+            MediaKind.NORMAL_VIDEO
+            if candidate.has_video and candidate.has_audio
+            else MediaKind.VIDEO_ONLY
+            if candidate.has_video
+            else MediaKind.AUDIO_ONLY
+        ),
+        requires_premium=not (candidate.has_video and candidate.has_audio),
+        bitrate_kbps=candidate.bitrate_kbps,
     )
 
 
@@ -158,7 +168,7 @@ def test_ineligible_fails() -> None:
     assert exc.value.code == DownloadErrorCode.FORMAT_UNAVAILABLE
 
 
-def test_audio_only_ineligible() -> None:
+def test_audio_only_resolves_as_direct_premium_selection() -> None:
     candidate = InternalFormatCandidate(
         container="m4a",
         width=None,
@@ -172,14 +182,30 @@ def test_audio_only_ineligible() -> None:
         provider_format_token=_SECRET_TOKEN,
     )
     persisted = _persisted(candidate)
-    with pytest.raises(DownloadError) as exc:
-        resolve_selection_from_draft(
-            _draft(candidate),
-            _settings(),
-            persisted.format_option_id,
-            persisted,
-        )
-    assert exc.value.code == DownloadErrorCode.FORMAT_UNAVAILABLE
+    selection = resolve_selection_from_draft(
+        _draft(candidate),
+        _settings(),
+        persisted.format_option_id,
+        persisted,
+    )
+    assert selection.media_kind is MediaKind.AUDIO_ONLY
+    assert selection.has_audio is True
+    assert selection.has_video is False
+
+
+def test_video_only_resolves_one_source_without_audio_or_mux() -> None:
+    candidate = _candidate(has_audio=False)
+    persisted = _persisted(candidate)
+    selection = resolve_selection_from_draft(
+        _draft(candidate),
+        _settings(),
+        persisted.format_option_id,
+        persisted,
+    )
+    assert selection.media_kind is MediaKind.VIDEO_ONLY
+    assert selection.has_video is True
+    assert selection.has_audio is False
+    assert selection.provider_format_token == _SECRET_TOKEN
 
 
 def test_permutation_invariant_option_ids() -> None:

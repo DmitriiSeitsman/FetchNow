@@ -29,7 +29,8 @@ may support quality selection without each media item having every resolution.
 Only `CapabilityState.ENABLED` permits execution. `DISABLED` and `PLANNED`
 both fail closed in runtime paths. The initial matrix preserves the existing
 download-video and quality-selection behavior for VK, Rutube, OK.ru, and Dzen.
-Audio extraction, container selection, live streams, and playlists are disabled;
+Source-native audio extraction is enabled as an execution operation for all
+current providers, while container selection, live streams, and playlists are disabled;
 OK.ru has no separate clip family so `clip` is disabled for that provider;
 Dzen `/shorts/{id}` is an input alias of `/video/watch/{id}` so `clip` stays
 enabled like VK/Rutube; thumbnails are planned because the current extraction
@@ -38,6 +39,12 @@ depend on bounded muxing of DASH webm A/V (`MEDIA_MUXING_ENABLED`) because
 named progressive MP4 rows from the odnoklassniki extractor lack
 codecs/dimensions. Dzen likewise exposes split DASH avc/aac (plus HLS) and
 requires the same mux path for progressive public options.
+
+The operation-level audio flag does not promise that a media item has an audio
+stream and does not grant access. A3.2 derives availability from the inspected
+source inventory and separately requires an active Premium entitlement at
+download admission. The worker repeats the operation check but trusts the
+server-generated admission snapshot rather than querying entitlement state.
 
 `DownloadJobService.create` validates `DOWNLOAD_VIDEO` before enqueueing.
 `DownloadExecutor._resolve_selection` validates it again after rebuilding the

@@ -20,6 +20,14 @@ class FormatCategory(StrEnum):
     AUDIO_ONLY = "audio_only"
 
 
+class MediaKind(StrEnum):
+    """Semantic kind of the final artifact selected by the user."""
+
+    NORMAL_VIDEO = "normal_video"
+    VIDEO_ONLY = "video_only"
+    AUDIO_ONLY = "audio_only"
+
+
 class CodecFamily(StrEnum):
     """Bounded codec families — unknown maps to UNKNOWN, never raw strings."""
 
@@ -98,6 +106,9 @@ class MediaFormat:
     approx_bytes: int | None
     quality_label: str
     free_tier_eligible: bool
+    media_kind: MediaKind = MediaKind.NORMAL_VIDEO
+    requires_premium: bool = False
+    bitrate_kbps: int | None = None
 
     def __post_init__(self) -> None:
         require_safe_token(self.format_option_id, field_name="format_option_id")
@@ -107,6 +118,30 @@ class MediaFormat:
         require_finite_non_negative(self.height, field_name="height")
         require_finite_non_negative(self.fps, field_name="fps", maximum=240.0)
         require_finite_non_negative(self.approx_bytes, field_name="approx_bytes")
+        require_finite_non_negative(
+            self.bitrate_kbps, field_name="bitrate_kbps", maximum=100_000
+        )
+        if self.media_kind is MediaKind.NORMAL_VIDEO and not (
+            self.has_video and self.has_audio
+        ):
+            raise ValueError("normal video requires audio and video")
+        if self.media_kind is MediaKind.VIDEO_ONLY and not (
+            self.has_video and not self.has_audio
+        ):
+            raise ValueError("video-only kind requires only video")
+        if self.media_kind is MediaKind.AUDIO_ONLY and not (
+            self.has_audio and not self.has_video
+        ):
+            raise ValueError("audio-only kind requires only audio")
+        expected_category = {
+            MediaKind.NORMAL_VIDEO: FormatCategory.PROGRESSIVE,
+            MediaKind.VIDEO_ONLY: FormatCategory.VIDEO_ONLY,
+            MediaKind.AUDIO_ONLY: FormatCategory.AUDIO_ONLY,
+        }[self.media_kind]
+        if self.category is not expected_category:
+            raise ValueError("format category must match media kind")
+        if self.requires_premium != (self.media_kind is not MediaKind.NORMAL_VIDEO):
+            raise ValueError("Premium requirement must match media kind")
         if self.has_video and self.width is None and self.height is None:
             raise ValueError("video format requires dimensions or explicit null policy")
         if not self.has_video and not self.has_audio:
@@ -206,6 +241,7 @@ class InternalFormatCandidate:
     # Bounded transport token from yt-dlp (http/https/m3u8/...). Never a URL.
     protocol: str | None = None
     has_drm: bool = False
+    bitrate_kbps: int | None = None
 
     def __repr__(self) -> str:
         return (

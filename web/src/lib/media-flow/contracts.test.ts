@@ -652,6 +652,34 @@ describe("contracts", () => {
     ).toBe(false);
   });
 
+  it("parses Premium source options but keeps them out of the Free selector", () => {
+    const audio = parseMediaFormat({
+      ...progressiveFormat,
+      container: "m4a",
+      width: null,
+      height: null,
+      fps: null,
+      hasVideo: false,
+      hasAudio: true,
+      category: "audio_only",
+      videoCodec: "none",
+      audioCodec: "aac",
+      qualityLabel: "audio",
+      freeTierEligible: false,
+      mediaKind: "audio_only",
+      requiresPremium: true,
+      bitrateKbps: 192,
+    });
+    expect(audio.mediaKind).toBe("audio_only");
+    expect(audio.bitrateKbps).toBe(192);
+    expect(isDownloadEligible(audio)).toBe(false);
+    const legacy: Record<string, unknown> = { ...audio };
+    delete legacy.mediaKind;
+    delete legacy.requiresPremium;
+    delete legacy.bitrateKbps;
+    expect(() => parseMediaFormat(legacy)).toThrow(FlowError);
+  });
+
   it("defaults to the highest server-eligible quality", () => {
     const fmt = (height: number, eligible: boolean, id: string) => ({
       ...progressiveFormat,

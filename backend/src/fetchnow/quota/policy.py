@@ -50,6 +50,9 @@ def effective_download_policy(
             quota_window_seconds=None,
             delivery_rate_bytes_per_second=None,
             premium_expires_at=capability.premium_expires_at,
+            allow_combined=True,
+            allow_audio_only=True,
+            allow_video_only=True,
         )
     return EffectiveDownloadPolicy(
         tier="free",
@@ -61,4 +64,7 @@ def effective_download_policy(
             else None
         ),
         premium_expires_at=None,
+        allow_combined=True,
+        allow_audio_only=False,
+        allow_video_only=False,
     )

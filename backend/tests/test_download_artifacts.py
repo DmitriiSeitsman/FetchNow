@@ -12,10 +12,26 @@ from pathlib import Path
 
 import pytest
 
-from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
+from fetchnow.downloads.artifacts import (
+    MIN_ORPHAN_GRACE_SECONDS,
+    ArtifactStore,
+    content_type_for_container,
+)
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
+from fetchnow.media_inspection.models import MediaKind
 
 _AGED = 7200.0
+
+
+@pytest.mark.parametrize(
+    ("container", "expected"),
+    [("m4a", "audio/mp4"), ("mp4", "audio/mp4"), ("webm", "audio/webm"),
+     ("opus", "audio/ogg"), ("aac", "audio/aac")],
+)
+def test_audio_only_content_type_matches_actual_container(
+    container: str, expected: str
+) -> None:
+    assert content_type_for_container(container, MediaKind.AUDIO_ONLY) == expected
 
 
 def _store(
@@ -257,6 +273,34 @@ def test_reconcile_keeps_referenced_ready_artifact_ids(tmp_path: Path) -> None:
         active_attempts=frozenset(),
         limit=16,
     )
+    assert removed == 0
+    assert dest.is_dir()
+
+
+def test_reconcile_keeps_referenced_audio_in_shared_container(tmp_path: Path) -> None:
+    store = _store(tmp_path / "root", max_bytes=1024, grace=MIN_ORPHAN_GRACE_SECONDS)
+    job_id = uuid.uuid4()
+    workspace = store.create_attempt_workspace(job_id=job_id, attempt=1, fence=1)
+    (workspace.output / "artifact.mp4").write_bytes(b"audio-only")
+    published = store.publish(
+        workspace=workspace,
+        expected_container="mp4",
+        job_id=job_id,
+        format_option_id="fmt_audio",
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+        media_kind=MediaKind.AUDIO_ONLY,
+    )
+    assert published.content_type == "audio/mp4"
+    dest = store.root / "published" / str(published.artifact_id)
+    old = time.time() - _AGED
+    os.utime(dest, (old, old))
+
+    removed = store.reconcile(
+        referenced_artifact_ids=frozenset({published.artifact_id}),
+        active_attempts=frozenset(),
+        limit=16,
+    )
+
     assert removed == 0
     assert dest.is_dir()
 

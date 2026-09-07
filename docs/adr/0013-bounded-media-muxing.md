@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (PR9), amended by PRD1E-B1. The feature is **disabled by default**
+Accepted (PR9), amended by PRD1E-B1 and PRD2-A3.2. The feature is **disabled by default**
 (`MEDIA_MUXING_ENABLED=false`). Progressive direct download is unchanged.
 ffmpeg/ffprobe paths are worker-only. Muxing is a base Free download-engine
 capability, not a Premium entitlement.
@@ -16,7 +16,7 @@ then blocked every quality with “muxing is not offered yet.”
 
 ## Decision
 
-1. Keep the public `MediaFormat` schema. Derived mux options look like the
+1. Derived mux options look like the
    finished progressive artifact (`hasVideo`, `hasAudio`,
    `freeTierEligible`, final container/quality). Source tokens and URLs stay
    on the internal binding model only.
@@ -61,8 +61,9 @@ then blocked every quality with “muxing is not offered yet.”
    oneshot remain valid. The image also precreates
    `/var/lib/fetchnow/tmp/downloads` so a first named-volume copy can include
    the directory.
-8. No database migration. Previously saved PR8 inspection/download snapshots
-   remain readable because the public format schema is unchanged.
+8. No database migration. A3.2 adds backward-compatible semantic fields to
+   JSON snapshots; previously saved snapshots remain ordinary normal-video
+   selections.
 
 ## Consequences
 
@@ -70,10 +71,10 @@ then blocked every quality with “muxing is not offered yet.”
   bookworm `ffmpeg` package) and set absolute paths only on the worker.
 - Enabling muxing does not enable transcoding, cookies, plugins, or
   client-controlled argv.
-- Free users receive only finished combined video+audio choices. Separate
-  audio-only and video-only products remain future Premium scope.
-- Video-only / audio-only rows are used internally for pairing only. They are
-  never projected as public `MediaFormat` download choices.
+- Free users can still admit only finished combined video+audio choices.
+- A3.2 also projects safe opaque source-native video-only and audio-only
+  choices as Premium-required metadata. They never alter mux pairing and are
+  never authorized from client-supplied semantics.
 
 ## Residual risks
 
