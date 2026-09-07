@@ -22,7 +22,7 @@ direct call to the Python activation helper.
 
 `state/current.json` remains schema v2 and continues to describe application
 and database release identity. Config rollout adds the separate
-`state/runtime-config.json` authority. Schema 2 is bound to the active revision and
+`state/runtime-config.json` authority. Schema 3 is bound to the active revision and
 deployment ID and contains only:
 
 - normalized values from the reviewed non-secret runtime allowlist;
@@ -50,8 +50,11 @@ an allowlisted runtime value has already been edited. Repeat initialization
 after every normal source rollout because the deployment binding changes.
 Schema-1 state containing only `FREE_DOWNLOAD_QUOTA_ENABLED` remains readable
 and validates against its original exact key set and fingerprint domain. It is
-never silently padded with B3 values. After the B3 source rollout, explicit
-no-delta initialization writes schema 2 with the live delivery values.
+never silently padded with later values. Schema 2 containing the B3 delivery
+pair also remains readable and is never silently padded with the A3.3 checkout
+flag. After the A3.3 source rollout, explicit no-delta initialization writes
+schema 3 with `PREMIUM_TEST_CHECKOUT_VISIBLE=false` unless an operator has
+already diverged the live environment, in which case initialization fails.
 
 ## Config classification
 
@@ -59,6 +62,7 @@ The initial mutation allowlist is intentionally narrow:
 
 | Key | Classification | Runtime receiver | Config rollout |
 |---|---|---|---|
+| `PREMIUM_TEST_CHECKOUT_VISIBLE` | runtime-only boolean | `api` | allowed |
 | `FREE_DOWNLOAD_QUOTA_ENABLED` | runtime-only | `api` | allowed |
 | `FREE_DELIVERY_RATE_LIMIT_ENABLED` | runtime-only | `api`, `delivery` | allowed |
 | `FREE_DELIVERY_RATE_BYTES_PER_SECOND` | runtime-only bounded integer | `api`, `delivery` | allowed |
@@ -115,6 +119,11 @@ container IDs must remain unchanged. After replacement, scoped health and the
 global official health gate run, followed by revision and DB-head revalidation.
 Only then is `runtime-config.json` committed.
 
+Changing `PREMIUM_TEST_CHECKOUT_VISIBLE` also affects exactly `api`. It never
+recreates worker, delivery, web, gateway, or PostgreSQL and never changes the
+Robokassa mode or credentials. The API derives public checkout availability as
+`ROBOKASSA_MODE=test` **and** `PREMIUM_TEST_CHECKOUT_VISIBLE=true`.
+
 A same-fingerprint request returns `already-active-config` and does not recreate
 containers.
 
@@ -169,3 +178,47 @@ make production-release-health \
 The config command performs its own global health gate; the second command is
 the explicit operator acceptance check. Quota semantic smoke remains a separate
 Stage 2 acceptance step.
+
+## Temporary A3.3 TEST checkout
+
+The source/default state is fail-closed:
+
+```env
+PREMIUM_TEST_CHECKOUT_VISIBLE=false
+PUBLIC_SEARCH_INDEXING_ENABLED=false
+```
+
+After the A3.3 source rollout, first initialize schema 3 with no runtime delta:
+
+```bash
+make production-release-config-rollout \
+  EXPECTED_REVISION=<active-40-char-sha> \
+  INIT_CONFIG=1
+```
+
+For the separately approved browser E2E window, atomically change only
+`PREMIUM_TEST_CHECKOUT_VISIBLE=true`, then run the canonical config rollout and
+health commands. This exposes the explicitly labelled TEST CTA and permits new
+test-order creation only while `ROBOKASSA_MODE=test`; it does not imply a
+commercial price or enable live payments.
+
+Immediately after the E2E, atomically restore only:
+
+```env
+PREMIUM_TEST_CHECKOUT_VISIBLE=false
+```
+
+Then run:
+
+```bash
+make production-release-config-rollout \
+  EXPECTED_REVISION=<active-40-char-sha>
+
+make production-release-health \
+  EXPECTED_REVISION=<active-40-char-sha>
+```
+
+Verify that the TEST CTA is absent and direct creation of a new test order is
+blocked. Turning the flag off must not affect existing Premium entitlements,
+verified ResultURL callbacks, or status reads for already-created orders.
+`PUBLIC_SEARCH_INDEXING_ENABLED` remains `false` throughout.

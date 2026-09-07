@@ -1,0 +1,29 @@
+---
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="Статус тестовой оплаты — FetchNow"
+  description="Проверка статуса тестовой оплаты FetchNow."
+  canonicalPath="/payment/success/"
+  robots="noindex,nofollow"
+>
+  <main class="shell shell-payment">
+    <section class="payment-card" aria-labelledby="payment-title">
+      <span class="test-badge">ТЕСТ</span>
+      <h1 id="payment-title">Проверяем статус оплаты</h1>
+      <p data-payment-status role="status" aria-live="polite">
+        Проверяем статус оплаты…
+      </p>
+      <p class="payment-expiry" data-payment-expiry hidden></p>
+      <p class="hint">Переадресация сама по себе не активирует Premium.</p>
+      <a class="btn btn-ghost" href="/">Вернуться к скачиванию</a>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  import { mountPaymentSuccess } from "../../../lib/premium/payment-status";
+  const root = document.querySelector(".payment-card");
+  if (root) mountPaymentSuccess(root);
+</script>

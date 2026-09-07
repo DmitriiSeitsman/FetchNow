@@ -921,6 +921,7 @@ def check_robokassa_env_split() -> None:
     services = _services(cfg)
     api_env = _service_env(services["api"])
     payment_keys = {
+        "PREMIUM_TEST_CHECKOUT_VISIBLE",
         "ROBOKASSA_MODE",
         "ROBOKASSA_MERCHANT_LOGIN",
         "ROBOKASSA_SIGNATURE_ALGORITHM",
@@ -938,6 +939,11 @@ def check_robokassa_env_split() -> None:
     _assert(
         api_env.get("ROBOKASSA_TEST_AMOUNT_MINOR") == "0",
         "base: Robokassa test amount must not imply a commercial price",
+    )
+    _assert(
+        str(api_env.get("PREMIUM_TEST_CHECKOUT_VISIBLE", "true")).lower()
+        in {"false", "0"},
+        "base: temporary Premium test checkout must default hidden",
     )
     for name in ("worker", "delivery", "web", "gateway", "storage-init"):
         leaked = payment_keys.intersection(_service_env(services[name]))
@@ -1505,7 +1511,7 @@ def check_browser_grant_uuid4_route() -> None:
 
 
 def check_gateway_csp() -> None:
-    """Interactive HTML CSP is same-origin only and is not applied to delivery."""
+    """Interactive CSP permits only same-origin fetches and exact payment POSTs."""
     text = (ROOT / "deploy" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
     _assert(
         "connect-src 'self'" in text,
@@ -1514,6 +1520,16 @@ def check_gateway_csp() -> None:
     _assert(
         "connect-src *" not in text and "connect-src http:" not in text,
         "gateway: CSP must not broaden connect-src to arbitrary origins",
+    )
+    _assert(
+        "form-action 'self' https://auth.robokassa.ru" in text,
+        "gateway: CSP must permit only the exact Robokassa TEST form origin",
+    )
+    _assert(
+        "form-action *" not in text
+        and "form-action https:" not in text
+        and "https://*.robokassa.ru" not in text,
+        "gateway: CSP form-action must not use a wildcard or scheme-wide origin",
     )
     _assert(
         "unsafe-eval" not in text,
@@ -1526,7 +1542,7 @@ def check_gateway_csp() -> None:
         else "connect-src 'self'" not in delivery_block,
         "gateway: delivery location must not inherit the interactive connect-src CSP",
     )
-    print("OK: gateway CSP is same-origin and does not broaden delivery")
+    print("OK: gateway CSP keeps fetches same-origin and permits exact payment POSTs")
 
 
 def main() -> int:

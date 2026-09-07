@@ -111,6 +111,9 @@ export function mountMediaFlow(
   root.querySelector("[data-flow-download]")?.addEventListener("click", () => {
     void controller.enqueueDownload();
   });
+  root.querySelector("[data-flow-premium-cta]")?.addEventListener("click", () => {
+    void controller.startTestCheckout();
+  });
 
   const onNativeClick = (event: Event) => {
     const allow = controller.onNativeDownloadClick();
@@ -170,7 +173,7 @@ export function mountMediaFlow(
   };
 
   void controller.restore();
-  void controller.initializeQuota();
+  void controller.initializeAccount();
   renderFlow(root, controller.snapshot());
   return controller;
 }

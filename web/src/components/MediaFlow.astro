@@ -80,6 +80,7 @@ const enabled = isMediaFlowEnabled();
   <ProviderSupport id="flow-hint" />
   <p class="hint" data-flow-quota hidden></p>
   <p class="hint" data-flow-quota-reset hidden></p>
+  <p class="premium-status" data-flow-premium-status role="status" aria-live="polite" hidden></p>
   <p class="status" data-flow-status aria-live="polite"></p>
   <p class="hint" data-flow-restored hidden>
     Восстановлена текущая задача скачивания.
@@ -95,6 +96,13 @@ const enabled = isMediaFlowEnabled();
   <fieldset class="quality-card" data-flow-quality hidden>
     <legend class="card-title">Выберите качество</legend>
     <div class="quality-list" data-flow-formats hidden></div>
+    <div class="premium-checkout" data-flow-premium-checkout hidden>
+      <span class="test-badge">ТЕСТ</span>
+      <p>Тестовый режим оплаты. Не является коммерческой покупкой.</p>
+      <button class="btn btn-ghost" type="button" data-flow-premium-cta>
+        Тестовая оплата Premium
+      </button>
+    </div>
   </fieldset>
   <section class="progress-card" data-flow-progress data-tone="active" hidden>
     <div class="progress-head">

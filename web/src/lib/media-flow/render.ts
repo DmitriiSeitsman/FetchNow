@@ -23,6 +23,9 @@ function disabledReason(
   format: FlowSnapshot["formats"][number],
   muxingBlocked: boolean,
 ): string {
+  if (format.requiresPremium) {
+    return "Доступно в Premium";
+  }
   if (muxingBlocked) {
     return "Это медиа недоступно как единый файл с видео и звуком.";
   }
@@ -33,6 +36,47 @@ function disabledReason(
     return "Нужен единый файл с видео и звуком.";
   }
   return "Этот вариант технически недоступен.";
+}
+
+function semanticLabel(format: FlowSnapshot["formats"][number]): string {
+  if (format.mediaKind === "audio_only") {
+    const bitrate = format.bitrateKbps ? ` · ${Math.round(format.bitrateKbps)} кбит/с` : "";
+    return `Аудио${bitrate}`;
+  }
+  if (format.mediaKind === "video_only") {
+    return `Видео без звука · ${qualityTechnicalLabel(format)}`;
+  }
+  return `Видео со звуком · ${qualityTechnicalLabel(format)}`;
+}
+
+function standaloneOptions(snapshot: FlowSnapshot): QualityOption[] {
+  const byKind = new Map<string, FlowSnapshot["formats"][number]>();
+  for (const format of snapshot.formats) {
+    if (format.mediaKind === "normal_video") continue;
+    const metric = format.mediaKind === "video_only"
+      ? format.height ?? format.qualityLabel
+      : format.bitrateKbps ?? format.qualityLabel;
+    const key = `${format.mediaKind}:${metric}`;
+    const current = byKind.get(key);
+    if (!current || (current.container !== "mp4" && format.container === "mp4")) {
+      byKind.set(key, format);
+    }
+  }
+  return [...byKind.entries()]
+    .map(([key, representative]) => ({
+      key,
+      representative,
+      members: [representative],
+      label: semanticLabel(representative),
+      eligible: snapshot.premiumState === "active",
+    }))
+    .sort((a, b) => {
+      if (a.representative.mediaKind !== b.representative.mediaKind) {
+        return a.representative.mediaKind === "video_only" ? -1 : 1;
+      }
+      return (b.representative.height ?? b.representative.bitrateKbps ?? 0) -
+        (a.representative.height ?? a.representative.bitrateKbps ?? 0);
+    });
 }
 
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
@@ -72,7 +116,9 @@ function qualityRow(
   radio.checked = snapshot.selectedFormatId === format.formatOptionId;
   const title = document.createElement("span");
   title.className = "format-label";
-  title.textContent = option.label;
+  title.textContent = format.mediaKind === "normal_video"
+    ? `Видео со звуком · ${option.label}`
+    : option.label;
   const detail = document.createElement("span");
   detail.className = "format-detail";
   detail.textContent = formatDetail(format);
@@ -82,6 +128,13 @@ function qualityRow(
     reason.className = "format-reason";
     reason.textContent = disabledReason(format, snapshot.muxingBlocked);
     item.append(reason);
+  }
+  if (format.requiresPremium) {
+    const badge = document.createElement("span");
+    badge.className = "premium-badge";
+    badge.textContent = "Premium";
+    item.append(badge);
+    item.setAttribute("aria-label", `${title.textContent}. ${option.eligible ? "Premium активен" : "Доступно в Premium"}`);
   }
   if (radio.checked && option.eligible) {
     item.classList.add("format-selected");
@@ -97,12 +150,27 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const quotaState = snapshot.freeQuota ?? null;
   const quota = root.querySelector<HTMLElement>("[data-flow-quota]");
   if (quota) {
-    quota.hidden = quotaState === null || quotaState.tier === "premium";
+    quota.hidden = quotaState === null;
     if (quotaState !== null && quotaState.tier === "free") {
       quota.textContent =
         quotaState.downloadsRemaining === 0
           ? "Лимит бесплатных загрузок исчерпан."
           : `Доступно бесплатных загрузок: ${quotaState.downloadsRemaining} из ${quotaState.downloadLimit}`;
+    } else if (quotaState?.tier === "premium") {
+      quota.textContent = "Без лимита загрузок";
+    }
+  }
+  const premium = root.querySelector<HTMLElement>("[data-flow-premium-status]");
+  if (premium) {
+    premium.hidden = snapshot.premiumState === "free";
+    premium.dataset.state = snapshot.premiumState;
+    if (snapshot.premiumState === "active" && snapshot.premiumStatus?.active) {
+      const expiry = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.premiumStatus.expiresAt));
+      premium.textContent = `Premium активен · Доступ до ${expiry}`;
+    } else if (snapshot.premiumState === "loading") {
+      premium.textContent = "Проверяем статус Premium…";
+    } else if (snapshot.premiumState === "error") {
+      premium.textContent = "Не удалось проверить статус Premium.";
     }
   }
   const quotaReset = root.querySelector<HTMLElement>("[data-flow-quota-reset]");
@@ -312,10 +380,11 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     }
   }
 
-  const options = groupQualityOptions(snapshot.formats, {
+  const normalOptions = groupQualityOptions(snapshot.formats, {
     muxingBlocked: snapshot.muxingBlocked,
     selectedFormatId: snapshot.selectedFormatId,
   });
+  const options = [...normalOptions, ...standaloneOptions(snapshot)];
   // Hide with 0–1 grouped options: a single auto-selected format still downloads.
   // Quality options only render during the inspected phase before preparation.
   const showQuality =
@@ -342,7 +411,25 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const mux = root.querySelector("[data-flow-mux]");
   if (mux instanceof HTMLElement) {
     const onlyIncomplete =
-      snapshot.result !== null && options.every((option) => !option.eligible);
+      snapshot.result !== null && normalOptions.every((option) => !option.eligible);
     mux.hidden = !onlyIncomplete || snapshot.phase === "idle";
+  }
+  const hasLockedPremium = options.some(
+    (option) => option.representative.requiresPremium && !option.eligible,
+  );
+  const checkout = root.querySelector<HTMLElement>("[data-flow-premium-checkout]");
+  if (checkout) {
+    checkout.hidden =
+      snapshot.premiumState !== "free" ||
+      !hasLockedPremium ||
+      !snapshot.testCheckoutAvailable;
+  }
+  const checkoutButton = root.querySelector<HTMLButtonElement>("[data-flow-premium-cta]");
+  if (checkoutButton) {
+    checkoutButton.disabled = snapshot.checkoutBusy === true;
+    checkoutButton.setAttribute("aria-busy", snapshot.checkoutBusy ? "true" : "false");
+    checkoutButton.textContent = snapshot.checkoutBusy
+      ? "Открываем тестовую оплату…"
+      : "Тестовая оплата Premium";
   }
 }

@@ -8,9 +8,13 @@ import {
   isDownloadEligible,
   parseBrowserGrant,
   parseDownloadJob,
+  parseCreatedPaymentOrder,
   parseFreeQuota,
   parseInspectionJob,
   parseMediaFormat,
+  parsePaymentConfig,
+  parsePaymentOrderStatus,
+  parsePremiumStatus,
 } from "./contracts";
 import { pickHighestEligibleFormat } from "./quality";
 import {
@@ -48,6 +52,75 @@ const providerCapabilities = {
 } as const;
 
 describe("contracts", () => {
+  it("accepts only explicit Premium and derived checkout config contracts", () => {
+    expect(parsePremiumStatus({ active: false })).toEqual({ active: false });
+    expect(parsePremiumStatus({
+      active: true,
+      expiresAt: "2026-09-08T12:00:00Z",
+      productCode: "premium_24h",
+      remainingSeconds: 86_400,
+    })).toMatchObject({ active: true, productCode: "premium_24h" });
+    expect(parsePaymentConfig({ testCheckoutAvailable: true }))
+      .toEqual({ testCheckoutAvailable: true });
+    expect(() => parsePaymentConfig({
+      testCheckoutAvailable: true,
+      ROBOKASSA_TEST_PASSWORD1: "secret",
+    })).toThrow(FlowError);
+    expect(() => parsePremiumStatus({ active: true, premium: true })).toThrow(FlowError);
+  });
+
+  it("accepts safe public payment status and exact server TEST form only", () => {
+    expect(parsePaymentOrderStatus({
+      status: "PAID",
+      productCode: "premium_24h",
+      amountMinor: 100,
+      currency: "RUB",
+      createdAt: "2026-09-07T12:00:00Z",
+      paidAt: "2026-09-07T12:01:00Z",
+    }).status).toBe("PAID");
+    const response = {
+      orderId: "11111111-2222-4333-8444-555555555555",
+      status: "PENDING",
+      paymentForm: {
+        action: "https://auth.robokassa.ru/Merchant/Index.aspx",
+        method: "POST",
+        fields: {
+          MerchantLogin: "fetchnow",
+          OutSum: "1.00",
+          InvId: "42",
+          Description: "Доступ FetchNow на 24 часа",
+          SignatureValue: "a".repeat(64),
+          IsTest: "1",
+          Receipt: "%7B%7D",
+          Culture: "ru",
+        },
+      },
+    };
+    expect(parseCreatedPaymentOrder(response).paymentForm.fields)
+      .toEqual(response.paymentForm.fields);
+    expect(() => parseCreatedPaymentOrder({
+      ...response,
+      paymentForm: {
+        ...response.paymentForm,
+        action: "https://evil.example/collect",
+      },
+    })).toThrow(FlowError);
+    expect(() => parseCreatedPaymentOrder({
+      ...response,
+      paymentForm: {
+        ...response.paymentForm,
+        fields: { ...response.paymentForm.fields, IsTest: "0" },
+      },
+    })).toThrow(FlowError);
+    expect(() => parseCreatedPaymentOrder({
+      ...response,
+      paymentForm: {
+        ...response.paymentForm,
+        fields: { ...response.paymentForm.fields, Password1: "secret" },
+      },
+    })).toThrow(FlowError);
+  });
+
   it("accepts coherent Free quota status and rejects false remaining math", () => {
     expect(
       parseFreeQuota({
