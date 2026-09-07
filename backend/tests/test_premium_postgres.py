@@ -96,6 +96,7 @@ def _settings(url: str, *, robokassa_mode: str = "test") -> Settings:
         ROBOKASSA_TEST_AMOUNT_MINOR=1_000,
         ROBOKASSA_RECEIPT_TAX="none",
         ROBOKASSA_RECEIPT_PAYMENT_METHOD="full_payment",
+        PREMIUM_TEST_CHECKOUT_VISIBLE=True,
     )
 
 
