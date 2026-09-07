@@ -1250,6 +1250,7 @@ body.page-root {
 
 /* The hidden attribute must win over the layout display above. */
 .loader[hidden],
+.premium-checkout[hidden],
 .progress-card[hidden],
 .progress-actions[hidden],
 .quality-card[hidden],
