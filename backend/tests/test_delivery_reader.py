@@ -15,6 +15,7 @@ import pytest
 from fetchnow.delivery.reader import ArtifactReader
 from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
+from fetchnow.media_inspection.models import MediaKind
 
 
 def _prepare_root(path: Path) -> Path:
@@ -28,6 +29,7 @@ def _publish(
     *,
     payload: bytes = b"delivery-bytes-payload",
     container: str = "mp4",
+    media_kind: MediaKind = MediaKind.NORMAL_VIDEO,
 ) -> tuple[uuid.UUID, uuid.UUID, datetime, int, str]:
     store = ArtifactStore(
         root=str(root),
@@ -44,6 +46,7 @@ def _publish(
         job_id=job_id,
         format_option_id="fmt_deliv",
         expires_at=expires,
+        media_kind=media_kind,
     )
     return job_id, published.artifact_id, expires, 3, published.content_type
 
@@ -64,6 +67,26 @@ def test_happy_path_open(tmp_path: Path) -> None:
     ) as handle:
         data = os.read(handle.fd, 1024)
     assert data == b"delivery-bytes-payload"
+
+
+def test_audio_webm_manifest_and_reader_remain_compatible(tmp_path: Path) -> None:
+    root = _prepare_root(tmp_path / "root")
+    job_id, artifact_id, expires, fence, content_type = _publish(
+        root, container="webm", media_kind=MediaKind.AUDIO_ONLY
+    )
+    assert content_type == "audio/webm"
+    reader = ArtifactReader(str(root))
+    with reader.open_published(
+        artifact_id=artifact_id,
+        download_job_id=job_id,
+        format_option_id="fmt_deliv",
+        expected_bytes=len(b"delivery-bytes-payload"),
+        expected_container="webm",
+        expected_content_type="audio/webm",
+        expected_expires_at=expires,
+        expected_fence=fence,
+    ) as handle:
+        assert os.read(handle.fd, 1024) == b"delivery-bytes-payload"
 
 
 @pytest.mark.parametrize(

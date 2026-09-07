@@ -19,12 +19,13 @@ def _capabilities(provider_id: ProviderID) -> ProviderCapabilities:
     # Shared product policy for providers that expose ordinary + short-form
     # public video download with quality selection. Live metadata probing
     # confirmed progressive download + quality selection remain valid defaults;
-    # extract-audio / select-container stay disabled.
+    # Audio-only is source-derived and remains entitlement-gated at admission;
+    # this provider operation only says the extractor path may execute it.
     return ProviderCapabilities(
         provider_id=provider_id,
         operations={
             MediaOperation.DOWNLOAD_VIDEO: CapabilityState.ENABLED,
-            MediaOperation.EXTRACT_AUDIO: CapabilityState.DISABLED,
+            MediaOperation.EXTRACT_AUDIO: CapabilityState.ENABLED,
             MediaOperation.SELECT_QUALITY: CapabilityState.ENABLED,
             MediaOperation.SELECT_CONTAINER: CapabilityState.DISABLED,
         },
@@ -50,7 +51,7 @@ def _ok_capabilities() -> ProviderCapabilities:
         provider_id=ProviderID.OK,
         operations={
             MediaOperation.DOWNLOAD_VIDEO: CapabilityState.ENABLED,
-            MediaOperation.EXTRACT_AUDIO: CapabilityState.DISABLED,
+            MediaOperation.EXTRACT_AUDIO: CapabilityState.ENABLED,
             MediaOperation.SELECT_QUALITY: CapabilityState.ENABLED,
             MediaOperation.SELECT_CONTAINER: CapabilityState.DISABLED,
         },
@@ -78,7 +79,7 @@ def _dzen_capabilities() -> ProviderCapabilities:
         provider_id=ProviderID.DZEN,
         operations={
             MediaOperation.DOWNLOAD_VIDEO: CapabilityState.ENABLED,
-            MediaOperation.EXTRACT_AUDIO: CapabilityState.DISABLED,
+            MediaOperation.EXTRACT_AUDIO: CapabilityState.ENABLED,
             MediaOperation.SELECT_QUALITY: CapabilityState.ENABLED,
             MediaOperation.SELECT_CONTAINER: CapabilityState.DISABLED,
         },

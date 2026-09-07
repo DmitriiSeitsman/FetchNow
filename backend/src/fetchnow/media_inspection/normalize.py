@@ -16,6 +16,7 @@ from fetchnow.media_inspection.models import (
     FormatCategory,
     InternalFormatCandidate,
     MediaFormat,
+    MediaKind,
     MediaMetadata,
     require_finite_non_negative,
     sanitize_title,
@@ -90,6 +91,32 @@ def _category_for(has_video: bool, has_audio: bool) -> FormatCategory:
     if has_video:
         return FormatCategory.VIDEO_ONLY
     return FormatCategory.AUDIO_ONLY
+
+
+def _media_kind_for(has_video: bool, has_audio: bool) -> MediaKind:
+    if has_video and has_audio:
+        return MediaKind.NORMAL_VIDEO
+    if has_video:
+        return MediaKind.VIDEO_ONLY
+    return MediaKind.AUDIO_ONLY
+
+
+def _standalone_candidate_supported(candidate: InternalFormatCandidate) -> bool:
+    """Require a real bounded source stream for Premium standalone options."""
+    if candidate.has_drm or not candidate.provider_format_token:
+        return False
+    if candidate.has_video and not candidate.has_audio:
+        return (
+            candidate.container in {"mp4", "webm", "mkv"}
+            and candidate.video_codec not in {CodecFamily.NONE, CodecFamily.UNKNOWN}
+        )
+    if candidate.has_audio and not candidate.has_video:
+        return (
+            candidate.container
+            in {"m4a", "mp4", "webm", "mkv", "ogg", "opus", "aac", "mp3"}
+            and candidate.audio_codec not in {CodecFamily.NONE, CodecFamily.UNKNOWN}
+        )
+    return True
 
 
 def _token_digest(token: str | None) -> str:
@@ -180,6 +207,13 @@ def project_metadata(
         label = quality_label_for(height, has_video=candidate.has_video)
         option_id = format_option_id_for(candidate, label)
         category = _category_for(candidate.has_video, candidate.has_audio)
+        media_kind = _media_kind_for(candidate.has_video, candidate.has_audio)
+        standalone_unsupported = (
+            media_kind is not MediaKind.NORMAL_VIDEO
+            and not _standalone_candidate_supported(candidate)
+        )
+        if standalone_unsupported:
+            continue
         free_ok = category is FormatCategory.PROGRESSIVE and height is not None
         fmt = MediaFormat(
             format_option_id=option_id,
@@ -195,6 +229,9 @@ def project_metadata(
             approx_bytes=approx,
             quality_label=label,
             free_tier_eligible=free_ok,
+            media_kind=media_kind,
+            requires_premium=media_kind is not MediaKind.NORMAL_VIDEO,
+            bitrate_kbps=candidate.bitrate_kbps,
         )
         prepared.append((_candidate_sort_key(candidate, option_id), fmt))
 
@@ -254,8 +291,9 @@ def project_metadata(
                 )
         projected.sort(
             key=lambda fmt: (
-                0 if fmt.category is FormatCategory.PROGRESSIVE else 1,
+                0 if fmt.media_kind is MediaKind.NORMAL_VIDEO else 1,
                 -(fmt.height or 0),
+                -(fmt.bitrate_kbps or 0),
                 fmt.format_option_id,
             )
         )
@@ -269,15 +307,10 @@ def project_metadata(
         and f.has_audio
         for f in projected
     )
-    # Video-only / audio-only rows stay internal for pairing. Public options are
-    # finished files only — never split streams as a user-facing download choice.
-    public = tuple(
-        fmt
-        for fmt in projected
-        if fmt.category is FormatCategory.PROGRESSIVE
-        and fmt.has_video
-        and fmt.has_audio
-    )
+    # Standalone source streams are safe opaque choices for Premium-capability
+    # clients. Free clients may see them as requiresPremium metadata, while
+    # admission remains server-authoritative.
+    public = tuple(projected)
     return MediaMetadata(
         provider_id=trusted_provider_id,
         canonical_provider_url=trusted_canonical_url,

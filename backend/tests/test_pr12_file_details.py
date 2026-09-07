@@ -23,6 +23,7 @@ from fetchnow.downloads.filename import (
 )
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.service import DownloadJobService
+from fetchnow.media_inspection.models import MediaKind
 from fetchnow.media_inspection.size_estimate import (
     MAX_BITRATE_KBPS,
     estimate_format_bytes,
@@ -195,6 +196,22 @@ def test_filename_sanitization_cases() -> None:
         download_job_id=job_id,
     )
     assert str(job_id) not in valid
+
+
+def test_semantic_media_filename_uses_actual_container() -> None:
+    job_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    assert suggested_filename_for(
+        title="Source title",
+        container="webm",
+        download_job_id=job_id,
+        media_kind=MediaKind.VIDEO_ONLY,
+    ) == "Source title-video.webm"
+    assert suggested_filename_for(
+        title="Source title",
+        container="m4a",
+        download_job_id=job_id,
+        media_kind=MediaKind.AUDIO_ONLY,
+    ) == "Source title-audio.m4a"
 
 
 def test_content_disposition_rfc8187_and_injection() -> None:

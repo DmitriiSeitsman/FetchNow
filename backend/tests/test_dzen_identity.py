@@ -205,7 +205,10 @@ def test_dzen_inspection_fixture_resolves_dual_extractor_labels() -> None:
     assert meta.provider_id == ProviderID.DZEN.value
     assert meta.title == "Sample Dzen video"
     assert meta.duration_seconds == 243
-    heights = sorted(f.height for f in meta.formats if f.height is not None)
+    normal = [f for f in meta.formats if f.media_kind.value == "normal_video"]
+    heights = sorted(f.height for f in normal if f.height is not None)
     assert heights == [360, 720]
-    assert all(f.has_video and f.has_audio for f in meta.formats)
-    assert all(f.container == "mp4" for f in meta.formats)
+    assert all(f.has_video and f.has_audio for f in normal)
+    assert all(f.container == "mp4" for f in normal)
+    assert any(f.media_kind.value == "video_only" for f in meta.formats)
+    assert any(f.media_kind.value == "audio_only" for f in meta.formats)

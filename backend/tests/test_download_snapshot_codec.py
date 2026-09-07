@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.snapshot_codec import (
     attach_effective_policy_snapshot,
+    decode_authorized_identity_id,
     decode_effective_policy_snapshot,
     decode_selected_format_snapshot,
     encode_selected_format_snapshot,
@@ -17,6 +19,7 @@ from fetchnow.media_inspection.models import (
     CodecFamily,
     FormatCategory,
     MediaFormat,
+    MediaKind,
 )
 from fetchnow.quota.policy import EffectiveDownloadPolicy
 
@@ -56,6 +59,63 @@ def test_roundtrip_encode_decode() -> None:
     assert decoded.format_option_id == fmt.format_option_id
     assert decoded.has_video is True
     assert decoded.free_tier_eligible is True
+
+
+@pytest.mark.parametrize(
+    ("media_kind", "category", "has_video", "has_audio", "container"),
+    [
+        (MediaKind.VIDEO_ONLY, FormatCategory.VIDEO_ONLY, True, False, "webm"),
+        (MediaKind.AUDIO_ONLY, FormatCategory.AUDIO_ONLY, False, True, "m4a"),
+    ],
+)
+def test_premium_media_kind_roundtrip(
+    media_kind: MediaKind,
+    category: FormatCategory,
+    has_video: bool,
+    has_audio: bool,
+    container: str,
+) -> None:
+    fmt = _format(
+        container=container,
+        width=1280 if has_video else None,
+        height=720 if has_video else None,
+        has_video=has_video,
+        has_audio=has_audio,
+        category=category,
+        video_codec=CodecFamily.VP9 if has_video else CodecFamily.NONE,
+        audio_codec=CodecFamily.NONE if has_video else CodecFamily.AAC,
+        quality_label="p720" if has_video else "audio",
+        free_tier_eligible=False,
+        media_kind=media_kind,
+        requires_premium=True,
+        bitrate_kbps=192 if has_audio else 2_500,
+    )
+    decoded = decode_selected_format_snapshot(
+        encode_selected_format_snapshot(fmt),
+        expected_format_option_id=fmt.format_option_id,
+    )
+    assert decoded == fmt
+
+
+def test_legacy_snapshot_defaults_only_to_normal_video() -> None:
+    legacy = encode_selected_format_snapshot(_format())
+    for key in ("mediaKind", "requiresPremium", "bitrateKbps"):
+        legacy.pop(key)
+    decoded = decode_selected_format_snapshot(
+        legacy, expected_format_option_id=_format().format_option_id
+    )
+    assert decoded.media_kind is MediaKind.NORMAL_VIDEO
+    assert decoded.requires_premium is False
+
+
+def test_malformed_or_forged_media_kind_fails_closed() -> None:
+    for bad in ("music", "audio_only"):
+        payload = _payload(mediaKind=bad)
+        with pytest.raises(DownloadError) as exc:
+            decode_selected_format_snapshot(
+                payload, expected_format_option_id=_format().format_option_id
+            )
+        assert exc.value.code is DownloadErrorCode.FORMAT_UNAVAILABLE
 
 
 def test_string_false_for_has_video_rejected() -> None:
@@ -119,6 +179,7 @@ def test_internal_free_policy_roundtrip_persists_rate() -> None:
 
 def test_internal_premium_policy_roundtrip_is_not_in_public_format() -> None:
     expires_at = datetime(2026, 9, 4, tzinfo=UTC)
+    identity_id = uuid.UUID("8fc2fbd1-7ec7-46a7-9e40-b62c17f53b6f")
     payload = attach_effective_policy_snapshot(
         encode_selected_format_snapshot(_format()),
         EffectiveDownloadPolicy(
@@ -127,17 +188,23 @@ def test_internal_premium_policy_roundtrip_is_not_in_public_format() -> None:
             quota_window_seconds=None,
             delivery_rate_bytes_per_second=None,
             premium_expires_at=expires_at,
+            allow_audio_only=True,
+            allow_video_only=True,
         ),
+        authorized_identity_id=identity_id,
     )
     policy = decode_effective_policy_snapshot(payload)
     assert policy is not None
     assert policy.tier == "premium"
     assert policy.delivery_rate_bytes_per_second is None
     assert policy.premium_expires_at == expires_at
+    assert decode_authorized_identity_id(payload) == identity_id
     decoded = decode_selected_format_snapshot(
         payload, expected_format_option_id=_format().format_option_id
     )
-    assert "effectiveDownloadPolicy" not in encode_selected_format_snapshot(decoded)
+    public_format = encode_selected_format_snapshot(decoded)
+    assert "effectiveDownloadPolicy" not in public_format
+    assert "authorizedIdentityId" not in public_format
 
 
 def test_malformed_internal_policy_fails_closed() -> None:

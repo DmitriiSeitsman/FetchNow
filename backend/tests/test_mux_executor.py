@@ -19,15 +19,27 @@ from fetchnow.downloads.executor import (
     DownloadClaimSnapshot,
     DownloadExecutor,
     _peak_reservation_bytes,
+    _ytdlp_stage,
 )
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import MuxedDownloadSelection
-from fetchnow.media_inspection.models import FormatCategory
+from fetchnow.media_inspection.models import FormatCategory, MediaKind
 from fetchnow.media_inspection.protocols import ProcessResult
 
 _DB = "postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow"
 _VIDEO_TOKEN = "url720-secret"
 _AUDIO_TOKEN = "audio-aac-secret"
+
+
+def test_standalone_worker_stage_semantics_do_not_invoke_mux_planning() -> None:
+    *_, audio_stage = _ytdlp_stage(
+        "output/artifact.%(ext)s", media_kind=MediaKind.AUDIO_ONLY
+    )
+    *_, video_stage = _ytdlp_stage(
+        "output/artifact.%(ext)s", media_kind=MediaKind.VIDEO_ONLY
+    )
+    assert audio_stage.value == "downloading_audio"
+    assert video_stage.value == "downloading_video"
 
 
 def _settings(tmp_path: Path) -> Settings:

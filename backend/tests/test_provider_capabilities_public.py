@@ -10,7 +10,7 @@ from fetchnow.url.models import ProviderID
 
 _EXPECTED_OPS = {
     "downloadVideo": "enabled",
-    "extractAudio": "disabled",
+    "extractAudio": "enabled",
     "selectQuality": "enabled",
     "selectContainer": "disabled",
 }

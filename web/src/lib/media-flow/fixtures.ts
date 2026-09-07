@@ -22,6 +22,9 @@ export const progressiveFormat: MediaFormat = {
   approxBytes: 12_000_000,
   qualityLabel: "p720",
   freeTierEligible: true,
+  mediaKind: "normal_video",
+  requiresPremium: false,
+  bitrateKbps: null,
 };
 
 export function inspectionResult(

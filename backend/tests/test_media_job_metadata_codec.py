@@ -80,8 +80,10 @@ def test_pr8_snapshot_without_muxing_required_still_loads() -> None:
             "freeTierEligible": False,
         }
     ]
-    restored_split = media_metadata_from_jsonable(split, max_bytes=65_536)
-    assert restored_split.muxing_required is True
+    # Pre-A3.2 metadata cannot authorize a standalone Premium capability.
+    with pytest.raises(JobError) as split_exc:
+        media_metadata_from_jsonable(split, max_bytes=65_536)
+    assert split_exc.value.code is JobErrorCode.INTERNAL_ERROR
 
 
 def test_byte_bound_enforced() -> None:

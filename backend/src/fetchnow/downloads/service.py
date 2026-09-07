@@ -36,6 +36,7 @@ from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import format_snapshot_from_media_format
 from fetchnow.downloads.snapshot_codec import (
     attach_effective_policy_snapshot,
+    decode_authorized_identity_id,
     decode_effective_policy_snapshot,
     decode_selected_format_snapshot,
     encode_selected_format_snapshot,
@@ -45,7 +46,7 @@ from fetchnow.jobs.credentials import hash_access_token, tokens_match
 from fetchnow.jobs.metadata_codec import media_metadata_from_jsonable
 from fetchnow.jobs.repository import MediaJobRepository
 from fetchnow.jobs.states import MediaJobState
-from fetchnow.media_inspection.models import FormatCategory, MediaFormat
+from fetchnow.media_inspection.models import MediaFormat, MediaKind
 from fetchnow.quota.errors import AnonymousIdentityRequiredError
 from fetchnow.quota.policy import EffectiveDownloadPolicy, effective_download_policy
 from fetchnow.quota.service import QuotaService
@@ -100,26 +101,42 @@ def _find_format(
     )
 
 
-def _assert_format_eligible(fmt: MediaFormat, *, muxing_required: bool) -> None:
-    if muxing_required:
+def _assert_format_available(fmt: MediaFormat, *, muxing_required: bool) -> None:
+    if fmt.media_kind is MediaKind.NORMAL_VIDEO and muxing_required:
         raise_download_error(
             DownloadErrorCode.MUXING_UNAVAILABLE,
             internal_reason="MUXING_REQUIRED",
         )
-    if not fmt.free_tier_eligible:
+    if fmt.media_kind is MediaKind.NORMAL_VIDEO and not fmt.free_tier_eligible:
         raise_download_error(
             DownloadErrorCode.FORMAT_NOT_ELIGIBLE,
             internal_reason="NOT_FREE_TIER",
         )
-    if fmt.category is not FormatCategory.PROGRESSIVE:
+    expected_tracks = {
+        MediaKind.NORMAL_VIDEO: (True, True),
+        MediaKind.VIDEO_ONLY: (True, False),
+        MediaKind.AUDIO_ONLY: (False, True),
+    }[fmt.media_kind]
+    if (fmt.has_video, fmt.has_audio) != expected_tracks:
         raise_download_error(
-            DownloadErrorCode.FORMAT_NOT_ELIGIBLE,
-            internal_reason="NOT_PROGRESSIVE",
+            DownloadErrorCode.MEDIA_CAPABILITY_UNAVAILABLE,
+            internal_reason="MEDIA_KIND_TRACK_MISMATCH",
         )
-    if not (fmt.has_video and fmt.has_audio):
+
+
+def _assert_media_kind_authorized(
+    fmt: MediaFormat,
+    policy: EffectiveDownloadPolicy,
+) -> None:
+    allowed = {
+        MediaKind.NORMAL_VIDEO: policy.allow_combined,
+        MediaKind.VIDEO_ONLY: policy.allow_video_only,
+        MediaKind.AUDIO_ONLY: policy.allow_audio_only,
+    }[fmt.media_kind]
+    if not allowed:
         raise_download_error(
-            DownloadErrorCode.FORMAT_NOT_ELIGIBLE,
-            internal_reason="MISSING_AV",
+            DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM,
+            internal_reason="MEDIA_KIND_NOT_AUTHORIZED",
         )
 
 
@@ -188,11 +205,15 @@ class DownloadJobService:
             max_bytes=self._settings.media_job_result_max_bytes,
         )
         fmt = _find_format(metadata.formats, format_option_id)
-        _assert_format_eligible(fmt, muxing_required=metadata.muxing_required)
+        _assert_format_available(fmt, muxing_required=metadata.muxing_required)
         assert_operation_allowed(
             self._capabilities,
             provider_id=parent.provider_id,
-            operation=MediaOperation.DOWNLOAD_VIDEO,
+            operation=(
+                MediaOperation.EXTRACT_AUDIO
+                if fmt.media_kind is MediaKind.AUDIO_ONLY
+                else MediaOperation.DOWNLOAD_VIDEO
+            ),
         )
         snapshot = format_snapshot_from_media_format(fmt)
         job_id = uuid.uuid4()
@@ -200,6 +221,7 @@ class DownloadJobService:
             title=metadata.title,
             container=fmt.container,
             download_job_id=job_id,
+            media_kind=fmt.media_kind,
         )
 
         repo = MediaDownloadJobRepository(session)
@@ -233,9 +255,37 @@ class DownloadJobService:
                     session=session,
                 )
                 policy = admission.policy
+            elif anonymous_client_id is not None:
+                policy = await QuotaService(self._settings).resolve_policy(
+                    identity_id=anonymous_client_id,
+                    session=session,
+                )
+            _assert_media_kind_authorized(fmt, policy)
             job.selected_format_snapshot = attach_effective_policy_snapshot(
-                snapshot, policy
+                snapshot,
+                policy,
+                authorized_identity_id=(
+                    anonymous_client_id if policy.tier == "premium" else None
+                ),
             )
+        else:
+            stored_policy = decode_effective_policy_snapshot(
+                job.selected_format_snapshot
+            )
+            policy = stored_policy or effective_download_policy(self._settings)
+            _assert_media_kind_authorized(fmt, policy)
+            if fmt.media_kind is not MediaKind.NORMAL_VIDEO:
+                authorized_identity_id = decode_authorized_identity_id(
+                    job.selected_format_snapshot
+                )
+                if (
+                    anonymous_client_id is None
+                    or authorized_identity_id != anonymous_client_id
+                ):
+                    raise_download_error(
+                        DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM,
+                        internal_reason="PREMIUM_IDENTITY_MISMATCH",
+                    )
         await session.flush()
         return self._to_view(job, created=created)
 

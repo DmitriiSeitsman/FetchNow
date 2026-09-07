@@ -19,6 +19,7 @@ from fetchnow.quota.errors import (
     FreeQuotaExceededError,
 )
 from fetchnow.quota.service import QuotaService
+from fetchnow.quota.tokens import extract_anonymous_cookie
 
 router = APIRouter(prefix="/media", tags=["media-downloads"])
 logger = logging.getLogger("fetchnow.api.media_downloads")
@@ -97,11 +98,15 @@ async def create_download_job(
     try:
         async with session_factory() as session:
             anonymous_client_id: uuid.UUID | None = None
-            if request.app.state.settings.free_download_quota_enabled:
+            cookie_header = request.headers.get("cookie")
+            if (
+                request.app.state.settings.free_download_quota_enabled
+                or extract_anonymous_cookie(cookie_header) is not None
+            ):
                 identity = await QuotaService(
                     request.app.state.settings
                 ).require_identity(
-                    cookie_header=request.headers.get("cookie"),
+                    cookie_header=cookie_header,
                     session=session,
                 )
                 anonymous_client_id = identity.id

@@ -26,6 +26,7 @@ from fetchnow.core.config import Settings
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.executor import DownloadClaimSnapshot, DownloadExecutor
 from fetchnow.downloads.service import DownloadJobService
+from fetchnow.downloads.snapshot_codec import encode_selected_format_snapshot
 from fetchnow.jobs.credentials import generate_access_token
 from fetchnow.jobs.metadata_codec import media_metadata_to_jsonable
 from fetchnow.jobs.models import MediaJob
@@ -195,7 +196,7 @@ def test_current_vk_product_policy() -> None:
     capabilities = ProviderCapabilityRegistry.default().require(ProviderID.VK.value)
     assert (
         capabilities.operations[MediaOperation.EXTRACT_AUDIO]
-        is CapabilityState.DISABLED
+        is CapabilityState.ENABLED
     )
     assert capabilities.metadata[MetadataField.THUMBNAIL] is CapabilityState.PLANNED
     assert capabilities.content_kinds[ContentKind.LIVE] is CapabilityState.DISABLED
@@ -274,7 +275,7 @@ async def test_worker_rechecks_disabled_operation_before_inspection(
         path="/video-1_2",
         scheme="https",
         port=None,
-        selected_format_snapshot={"formatOptionId": "fmt_abc123"},
+        selected_format_snapshot=encode_selected_format_snapshot(_format()),
         expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
     )
     resolution = MagicMock(provider_id="vk")

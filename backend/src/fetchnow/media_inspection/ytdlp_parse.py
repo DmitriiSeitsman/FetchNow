@@ -321,6 +321,18 @@ def _parse_formats(
             continue
         fps = None if fps_num is None else float(fps_num)
 
+        # Preserve the established progressive binding for queued legacy jobs;
+        # A3.2 bitrate metadata is meaningful only for new standalone choices.
+        bitrate_source = None
+        if has_audio and not has_video:
+            bitrate_source = item.get("abr")
+        elif has_video and not has_audio:
+            bitrate_source = item.get("tbr")
+        bitrate_num = _finite_number(bitrate_source)
+        if bitrate_num is not None and bitrate_num > 100_000:
+            bitrate_num = None
+        bitrate_kbps = None if bitrate_num is None else int(round(bitrate_num))
+
         approx_bytes = estimate_format_bytes(
             filesize=item.get("filesize"),
             filesize_approx=item.get("filesize_approx"),
@@ -359,6 +371,7 @@ def _parse_formats(
                 provider_format_token=provider_token,
                 protocol=protocol,
                 has_drm=has_drm,
+                bitrate_kbps=bitrate_kbps,
             )
         )
     return tuple(candidates)

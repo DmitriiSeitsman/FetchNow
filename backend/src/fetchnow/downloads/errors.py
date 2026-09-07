@@ -20,6 +20,8 @@ class DownloadErrorCode(StrEnum):
     FORMAT_NOT_FOUND = "FORMAT_NOT_FOUND"
     FORMAT_NOT_ELIGIBLE = "FORMAT_NOT_ELIGIBLE"
     FORMAT_UNAVAILABLE = "FORMAT_UNAVAILABLE"
+    MEDIA_CAPABILITY_REQUIRES_PREMIUM = "MEDIA_CAPABILITY_REQUIRES_PREMIUM"
+    MEDIA_CAPABILITY_UNAVAILABLE = "MEDIA_CAPABILITY_UNAVAILABLE"
     PROVIDER_CAPABILITY_DISABLED = "PROVIDER_CAPABILITY_DISABLED"
     DOWNLOAD_TIMEOUT = "DOWNLOAD_TIMEOUT"
     DOWNLOAD_TOO_LARGE = "DOWNLOAD_TOO_LARGE"
@@ -44,6 +46,12 @@ _PUBLIC_MESSAGES: dict[DownloadErrorCode, str] = {
     DownloadErrorCode.FORMAT_NOT_ELIGIBLE: "The requested format is not eligible.",
     DownloadErrorCode.FORMAT_UNAVAILABLE: (
         "The requested format is no longer available."
+    ),
+    DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM: (
+        "An active Premium entitlement is required for this media option."
+    ),
+    DownloadErrorCode.MEDIA_CAPABILITY_UNAVAILABLE: (
+        "The requested media option is not available for this source."
     ),
     DownloadErrorCode.PROVIDER_CAPABILITY_DISABLED: (
         "This action is not available for this source."
@@ -78,6 +86,8 @@ _HTTP_STATUS: dict[DownloadErrorCode, int] = {
     DownloadErrorCode.FORMAT_NOT_FOUND: 404,
     DownloadErrorCode.FORMAT_NOT_ELIGIBLE: 422,
     DownloadErrorCode.FORMAT_UNAVAILABLE: 422,
+    DownloadErrorCode.MEDIA_CAPABILITY_REQUIRES_PREMIUM: 403,
+    DownloadErrorCode.MEDIA_CAPABILITY_UNAVAILABLE: 422,
     DownloadErrorCode.PROVIDER_CAPABILITY_DISABLED: 422,
     DownloadErrorCode.DOWNLOAD_TIMEOUT: 504,
     DownloadErrorCode.DOWNLOAD_TOO_LARGE: 413,

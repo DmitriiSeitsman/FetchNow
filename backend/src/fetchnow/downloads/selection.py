@@ -14,6 +14,7 @@ from fetchnow.media_inspection.models import (
     FormatCategory,
     InternalFormatCandidate,
     MediaFormat,
+    MediaKind,
 )
 from fetchnow.media_inspection.mux_pairing import derive_mux_options
 from fetchnow.media_inspection.normalize import (
@@ -47,6 +48,8 @@ class ResolvedDownloadSelection:
     free_tier_eligible: bool
     approx_bytes: int | None
     provider_format_token: str = field(repr=False)
+    media_kind: MediaKind = MediaKind.NORMAL_VIDEO
+    bitrate_kbps: int | None = None
 
     def __repr__(self) -> str:
         return (
@@ -85,6 +88,10 @@ class MuxedDownloadSelection:
     video_format_token: str = field(repr=False)
     audio_format_token: str = field(repr=False)
 
+    @property
+    def media_kind(self) -> MediaKind:
+        return MediaKind.NORMAL_VIDEO
+
     def __repr__(self) -> str:
         return (
             "MuxedDownloadSelection("
@@ -122,6 +129,11 @@ def _props_match(candidate: InternalFormatCandidate, persisted: MediaFormat) -> 
     """Compare normalized public properties against the parent selection snapshot."""
     label = quality_label_for(candidate.height, has_video=candidate.has_video)
     category = _category_for(candidate.has_video, candidate.has_audio)
+    media_kind = {
+        FormatCategory.PROGRESSIVE: MediaKind.NORMAL_VIDEO,
+        FormatCategory.VIDEO_ONLY: MediaKind.VIDEO_ONLY,
+        FormatCategory.AUDIO_ONLY: MediaKind.AUDIO_ONLY,
+    }[category]
     if candidate.container != persisted.container:
         return False
     if candidate.width != persisted.width:
@@ -143,6 +155,12 @@ def _props_match(candidate: InternalFormatCandidate, persisted: MediaFormat) -> 
     if candidate.approx_bytes != persisted.approx_bytes:
         return False
     if label != persisted.quality_label:
+        return False
+    if media_kind is not persisted.media_kind:
+        return False
+    if persisted.requires_premium != (media_kind is not MediaKind.NORMAL_VIDEO):
+        return False
+    if candidate.bitrate_kbps != persisted.bitrate_kbps:
         return False
     return _free_tier_eligible(candidate) == persisted.free_tier_eligible
 
@@ -169,12 +187,14 @@ def _binding_equivalent(
         return False
     if left.audio_codec != right.audio_codec:
         return False
+    if left.bitrate_kbps != right.bitrate_kbps:
+        return False
     return left.approx_bytes == right.approx_bytes
 
 
 def _candidate_sort_key(
     item: tuple[str, InternalFormatCandidate],
-) -> tuple[str, str, str, int, int, str]:
+) -> tuple[str, str, str, int, int, int, str]:
     option_id, candidate = item
     token = candidate.provider_format_token or ""
     return (
@@ -183,6 +203,7 @@ def _candidate_sort_key(
         token,
         candidate.height or -1,
         candidate.width or -1,
+        candidate.bitrate_kbps or -1,
         f"{candidate.approx_bytes if candidate.approx_bytes is not None else ''}",
     )
 
@@ -287,16 +308,27 @@ def _resolve_direct(
             internal_reason="PROPS_MISMATCH",
         )
 
-    if not (
-        matched.has_video
-        and matched.has_audio
-        and _free_tier_eligible(matched)
-        and persisted_format.free_tier_eligible
-        and persisted_format.category is FormatCategory.PROGRESSIVE
+    media_kind = persisted_format.media_kind
+    if media_kind is MediaKind.NORMAL_VIDEO and not (
+        matched.has_video and matched.has_audio
     ):
         raise_download_error(
             DownloadErrorCode.FORMAT_UNAVAILABLE,
-            internal_reason="NOT_ELIGIBLE",
+            internal_reason="MEDIA_KIND_MISMATCH",
+        )
+    if media_kind is MediaKind.VIDEO_ONLY and not (
+        matched.has_video and not matched.has_audio
+    ):
+        raise_download_error(
+            DownloadErrorCode.FORMAT_UNAVAILABLE,
+            internal_reason="MEDIA_KIND_MISMATCH",
+        )
+    if media_kind is MediaKind.AUDIO_ONLY and not (
+        matched.has_audio and not matched.has_video
+    ):
+        raise_download_error(
+            DownloadErrorCode.FORMAT_UNAVAILABLE,
+            internal_reason="MEDIA_KIND_MISMATCH",
         )
 
     category = _category_for(matched.has_video, matched.has_audio)
@@ -311,8 +343,10 @@ def _resolve_direct(
         has_audio=matched.has_audio,
         category=category,
         quality_label=label,
-        free_tier_eligible=True,
+        free_tier_eligible=persisted_format.free_tier_eligible,
         approx_bytes=matched.approx_bytes,
+        media_kind=media_kind,
+        bitrate_kbps=matched.bitrate_kbps,
         provider_format_token=token,
     )
 
