@@ -151,7 +151,7 @@ describe("PR10 loader, format, and contrast UX", () => {
       /muxing is not offered/i,
     );
     const selectedLabel = document.querySelector(".format-selected .format-label");
-    expect(selectedLabel?.textContent).toBe("Высокое (1080p)");
+    expect(selectedLabel?.textContent).toBe("Видео со звуком · Высокое (1080p)");
   });
 
   it("keeps Start over local and uses Cancel task for server jobs", async () => {

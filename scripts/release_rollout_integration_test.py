@@ -177,6 +177,7 @@ def write_env(
                 "PUBLIC_SITE_URL=http://127.0.0.1",
                 "PUBLIC_MEDIA_FLOW_ENABLED=true",
                 "PUBLIC_SEARCH_INDEXING_ENABLED=false",
+                "PREMIUM_TEST_CHECKOUT_VISIBLE=false",
                 "FREE_DOWNLOAD_QUOTA_ENABLED=false",
                 "POSTGRES_DB=fetchnow",
                 "POSTGRES_USER=fetchnow",
@@ -1472,6 +1473,7 @@ def main(argv: list[str] | None = None) -> int:
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
             "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
             "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
+            "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
         }:
             raise RuntimeError("active runtime config state not initialized")
         print("OK: active runtime config initialized without recreation")
@@ -1521,6 +1523,7 @@ def main(argv: list[str] | None = None) -> int:
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
             "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
             "FREE_DOWNLOAD_QUOTA_ENABLED": "true",
+            "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
         }:
             raise RuntimeError("quota config rollout did not commit active state")
         if (

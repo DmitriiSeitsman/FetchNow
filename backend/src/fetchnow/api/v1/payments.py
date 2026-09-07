@@ -114,7 +114,7 @@ async def create_payment_order(
     request_id = getattr(request.state, "request_id", None)
     service = _payment_service(request)
     try:
-        service.ensure_available()
+        service.ensure_checkout_available()
         async with _session_factory(request)() as session:
             identity = await QuotaService(request.app.state.settings).require_identity(
                 cookie_header=request.headers.get("cookie"), session=session
@@ -189,6 +189,20 @@ async def create_payment_order(
         status_code=201 if created.created else 200,
         headers=_NO_STORE,
         content=service.creation_dict(created),
+    )
+
+
+@router.get("/config", response_model=None)
+async def get_payment_config(request: Request) -> JSONResponse:
+    """Expose only the derived, non-secret temporary checkout availability."""
+    return JSONResponse(
+        status_code=200,
+        headers=_NO_STORE,
+        content={
+            "testCheckoutAvailable": _payment_service(
+                request
+            ).test_checkout_available
+        },
     )
 
 

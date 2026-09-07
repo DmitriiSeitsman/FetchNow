@@ -1045,6 +1045,98 @@ body.page-root {
   font-size: 0.78rem;
 }
 
+.premium-badge,
+.test-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  border: 1px solid rgba(29, 78, 137, 0.3);
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  background: var(--blue-wash);
+  color: var(--navy-deep);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.format .premium-badge {
+  grid-column: 2 / -1;
+  justify-self: end;
+}
+
+.premium-status {
+  margin: 0;
+  border: 1px solid rgba(29, 78, 137, 0.24);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.85rem;
+  background: var(--blue-wash);
+  color: var(--navy-deep);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.premium-status[data-state="error"] {
+  border-style: dashed;
+  color: var(--ink-muted);
+}
+
+.premium-checkout {
+  display: grid;
+  justify-items: start;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--elev-border-light);
+  padding-top: 0.85rem;
+}
+
+.premium-checkout p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.shell-payment {
+  min-height: calc(100vh - 8rem);
+}
+
+.payment-card {
+  display: grid;
+  justify-items: center;
+  gap: 1rem;
+  width: min(100%, 34rem);
+  border: 1px solid var(--elev-border-light);
+  border-radius: 20px;
+  padding: clamp(1.25rem, 5vw, 2rem);
+  background: var(--surface);
+  box-shadow: var(--elev-raised), var(--elev-inset-highlight);
+  text-align: center;
+}
+
+.payment-card h1,
+.payment-card p {
+  margin: 0;
+}
+
+.payment-card h1 {
+  color: var(--navy-deep);
+  font-size: clamp(1.45rem, 5vw, 2rem);
+}
+
+.payment-card p {
+  color: var(--ink-muted);
+  line-height: 1.55;
+}
+
+.payment-expiry {
+  font-weight: 700;
+  color: var(--leaf-deep) !important;
+}
+
 .format-selected {
   border-color: var(--blue-accent);
   background: var(--leaf-wash);
@@ -1225,6 +1317,15 @@ body.page-root {
     grid-column: 2;
     justify-self: start;
     text-align: left;
+  }
+
+  .format .premium-badge {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .premium-checkout .btn {
+    width: 100%;
   }
 }
 

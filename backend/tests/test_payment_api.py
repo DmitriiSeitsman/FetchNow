@@ -18,7 +18,7 @@ from fetchnow.payments.service import CallbackResult, CreatedPayment, PaymentSer
 from fetchnow.quota.service import AnonymousIdentity
 
 
-def _settings(*, enabled: bool = True) -> Settings:
+def _settings(*, enabled: bool = True, visible: bool = True) -> Settings:
     if not enabled:
         return Settings(APP_ENV="test", ROBOKASSA_MODE="disabled")
     return Settings(
@@ -31,6 +31,7 @@ def _settings(*, enabled: bool = True) -> Settings:
         ROBOKASSA_TEST_AMOUNT_MINOR=100,
         ROBOKASSA_RECEIPT_TAX="none",
         ROBOKASSA_RECEIPT_PAYMENT_METHOD="full_payment",
+        PREMIUM_TEST_CHECKOUT_VISIBLE=visible,
     )
 
 
@@ -111,8 +112,12 @@ class _StubPaymentService:
                 True,
             )
         )
+        self.test_checkout_available = True
         self.get_order = AsyncMock(return_value=row)
         self.accept_callback = AsyncMock(return_value=CallbackResult(42, True))
+
+    def ensure_checkout_available(self) -> None:
+        return None
 
     def ensure_available(self) -> None:
         pass
@@ -143,6 +148,68 @@ async def test_creation_disabled_fails_before_identity_or_credentials(
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "PAYMENTS_DISABLED"
     assert app.state.session_factory.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_test_checkout_visibility_gate_blocks_new_orders_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(visible=False)
+    service = PaymentService(settings)
+    client, app = await _client(monkeypatch, service, settings=settings)
+    async with client:
+        config = await client.get("/api/v1/payments/config")
+        create = await client.post(
+            "/api/v1/payments/orders",
+            json={"productCode": "premium_24h"},
+            headers={"Idempotency-Key": "A" * 32},
+        )
+    assert config.status_code == 200
+    assert config.headers["cache-control"] == "no-store"
+    assert config.json() == {"testCheckoutAvailable": False}
+    assert create.status_code == 503
+    assert create.json()["error"]["code"] == "PAYMENTS_DISABLED"
+    assert app.state.session_factory.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_payment_config_requires_test_mode_and_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        APP_ENV="test",
+        ROBOKASSA_MODE="disabled",
+        PREMIUM_TEST_CHECKOUT_VISIBLE=True,
+    )
+    client, _app = await _client(
+        monkeypatch, PaymentService(settings), settings=settings
+    )
+    async with client:
+        response = await client.get("/api/v1/payments/config")
+    assert response.status_code == 200
+    assert response.json() == {"testCheckoutAvailable": False}
+
+
+@pytest.mark.asyncio
+async def test_hidden_checkout_keeps_existing_order_status_and_callback_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _row(owner=_IdentityService.identity_id)
+    service = _StubPaymentService(row)
+    service.test_checkout_available = False
+    settings = _settings(visible=False)
+    client, _app = await _client(monkeypatch, service, settings=settings)
+    async with client:
+        status = await client.get(f"/api/v1/payments/orders/{row.public_id}")
+        callback = await client.post(
+            "/api/v1/payments/robokassa/result",
+            content="OutSum=1.00&InvId=42&SignatureValue=" + "a" * 64,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    assert status.status_code == 200
+    assert status.json()["status"] == "PENDING"
+    assert callback.status_code == 200
+    assert callback.text == "OK42"
 
 
 @pytest.mark.asyncio

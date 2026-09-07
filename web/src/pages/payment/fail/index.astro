@@ -1,0 +1,19 @@
+---
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="Тестовая оплата не завершена — FetchNow"
+  description="Статус тестовой оплаты FetchNow."
+  canonicalPath="/payment/fail/"
+  robots="noindex,nofollow"
+>
+  <main class="shell shell-payment">
+    <section class="payment-card" aria-labelledby="payment-title">
+      <span class="test-badge">ТЕСТ</span>
+      <h1 id="payment-title">Тестовая оплата не завершена</h1>
+      <p>Premium не был изменён. Можно вернуться и попробовать снова.</p>
+      <a class="btn btn-primary" href="/">Вернуться к скачиванию</a>
+    </section>
+  </main>
+</BaseLayout>

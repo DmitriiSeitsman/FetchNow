@@ -607,6 +607,7 @@ ROBOKASSA_TEST_AMOUNT_MINOR=100
 ROBOKASSA_RECEIPT_TAX=<verify separately>
 ROBOKASSA_RECEIPT_PAYMENT_METHOD=<verify separately>
 ROBOKASSA_ORDER_TTL_SECONDS=3600
+PREMIUM_TEST_CHECKOUT_VISIBLE=false
 PUBLIC_SEARCH_INDEXING_ENABLED=false
 ```
 
@@ -660,6 +661,15 @@ manual container edits, no pip inside live containers, no manual Alembic.
 12. Public production downloader smoke (§8, activation subset)
 13. Confirm indexing is still disabled (`X-Robots-Tag: noindex, nofollow`,
     empty sitemap, robots without a Sitemap line)
+
+The A3.3 temporary browser TEST CTA is a separate runtime-config transaction,
+not part of the source rollout above. Follow
+[chapter 31](31-runtime-config-rollout.md#temporary-a33-test-checkout): initialize
+the current runtime-config schema with the flag still `false`, enable only
+`PREMIUM_TEST_CHECKOUT_VISIBLE=true` for the approved E2E window, then restore
+it to `false` through the same canonical transaction. Never change
+`ROBOKASSA_MODE`, credentials, or `PUBLIC_SEARCH_INDEXING_ENABLED` as part of
+that toggle.
 
 ---
 

@@ -500,6 +500,12 @@ class Settings(BaseSettings):
         ge=300,
         le=86_400,
     )
+    # Temporary operator-controlled A3.3 browser checkout gate. This does not
+    # affect existing orders, callbacks, or Premium entitlement resolution.
+    premium_test_checkout_visible: bool = Field(
+        default=False,
+        alias="PREMIUM_TEST_CHECKOUT_VISIBLE",
+    )
 
     # Bounded stream-copy muxing (PR9) — fail closed / disabled by default.
     # ffmpeg/ffprobe paths are worker-only; API and delivery must not receive them.

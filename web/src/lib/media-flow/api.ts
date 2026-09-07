@@ -1,12 +1,21 @@
 import {
+  UUID_RE,
   parseApiError,
   parseBrowserGrant,
   parseDownloadJob,
   parseFreeQuota,
+  parsePremiumStatus,
+  parsePaymentConfig,
+  parsePaymentOrderStatus,
+  parseCreatedPaymentOrder,
   parseInspectionJob,
   type BrowserGrant,
   type DownloadJob,
   type FreeQuota,
+  type PremiumStatus,
+  type PaymentConfig,
+  type PaymentOrderStatus,
+  type CreatedPaymentOrder,
   type InspectionJob,
 } from "./contracts";
 import { FlowError, flowErrorFromCode, GENERIC_USER_MESSAGE } from "./errors";
@@ -226,6 +235,54 @@ export class MediaApi {
       throwHttpError(status, body, headers);
     }
     return parseFreeQuota(body);
+  }
+
+  async getPremiumStatus(signal?: AbortSignal): Promise<PremiumStatus> {
+    const { status, body, headers } = await this.requestJson(
+      "/api/v1/premium/status",
+      { method: "GET", headers: { Accept: "application/json" }, signal },
+    );
+    if (status !== 200) throwHttpError(status, body, headers);
+    return parsePremiumStatus(body);
+  }
+
+  async getPaymentConfig(signal?: AbortSignal): Promise<PaymentConfig> {
+    const { status, body, headers } = await this.requestJson(
+      "/api/v1/payments/config",
+      { method: "GET", headers: { Accept: "application/json" }, signal },
+    );
+    if (status !== 200) throwHttpError(status, body, headers);
+    return parsePaymentConfig(body);
+  }
+
+  async createPaymentOrder(
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<CreatedPaymentOrder> {
+    const { status, body, headers } = await this.requestJson(
+      "/api/v1/payments/orders",
+      {
+        method: "POST",
+        headers: { ...JSON_HEADERS, "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ productCode: "premium_24h" }),
+        signal,
+      },
+    );
+    if (status !== 200 && status !== 201) throwHttpError(status, body, headers);
+    return parseCreatedPaymentOrder(body);
+  }
+
+  async getPaymentOrder(
+    orderId: string,
+    signal?: AbortSignal,
+  ): Promise<PaymentOrderStatus> {
+    if (!UUID_RE.test(orderId)) throw flowErrorFromCode("CONTRACT");
+    const { status, body, headers } = await this.requestJson(
+      `/api/v1/payments/orders/${orderId}`,
+      { method: "GET", headers: { Accept: "application/json" }, signal },
+    );
+    if (status !== 200) throwHttpError(status, body, headers);
+    return parsePaymentOrderStatus(body);
   }
 
   async createInspectionJob(

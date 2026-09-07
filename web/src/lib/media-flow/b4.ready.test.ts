@@ -521,7 +521,7 @@ describe("PRD1E-B4: Ready UI & interaction (Part E)", () => {
     expect(el("[data-flow-native-download]").hidden).toBe(true);
   });
 
-  it("31. no Premium CTA/card is rendered in Astro markup or rendered DOM", () => {
+  it("31. A3.3 Premium controls are present but hidden by default", () => {
     mountFlowMarkup();
     renderFlow(
       document,
@@ -537,7 +537,8 @@ describe("PRD1E-B4: Ready UI & interaction (Part E)", () => {
     expect(document.body.textContent).not.toContain("Premium");
     expect(document.body.textContent).not.toContain("Премиум");
     expect(astroSource).not.toContain("ready-card--premium");
-    expect(astroSource).not.toContain("data-flow-premium");
+    expect(astroSource).toContain("data-flow-premium");
+    expect(astroSource).toMatch(/data-flow-premium-checkout hidden/);
   });
 
   it("32. no fake payment action exists in rendered DOM or markup", () => {

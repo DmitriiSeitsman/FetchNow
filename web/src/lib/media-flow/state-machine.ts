@@ -52,6 +52,7 @@ const ALLOWED: Record<FlowPhase, readonly FlowPhase[]> = {
   ],
   inspected: ["enqueueing_download", "cancelled", "expired", "unsupported"],
   enqueueing_download: [
+    "inspected",
     "downloading",
     "download_failed",
     "network_error",

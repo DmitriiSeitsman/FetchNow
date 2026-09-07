@@ -7,6 +7,8 @@ import {
   type MediaFormat,
   type ProgressStage,
   type FreeQuota,
+  type PremiumStatus,
+  isFormatOptionId,
 } from "./contracts";
 import { projectCapabilityUi } from "./capabilities";
 import { flowStatusText, STAGE_LABEL } from "./progress";
@@ -39,6 +41,22 @@ import {
   isTerminalPhase,
   type FlowPhase,
 } from "./state-machine";
+import {
+  createIdempotencyKey,
+  storePaymentOrder,
+  submitServerPaymentForm,
+} from "../premium/payment";
+
+export type PremiumUiState = "loading" | "free" | "active" | "error";
+
+function canUseFormat(format: MediaFormat, premiumActive: boolean): boolean {
+  if (!isFormatOptionId(format.formatOptionId)) return false;
+  if (format.mediaKind === "normal_video") return isDownloadEligible(format);
+  if (!premiumActive || !format.requiresPremium) return false;
+  return format.mediaKind === "video_only"
+    ? format.hasVideo && !format.hasAudio
+    : format.mediaKind === "audio_only" && format.hasAudio && !format.hasVideo;
+}
 
 export type FlowSnapshot = {
   phase: FlowPhase;
@@ -71,6 +89,10 @@ export type FlowSnapshot = {
   artifactBytes: number | null;
   freeQuota?: FreeQuota | null;
   quotaLoading?: boolean;
+  premiumState?: PremiumUiState;
+  premiumStatus?: PremiumStatus | null;
+  testCheckoutAvailable?: boolean;
+  checkoutBusy?: boolean;
 };
 
 export type ControllerHooks = {
@@ -84,6 +106,9 @@ export type ControllerHooks = {
   secureContext?: () => boolean;
   onChange?: (snapshot: FlowSnapshot) => void;
   now?: () => number;
+  createIdempotencyKey?: () => string;
+  storePaymentOrder?: (orderId: string) => void;
+  submitPaymentForm?: typeof submitServerPaymentForm;
 };
 
 export class MediaFlowController {
@@ -97,6 +122,9 @@ export class MediaFlowController {
   private readonly secureContext: () => boolean;
   private readonly now: () => number;
   private readonly onChange?: (snapshot: FlowSnapshot) => void;
+  private readonly makeIdempotencyKey: () => string;
+  private readonly savePaymentOrder: (orderId: string) => void;
+  private readonly submitPaymentForm: typeof submitServerPaymentForm;
 
   private abort: AbortController | null = null;
   private quotaAbort = new AbortController();
@@ -119,6 +147,12 @@ export class MediaFlowController {
   private freeQuota: FreeQuota | null = null;
   private quotaLoading = false;
   private quotaRefresh: Promise<void> | null = null;
+  private premiumRefresh: Promise<void> | null = null;
+  private paymentConfigRefresh: Promise<void> | null = null;
+  private premiumState: PremiumUiState = "loading";
+  private premiumStatus: PremiumStatus | null = null;
+  private testCheckoutAvailable = false;
+  private checkoutBusy = false;
 
   constructor(hooks: ControllerHooks = {}) {
     this.api = hooks.api ?? new MediaApi();
@@ -132,6 +166,9 @@ export class MediaFlowController {
     this.secureContext = hooks.secureContext ?? isSecureDeliveryContext;
     this.now = hooks.now ?? Date.now;
     this.onChange = hooks.onChange;
+    this.makeIdempotencyKey = hooks.createIdempotencyKey ?? createIdempotencyKey;
+    this.savePaymentOrder = hooks.storePaymentOrder ?? storePaymentOrder;
+    this.submitPaymentForm = hooks.submitPaymentForm ?? submitServerPaymentForm;
   }
 
   snapshot(): FlowSnapshot {
@@ -144,10 +181,12 @@ export class MediaFlowController {
     const deliveryRateBytesPerSecond =
       this.downloadJob?.deliveryRateBytesPerSecond ?? null;
     const downloadEligible =
-      capabilities.canDownloadVideo &&
+      (selected?.mediaKind === "audio_only"
+        ? capabilities.canExtractAudio
+        : capabilities.canDownloadVideo) &&
       !muxingBlocked &&
       selected !== undefined &&
-      isDownloadEligible(selected);
+      canUseFormat(selected, this.premiumState === "active");
     const phase = this.machine.current;
     const httpsRequired = phase === "ready" && !this.secureContext();
     const armed =
@@ -202,11 +241,108 @@ export class MediaFlowController {
       artifactBytes: this.downloadJob?.artifactBytes ?? null,
       freeQuota: this.freeQuota,
       quotaLoading: this.quotaLoading,
+      premiumState: this.premiumState,
+      premiumStatus: this.premiumStatus,
+      testCheckoutAvailable: this.testCheckoutAvailable,
+      checkoutBusy: this.checkoutBusy,
     };
+  }
+
+  async initializeAccount(): Promise<void> {
+    await this.refreshQuota(true);
+    await Promise.all([this.refreshPremium(true), this.refreshPaymentConfig(true)]);
   }
 
   async initializeQuota(): Promise<void> {
     await this.refreshQuota(true);
+  }
+
+  async refreshPremium(silent = true): Promise<void> {
+    if (this.premiumRefresh !== null) {
+      await this.premiumRefresh;
+      return;
+    }
+    if (this.closed || typeof this.api.getPremiumStatus !== "function") return;
+    const run = async () => {
+      this.premiumState = "loading";
+      this.emit();
+      try {
+        const status = await this.api.getPremiumStatus(this.quotaAbort.signal);
+        if (this.closed) return;
+        this.premiumStatus = status;
+        this.premiumState = status.active ? "active" : "free";
+      } catch (err) {
+        if (isAbortError(err) || this.closed) return;
+        this.premiumStatus = null;
+        this.premiumState = "error";
+        if (!silent) this.errorText = "Не удалось обновить статус Premium.";
+      } finally {
+        this.emit();
+      }
+    };
+    this.premiumRefresh = run();
+    try {
+      await this.premiumRefresh;
+    } finally {
+      this.premiumRefresh = null;
+    }
+  }
+
+  private async refreshPaymentConfig(silent = true): Promise<void> {
+    if (this.paymentConfigRefresh !== null) {
+      await this.paymentConfigRefresh;
+      return;
+    }
+    if (this.closed || typeof this.api.getPaymentConfig !== "function") return;
+    const run = async () => {
+      try {
+        const config = await this.api.getPaymentConfig(this.quotaAbort.signal);
+        if (!this.closed) this.testCheckoutAvailable = config.testCheckoutAvailable;
+      } catch (err) {
+        if (!isAbortError(err) && !this.closed) {
+          this.testCheckoutAvailable = false;
+          if (!silent) this.errorText = "Тестовая оплата сейчас недоступна.";
+        }
+      } finally {
+        this.emit();
+      }
+    };
+    this.paymentConfigRefresh = run();
+    try {
+      await this.paymentConfigRefresh;
+    } finally {
+      this.paymentConfigRefresh = null;
+    }
+  }
+
+  async startTestCheckout(): Promise<void> {
+    if (
+      this.checkoutBusy ||
+      !this.testCheckoutAvailable ||
+      this.premiumState !== "free" ||
+      typeof this.api.createPaymentOrder !== "function"
+    ) return;
+    this.checkoutBusy = true;
+    this.errorText = null;
+    this.emit();
+    try {
+      const created = await this.api.createPaymentOrder(
+        this.makeIdempotencyKey(),
+        this.quotaAbort.signal,
+      );
+      if (this.closed) return;
+      this.savePaymentOrder(created.orderId);
+      this.submitPaymentForm(created);
+    } catch (err) {
+      if (isAbortError(err) || this.closed) return;
+      this.errorText = err instanceof FlowError
+        ? err.userMessage
+        : "Не удалось начать тестовую оплату. Попробуйте ещё раз.";
+      await this.refreshPaymentConfig(true);
+    } finally {
+      this.checkoutBusy = false;
+      this.emit();
+    }
   }
 
   private async refreshQuota(silent: boolean): Promise<void> {
@@ -444,6 +580,8 @@ export class MediaFlowController {
   }
 
   onForegroundResume(): void {
+    void this.refreshPremium(true);
+    void this.refreshPaymentConfig(true);
     if (this.machine.current !== "ready") {
       return;
     }
@@ -459,10 +597,10 @@ export class MediaFlowController {
     }
   }
 
-  onPageShow(persisted: boolean): Promise<void> {
+  async onPageShow(persisted: boolean): Promise<void> {
     if (!persisted) {
       this.onForegroundResume();
-      return Promise.resolve();
+      return;
     }
     this.abort?.abort();
     this.abort = null;
@@ -475,7 +613,7 @@ export class MediaFlowController {
     this.restored = false;
     this.clearResumeDownloadId();
     this.machine.resetToIdle();
-    return this.restore();
+    await Promise.all([this.restore(), this.initializeAccount()]);
   }
 
   startOver(): void {
@@ -695,7 +833,10 @@ export class MediaFlowController {
     );
     if (
       !format ||
-      !isDownloadEligible(format) ||
+      (format.mediaKind === "audio_only"
+        ? !projectCapabilityUi(this.mediaJob?.providerCapabilities).canExtractAudio
+        : !projectCapabilityUi(this.mediaJob?.providerCapabilities).canDownloadVideo) ||
+      !canUseFormat(format, this.premiumState === "active") ||
       this.mediaJob?.result?.muxingRequired
     ) {
       return;
@@ -716,9 +857,11 @@ export class MediaFlowController {
     if (
       !this.token ||
       !this.mediaJob ||
-      !projectCapabilityUi(this.mediaJob.providerCapabilities).canDownloadVideo ||
+      (format?.mediaKind === "audio_only"
+        ? !projectCapabilityUi(this.mediaJob.providerCapabilities).canExtractAudio
+        : !projectCapabilityUi(this.mediaJob.providerCapabilities).canDownloadVideo) ||
       !format ||
-      !isDownloadEligible(format) ||
+      !canUseFormat(format, this.premiumState === "active") ||
       this.mediaJob.result?.muxingRequired
     ) {
       this.machine.endAction();
@@ -738,7 +881,7 @@ export class MediaFlowController {
     this.emit();
     try {
       await this.refreshQuota(false);
-      if (this.freeQuota?.downloadsRemaining === 0) {
+      if (this.freeQuota?.tier === "free" && this.freeQuota.downloadsRemaining === 0) {
         throw flowErrorFromCode("FREE_DOWNLOAD_QUOTA_EXHAUSTED");
       }
       const job = await this.api.createDownloadJob(
@@ -763,6 +906,14 @@ export class MediaFlowController {
         return;
       }
       if (isAbortError(err) && this.abort?.signal.aborted === true) {
+        return;
+      }
+      if (err instanceof FlowError && err.code === "MEDIA_CAPABILITY_REQUIRES_PREMIUM") {
+        await this.refreshPremium(true);
+        this.errorText = "Срок Premium истёк или доступ не подтверждён. Обновите статус и попробуйте снова.";
+        this.machine.transition("inspected", generation);
+        this.machine.endAction();
+        this.emit();
         return;
       }
       this.fail("download_failed", err, generation);

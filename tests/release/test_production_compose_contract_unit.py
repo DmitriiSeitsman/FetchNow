@@ -60,7 +60,9 @@ def test_production_env_example_is_placeholder_only() -> None:
     assert "MEDIA_BROWSER_DELIVERY_ENABLED=false" in text
     assert "MEDIA_MUXING_ENABLED=false" in text
     assert "ROBOKASSA_MODE=disabled" in text
+    assert "PREMIUM_TEST_CHECKOUT_VISIBLE=false" in text
     assert "ROBOKASSA_TEST_AMOUNT_MINOR=0" in text
+    assert text.count("PREMIUM_TEST_CHECKOUT_VISIBLE=false") == 1
     assert "MEDIA_INSPECTION_YTDLP_PATH=/opt/venv/bin/yt-dlp" in text
     assert "PUBLIC_MEDIA_FLOW_ENABLED=true" in text
     assert text.count("PUBLIC_MEDIA_FLOW_ENABLED=false") == 1

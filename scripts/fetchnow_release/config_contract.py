@@ -27,6 +27,7 @@ class RuntimeConfigSpec:
 
 # Deliberately narrow. Extending this map is a reviewed release-tooling change.
 RUNTIME_CONFIG_ALLOWLIST: dict[str, RuntimeConfigSpec] = {
+    "PREMIUM_TEST_CHECKOUT_VISIBLE": RuntimeConfigSpec(("api",), "boolean"),
     "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
     "FREE_DELIVERY_RATE_LIMIT_ENABLED": RuntimeConfigSpec(
         ("api", "delivery"), "boolean"
@@ -46,6 +47,18 @@ LEGACY_RUNTIME_CONFIG_SCHEMA1: dict[str, RuntimeConfigSpec] = {
     "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
 }
 
+# Schema 2 added the delivery-rate pair. Keep its exact parser/fingerprint so
+# an accepted deployment can be upgraded to the current schema fail-closed.
+LEGACY_RUNTIME_CONFIG_SCHEMA2: dict[str, RuntimeConfigSpec] = {
+    "FREE_DOWNLOAD_QUOTA_ENABLED": RuntimeConfigSpec(("api",), "boolean"),
+    "FREE_DELIVERY_RATE_LIMIT_ENABLED": RuntimeConfigSpec(
+        ("api", "delivery"), "boolean"
+    ),
+    "FREE_DELIVERY_RATE_BYTES_PER_SECOND": RuntimeConfigSpec(
+        ("api", "delivery"), "integer", minimum=262_144, maximum=67_108_864
+    ),
+}
+
 # These values are baked into immutable images and must never be applied by a
 # config-only rollout. They are safe, non-secret values suitable for snapshotting.
 BUILD_TIME_CONFIG: dict[str, tuple[str, ...]] = {
@@ -57,6 +70,7 @@ BUILD_TIME_CONFIG: dict[str, tuple[str, ...]] = {
 # Runtime-wired MEDIA/FREE keys are classified for documentation and explicit
 # review. Only keys also present in RUNTIME_CONFIG_ALLOWLIST may change.
 RUNTIME_WIRING: dict[str, tuple[str, ...]] = {
+    "PREMIUM_TEST_CHECKOUT_VISIBLE": ("api",),
     "FREE_DOWNLOAD_QUOTA_ENABLED": ("api",),
     "FREE_DELIVERY_RATE_LIMIT_ENABLED": ("api", "delivery"),
     "FREE_DELIVERY_RATE_BYTES_PER_SECOND": ("api", "delivery"),
@@ -143,6 +157,15 @@ def normalize_legacy_runtime_values_schema1(
     )
 
 
+def normalize_legacy_runtime_values_schema2(
+    values: Mapping[str, object],
+) -> dict[str, str]:
+    return _normalize_runtime_values_for_specs(
+        values,
+        specs=LEGACY_RUNTIME_CONFIG_SCHEMA2,
+    )
+
+
 def normalize_build_values(values: Mapping[str, object]) -> dict[str, str]:
     if set(values) != set(BUILD_TIME_CONFIG):
         raise ConfigContractError("build config keys do not match classification")
@@ -178,6 +201,15 @@ def legacy_runtime_config_fingerprint_schema1(
     return _fingerprint(
         FINGERPRINT_DOMAIN,
         normalize_legacy_runtime_values_schema1(values),
+    )
+
+
+def legacy_runtime_config_fingerprint_schema2(
+    values: Mapping[str, object],
+) -> str:
+    return _fingerprint(
+        FINGERPRINT_DOMAIN,
+        normalize_legacy_runtime_values_schema2(values),
     )
 
 

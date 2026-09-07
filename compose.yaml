@@ -123,6 +123,7 @@ services:
       ROBOKASSA_RECEIPT_TAX: ${ROBOKASSA_RECEIPT_TAX:-}
       ROBOKASSA_RECEIPT_PAYMENT_METHOD: ${ROBOKASSA_RECEIPT_PAYMENT_METHOD:-}
       ROBOKASSA_ORDER_TTL_SECONDS: ${ROBOKASSA_ORDER_TTL_SECONDS:-3600}
+      PREMIUM_TEST_CHECKOUT_VISIBLE: ${PREMIUM_TEST_CHECKOUT_VISIBLE:-false}
     # Intentionally no tmp/artifact volume: API must not see private artifacts.
     networks:
       - fetchnow

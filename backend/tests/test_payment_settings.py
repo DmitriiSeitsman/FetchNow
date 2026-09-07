@@ -28,7 +28,15 @@ def test_disabled_mode_starts_without_credentials() -> None:
     assert settings.robokassa_mode == "disabled"
     assert settings.robokassa_test_amount_minor == 0
     assert settings.robokassa_test_password1.get_secret_value() == ""
+    assert settings.premium_test_checkout_visible is False
     assert "robokassa_test_password1" not in repr(settings)
+
+
+def test_checkout_visibility_boolean_is_strict_and_independent_of_mode() -> None:
+    settings = _test_settings(PREMIUM_TEST_CHECKOUT_VISIBLE=True)
+    assert settings.premium_test_checkout_visible
+    with pytest.raises(ValidationError):
+        _test_settings(PREMIUM_TEST_CHECKOUT_VISIBLE="sometimes")
 
 
 @pytest.mark.parametrize(

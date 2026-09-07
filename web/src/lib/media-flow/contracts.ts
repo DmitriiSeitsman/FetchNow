@@ -344,6 +344,128 @@ type PremiumQuota = {
 
 export type FreeQuota = FreeQuotaLimited | PremiumQuota;
 
+export type PremiumStatus =
+  | { active: false }
+  | {
+      active: true;
+      expiresAt: string;
+      productCode: "premium_24h";
+      remainingSeconds: number;
+    };
+
+export type PaymentConfig = { testCheckoutAvailable: boolean };
+
+export type PaymentOrderStatus = {
+  status: "CREATED" | "PENDING" | "PAID" | "EXPIRED";
+  productCode: "premium_24h";
+  amountMinor: number;
+  currency: "RUB";
+  createdAt: string;
+  paidAt: string | null;
+};
+
+export type PaymentForm = {
+  action: "https://auth.robokassa.ru/Merchant/Index.aspx";
+  method: "POST";
+  fields: Record<string, string> & { IsTest: "1" };
+};
+
+export type CreatedPaymentOrder = {
+  orderId: string;
+  status: "PENDING";
+  paymentForm: PaymentForm;
+};
+
+export function parsePremiumStatus(value: unknown): PremiumStatus {
+  if (!isRecord(value)) fail();
+  rejectForbidden(value);
+  if (value.active === false && Object.keys(value).length === 1) {
+    return { active: false };
+  }
+  if (
+    value.active !== true ||
+    Object.keys(value).some(
+      (key) => !["active", "expiresAt", "productCode", "remainingSeconds"].includes(key),
+    ) ||
+    value.productCode !== "premium_24h"
+  ) fail();
+  return {
+    active: true,
+    expiresAt: requireIso(value.expiresAt),
+    productCode: "premium_24h",
+    remainingSeconds: requireIntegerInRange(value.remainingSeconds, 0, 86_400),
+  };
+}
+
+export function parsePaymentConfig(value: unknown): PaymentConfig {
+  if (!isRecord(value) || Object.keys(value).length !== 1) fail();
+  return { testCheckoutAvailable: requireBoolean(value.testCheckoutAvailable) };
+}
+
+export function parsePaymentOrderStatus(value: unknown): PaymentOrderStatus {
+  if (!isRecord(value)) fail();
+  rejectForbidden(value);
+  const keys = ["status", "productCode", "amountMinor", "currency", "createdAt", "paidAt"];
+  if (Object.keys(value).some((key) => !keys.includes(key))) fail();
+  if (
+    typeof value.status !== "string" ||
+    !["CREATED", "PENDING", "PAID", "EXPIRED"].includes(value.status) ||
+    value.productCode !== "premium_24h" ||
+    value.currency !== "RUB"
+  ) fail();
+  return {
+    status: value.status as PaymentOrderStatus["status"],
+    productCode: "premium_24h",
+    amountMinor: requireIntegerInRange(value.amountMinor, 1, Number.MAX_SAFE_INTEGER),
+    currency: "RUB",
+    createdAt: requireIso(value.createdAt),
+    paidAt: value.paidAt === null ? null : requireIso(value.paidAt),
+  };
+}
+
+export function parseCreatedPaymentOrder(value: unknown): CreatedPaymentOrder {
+  if (!isRecord(value) || !isRecord(value.paymentForm)) fail();
+  rejectForbidden(value);
+  if (Object.keys(value).some((key) => !["orderId", "status", "paymentForm"].includes(key))) fail();
+  const form = value.paymentForm;
+  if (
+    !isUuid(value.orderId) ||
+    value.status !== "PENDING" ||
+    form.action !== "https://auth.robokassa.ru/Merchant/Index.aspx" ||
+    form.method !== "POST" ||
+    !isRecord(form.fields)
+  ) fail();
+  const fields: Record<string, string> = {};
+  const fieldNames = new Set([
+    "MerchantLogin",
+    "OutSum",
+    "InvId",
+    "Description",
+    "SignatureValue",
+    "IsTest",
+    "Receipt",
+    "Culture",
+  ]);
+  for (const [key, field] of Object.entries(form.fields)) {
+    if (!fieldNames.has(key) || typeof field !== "string" || field.length > 8192) fail();
+    fields[key] = field;
+  }
+  if (
+    Object.keys(fields).length !== fieldNames.size ||
+    fields.IsTest !== "1" ||
+    !/^[0-9a-f]{64}$/i.test(fields.SignatureValue ?? "")
+  ) fail();
+  return {
+    orderId: value.orderId,
+    status: "PENDING",
+    paymentForm: {
+      action: "https://auth.robokassa.ru/Merchant/Index.aspx",
+      method: "POST",
+      fields: fields as Record<string, string> & { IsTest: "1" },
+    },
+  };
+}
+
 export function parseFreeQuota(value: unknown): FreeQuota {
   if (!isRecord(value)) {
     fail();

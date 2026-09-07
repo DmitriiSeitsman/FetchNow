@@ -60,6 +60,17 @@ class PaymentService:
     def ensure_available(self) -> None:
         self._require_test_mode()
 
+    @property
+    def test_checkout_available(self) -> bool:
+        return (
+            self._settings.robokassa_mode == "test"
+            and self._settings.premium_test_checkout_visible
+        )
+
+    def ensure_checkout_available(self) -> None:
+        if not self.test_checkout_available:
+            raise PaymentsDisabledError()
+
     async def create_order(
         self,
         *,
@@ -68,7 +79,7 @@ class PaymentService:
         idempotency_key: str,
         session: AsyncSession,
     ) -> CreatedPayment:
-        self._require_test_mode()
+        self.ensure_checkout_available()
         product = get_product(self._settings, product_code)
         receipt = serialize_receipt(product)
         repo = PaymentOrderRepository(session)

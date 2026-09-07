@@ -12,6 +12,7 @@ from fetchnow.payments.catalog import get_product
 from fetchnow.payments.errors import (
     InvalidCallbackError,
     InvalidIdempotencyKeyError,
+    PaymentsDisabledError,
     UnknownProductError,
 )
 from fetchnow.payments.idempotency import hash_idempotency_key
@@ -52,7 +53,21 @@ def _settings() -> Settings:
         ROBOKASSA_TEST_AMOUNT_MINOR=1_000,
         ROBOKASSA_RECEIPT_TAX="none",
         ROBOKASSA_RECEIPT_PAYMENT_METHOD="full_payment",
+        PREMIUM_TEST_CHECKOUT_VISIBLE=True,
     )
+
+
+def test_temporary_checkout_gate_is_fail_closed() -> None:
+    enabled = _settings()
+    hidden = enabled.model_copy(update={"premium_test_checkout_visible": False})
+    disabled = enabled.model_copy(update={"robokassa_mode": "disabled"})
+    assert PaymentService(enabled).test_checkout_available is True
+    assert PaymentService(hidden).test_checkout_available is False
+    assert PaymentService(disabled).test_checkout_available is False
+    assert Settings(APP_ENV="test").premium_test_checkout_visible is False
+    PaymentService(hidden).ensure_available()
+    with pytest.raises(PaymentsDisabledError):
+        PaymentService(hidden).ensure_checkout_available()
 
 
 def _order(*, state: str = "pending", amount: int = 1_000) -> PaymentOrder:
@@ -177,6 +192,48 @@ async def test_valid_callback_transitions_once_and_duplicate_is_noop(
     assert second.transitioned is False
     assert repo.row.status == "paid"
     assert repo.lock_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_hidden_checkout_still_accepts_callback_and_issues_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fetchnow.payments import service as service_module
+
+    repo = _CallbackRepo
+    repo.row = _order()
+    repo.lock_calls = 0
+    issued: list[uuid.UUID] = []
+
+    async def _record_issuance(
+        _self: object, order: PaymentOrder, *, session: object
+    ) -> tuple[None, bool]:
+        assert session is callback_session
+        issued.append(order.id)
+        return None, True
+
+    monkeypatch.setattr(service_module, "PaymentOrderRepository", repo)
+    monkeypatch.setattr(
+        service_module.PremiumEntitlementService,
+        "ensure_for_paid_order",
+        _record_issuance,
+    )
+    hidden = _settings().model_copy(
+        update={"premium_test_checkout_visible": False}
+    )
+    signature = sign_callback(
+        raw_out_sum="10.000000", inv_id=123, password2="password-two"
+    )
+    callback_session = object()
+    result = await PaymentService(hidden).accept_callback(
+        raw_out_sum="10.000000",
+        inv_id=123,
+        supplied_signature=signature,
+        session=callback_session,  # type: ignore[arg-type]
+    )
+    assert result.transitioned is True
+    assert repo.row.status == "paid"
+    assert issued == [repo.row.id]
 
 
 @pytest.mark.asyncio

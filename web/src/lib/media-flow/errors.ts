@@ -120,6 +120,26 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "Это качество недоступно в текущем бесплатном режиме.",
     retryable: false,
   },
+  MEDIA_CAPABILITY_REQUIRES_PREMIUM: {
+    text: "Для этого варианта нужен активный Premium.",
+    retryable: false,
+  },
+  MEDIA_CAPABILITY_UNAVAILABLE: {
+    text: "Источник больше не предоставляет этот вариант.",
+    retryable: false,
+  },
+  PAYMENTS_DISABLED: {
+    text: "Тестовая оплата сейчас недоступна.",
+    retryable: false,
+  },
+  PAYMENT_IDENTITY_REQUIRED: {
+    text: "Не удалось подтвердить текущий браузер. Обновите страницу и попробуйте снова.",
+    retryable: true,
+  },
+  PAYMENT_ORDER_NOT_FOUND: {
+    text: "Не удалось найти тестовый платёж для этого браузера.",
+    retryable: false,
+  },
   FORMAT_UNAVAILABLE: {
     text: "Это качество больше недоступно. Начните сначала, чтобы обновить варианты.",
     retryable: false,
