@@ -18,7 +18,7 @@ RUN test "$PUBLIC_SEARCH_INDEXING_ENABLED" = "true" -o "$PUBLIC_SEARCH_INDEXING_
 ENV PUBLIC_SEARCH_INDEXING_ENABLED=$PUBLIC_SEARCH_INDEXING_ENABLED
 RUN npm run build
 
-FROM nginx:1.31.3-alpine AS runtime
+FROM nginx:1.31.5-alpine AS runtime
 
 RUN addgroup -g 10001 -S fetchnow \
     && adduser -S -D -H -u 10001 -G fetchnow fetchnow \
