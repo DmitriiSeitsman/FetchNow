@@ -118,19 +118,37 @@ describe("PRD2-A3.3 Premium UI", () => {
   });
 
   it("shows the explicit TEST CTA only when the derived server flag is available", () => {
-    renderFlow(document, snapshot({ testCheckoutAvailable: false }));
-    expect(
-      document.querySelector<HTMLElement>("[data-flow-premium-checkout]")?.hidden,
-    ).toBe(true);
-
-    renderFlow(document, snapshot({ testCheckoutAvailable: true }));
     const checkout = document.querySelector<HTMLElement>(
       "[data-flow-premium-checkout]",
     );
+    renderFlow(document, snapshot({ testCheckoutAvailable: false }));
+    expect(checkout?.hidden).toBe(true);
+
+    const css = readFileSync(join(here, "../../styles/global.css"), "utf8");
+    expect(css).toMatch(
+      /\.premium-checkout\[hidden\],[\s\S]*?\{[\s\S]*?display:\s*none;/,
+    );
+
+    renderFlow(document, snapshot({ testCheckoutAvailable: true }));
     expect(checkout?.hidden).toBe(false);
     expect(checkout?.textContent).toContain("ТЕСТ");
     expect(checkout?.textContent).toContain("Не является коммерческой покупкой");
     expect(checkout?.textContent).not.toContain("1 ₽");
+
+    renderFlow(
+      document,
+      snapshot({
+        premiumState: "active",
+        premiumStatus: {
+          active: true,
+          expiresAt: "2026-09-08T12:00:00Z",
+          productCode: "premium_24h",
+          remainingSeconds: 86_400,
+        },
+        testCheckoutAvailable: true,
+      }),
+    );
+    expect(checkout?.hidden).toBe(true);
   });
 
   it("unlocks standalone options from backend Premium state even with checkout disabled", () => {
