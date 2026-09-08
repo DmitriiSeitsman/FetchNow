@@ -13,6 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fetchnow.core.errors import error_envelope
 from fetchnow.payments.audit import payment_event
+from fetchnow.payments.callback_diagnostic import (
+    CallbackDiagnostic,
+)
+from fetchnow.payments.callback_diagnostic import (
+    emit_once as emit_callback_diagnostic_once,
+)
 from fetchnow.payments.errors import (
     IdempotencyConflictError,
     InvalidCallbackError,
@@ -63,14 +69,26 @@ def _payment_service(request: Request) -> PaymentService:
     return value
 
 
-async def _callback_form(request: Request) -> dict[str, str]:
+async def _callback_form(
+    request: Request, diagnostic: CallbackDiagnostic
+) -> dict[str, str]:
+    diagnostic.parser_entered = True
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
+    diagnostic.content_type_category = (
+        "form_urlencoded"
+        if content_type == "application/x-www-form-urlencoded"
+        else ("missing" if not content_type else "other")
+    )
     if content_type != "application/x-www-form-urlencoded":
+        diagnostic.rejection_stage = "content_type"
+        diagnostic.rejection_category = "content_type_invalid"
         raise InvalidCallbackError()
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > _CALLBACK_BODY_LIMIT:
+            diagnostic.rejection_stage = "form_decode"
+            diagnostic.rejection_category = "form_invalid"
             raise InvalidCallbackError()
     try:
         text = bytes(body).decode("utf-8", errors="strict")
@@ -83,25 +101,50 @@ async def _callback_form(request: Request) -> dict[str, str]:
             max_num_fields=16,
         )
     except (UnicodeError, ValueError) as exc:
+        diagnostic.rejection_stage = "form_decode"
+        diagnostic.rejection_category = "form_invalid"
         raise InvalidCallbackError() from exc
+    diagnostic.record_names([key for key, _value in pairs])
     values: dict[str, str] = {}
     for key, value in pairs:
-        if key in values or key not in _CALLBACK_FIELDS or key.startswith("Shp_"):
+        if key in values:
+            diagnostic.rejection_stage = "field_schema"
+            diagnostic.rejection_category = "duplicate_field"
+            raise InvalidCallbackError()
+        if key not in _CALLBACK_FIELDS or key.startswith("Shp_"):
+            diagnostic.unexpected_field_names = tuple(
+                sorted(
+                    name
+                    for name in diagnostic.field_names
+                    if name not in _CALLBACK_FIELDS or name.startswith("Shp_")
+                )
+            )
+            diagnostic.rejection_stage = "field_schema"
+            diagnostic.rejection_category = "unexpected_field"
             raise InvalidCallbackError()
         if any(char in value for char in ("\r", "\n", "\0")):
             raise InvalidCallbackError()
         values[key] = value
     if not {"OutSum", "InvId", "SignatureValue"}.issubset(values):
+        diagnostic.rejection_stage = "field_schema"
+        diagnostic.rejection_category = "required_field_missing"
         raise InvalidCallbackError()
+    diagnostic.parser_accepted = True
     return values
 
 
-def _parse_inv_id(raw: str) -> int:
+def _parse_inv_id(raw: str, diagnostic: CallbackDiagnostic) -> int:
+    diagnostic.inv_id_parsing_attempted = True
     if _INV_ID.fullmatch(raw) is None:
+        diagnostic.rejection_stage = "inv_id"
+        diagnostic.rejection_category = "inv_id_invalid"
         raise InvalidCallbackError()
     value = int(raw)
     if value > 9_223_372_036_854_775_807:
+        diagnostic.rejection_stage = "inv_id"
+        diagnostic.rejection_category = "inv_id_invalid"
         raise InvalidCallbackError()
+    diagnostic.inv_id_valid = True
     return value
 
 
@@ -262,27 +305,43 @@ async def get_payment_order(request: Request, public_id: str) -> JSONResponse:
 
 @router.post("/robokassa/result", response_model=None)
 async def robokassa_result(request: Request) -> PlainTextResponse:
+    diagnostic = CallbackDiagnostic()
     try:
-        values = await _callback_form(request)
-        inv_id = _parse_inv_id(values["InvId"])
+        values = await _callback_form(request, diagnostic)
+        inv_id = _parse_inv_id(values["InvId"], diagnostic)
         async with _session_factory(request)() as session:
             result = await _payment_service(request).accept_callback(
                 raw_out_sum=values["OutSum"],
                 inv_id=inv_id,
                 supplied_signature=values["SignatureValue"],
                 session=session,
+                diagnostic=diagnostic,
             )
             await session.commit()
-    except (InvalidCallbackError, PaymentsDisabledError):
+    except (InvalidCallbackError, PaymentsDisabledError) as exc:
+        if isinstance(exc, PaymentsDisabledError):
+            diagnostic.rejection_stage = "snapshot"
+            diagnostic.rejection_category = "payments_disabled"
+        diagnostic.http_status = 400
+        diagnostic.response_outcome = "ERROR"
+        emit_callback_diagnostic_once(diagnostic)
         payment_event(
             "payment_callback_rejected",
             outcome="rejected",
         )
         return PlainTextResponse("ERROR", status_code=400, headers=_NO_STORE)
     except Exception:
+        diagnostic.rejection_stage = "persistence"
+        diagnostic.rejection_category = "internal_error"
+        diagnostic.http_status = 500
+        diagnostic.response_outcome = "ERROR"
+        emit_callback_diagnostic_once(diagnostic)
         payment_event("payment_callback_failed", outcome="internal_error")
         return PlainTextResponse("ERROR", status_code=500, headers=_NO_STORE)
 
+    diagnostic.http_status = 200
+    diagnostic.response_outcome = "OK"
+    emit_callback_diagnostic_once(diagnostic)
     payment_event(
         "payment_callback_accepted",
         provider_invoice_id=result.inv_id,

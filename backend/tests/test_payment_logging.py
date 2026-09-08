@@ -72,3 +72,48 @@ def test_malformed_payment_extras_are_dropped_at_formatter_boundary() -> None:
     assert "provider_invoice_id" not in payload
     assert "previous_status" not in payload
     assert "signature_valid" not in payload
+
+
+def test_callback_diagnostic_formatter_emits_names_and_booleans_only() -> None:
+    record = logging.LogRecord(
+        "fetchnow.payments.callback_diagnostic",
+        logging.INFO,
+        __file__,
+        1,
+        "payment_callback_sanitized_diagnostic",
+        (),
+        None,
+    )
+    record.http_method = "POST"
+    record.http_status = 400
+    record.content_type_category = "form_urlencoded"
+    record.callback_field_names = (
+        "InvId",
+        "IsTest",
+        "OutSum",
+        "SignatureValue",
+    )
+    record.expected_fields_present = True
+    record.unexpected_callback_field_names = ("IsTest",)
+    record.parser_entered = True
+    record.parser_accepted = False
+    record.signature_verification_attempted = False
+    record.rejection_stage = "field_schema"
+    record.rejection_category = "unexpected_field"
+    record.response_outcome = "ERROR"
+    record.raw_body = "OutSum=secret"
+    record.password = "secret"
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert payload["callback_field_names"] == [
+        "InvId",
+        "IsTest",
+        "OutSum",
+        "SignatureValue",
+    ]
+    assert payload["unexpected_callback_field_names"] == ["IsTest"]
+    assert payload["parser_accepted"] is False
+    raw = json.dumps(payload)
+    assert "OutSum=secret" not in raw
+    assert "password" not in raw.lower()
