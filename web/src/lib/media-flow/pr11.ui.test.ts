@@ -202,7 +202,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(astroSource).toMatch(/<span class="loader" data-flow-loader hidden>/);
     expect(astroSource).toMatch(/<section class="progress-card"[^>]*hidden>/);
     expect(astroSource).toMatch(
-      /<fieldset class="quality-card" data-flow-quality hidden>/,
+      /<fieldset class="quality-card" data-flow-quality aria-labelledby="flow-quality-title" hidden>/,
     );
     expect(astroSource.indexOf("data-flow-progress")).toBeLessThan(
       astroSource.indexOf("data-flow-loader"),
@@ -244,7 +244,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(el("[data-flow-status]").textContent).toBe("Выберите качество для скачивания.");
   });
 
-  it("hides the quality selector when only one grouped option exists", () => {
+  it("shows the selected quality even when only one grouped option exists", () => {
     mountFlow();
     renderFlow(
       document,
@@ -259,7 +259,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
         canSubmit: false,
       }),
     );
-    expect(el("[data-flow-quality]").hidden).toBe(true);
+    expect(el("[data-flow-quality]").hidden).toBe(false);
     expect(
       document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled,
     ).toBe(false);
@@ -307,8 +307,8 @@ describe("PR11 loader, quality and stage progress UI", () => {
       (node) => node.textContent,
     );
     expect(labels).toEqual([
-      "Видео со звуком · Высокое (720p)",
-      "Видео со звуком · Среднее (480p)",
+      "720p",
+      "480p",
     ]);
     expect(el("[data-flow-formats]").textContent).toContain("MP4");
     expect(el("[data-flow-formats]").textContent).toContain("30 fps");
@@ -358,7 +358,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
       }),
     );
     expect(el(".format-detail").textContent).toBe(
-      "MP4 · Размер станет известен после подготовки",
+      "MP4",
     );
   });
 

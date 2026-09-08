@@ -704,6 +704,8 @@ body.page-root {
 
 .flow {
   display: grid;
+  /* Keep the wide desktop selector from sizing the implicit grid track. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   text-align: left;
 }
@@ -738,6 +740,8 @@ body.page-root {
 .flow-actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
+  text-align: center;
   gap: 0.65rem;
 }
 
@@ -970,17 +974,123 @@ body.page-root {
 }
 
 .quality-card {
+  min-inline-size: 0;
   margin: 0;
   border: 1px solid var(--elev-border-light);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.9);
-  padding: 0.35rem 0.9rem 0.9rem;
+  padding: 0.9rem;
   box-shadow: var(--elev-surface), var(--elev-inset-highlight);
 }
 
 .quality-list {
   display: grid;
   gap: 0.4rem;
+}
+
+.category-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.category-tabs button {
+  min-width: 0;
+  padding: 0.6rem 0.2rem;
+  border: 1px solid var(--elev-border-light);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--navy);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.category-tabs button[aria-selected="true"] {
+  background: var(--blue-wash);
+  border-color: var(--blue-accent);
+  font-weight: 700;
+}
+
+.category-tabs button:focus-visible,
+.category-card:focus-visible {
+  outline: 2px solid var(--blue-accent);
+  outline-offset: 2px;
+}
+
+.category-tab-premium {
+  display: block;
+  font-size: 0.65rem;
+  margin-top: 0.2rem;
+}
+
+.category-cards { display: grid; gap: 0.75rem; align-items: start; }
+.category-card {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid var(--elev-border-light);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--elev-surface);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.category-card[data-active="false"] { display: none; }
+.category-card h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 1rem;
+}
+.category-subtitle, .category-help {
+  margin: 0.3rem 0 0.75rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+.category-help { line-height: 1.5; }
+.category-card .format {
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 0.35rem;
+  padding: 0.55rem;
+  box-shadow: none;
+  border-radius: 9px;
+}
+.category-card .format-detail {
+  grid-column: 2;
+  justify-self: start;
+  text-align: left;
+}
+.category-card .format-disabled {
+  background: transparent;
+  border-style: solid;
+}
+.category-card .format-disabled .format-label { color: var(--navy-deep); }
+.category-card .format-selected {
+  border-color: var(--leaf);
+  background: var(--leaf-wash);
+}
+.selection-summary {
+  flex-basis: 100%;
+  margin: 0 0 0.65rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 1024px) {
+  .quality-card:not([hidden]) {
+    width: min(60rem, calc(100vw - 4rem));
+    position: relative;
+    left: 50%;
+    translate: -50% 0;
+  }
+  .category-tabs { display: none; }
+  .category-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .category-card[data-active="false"] { display: block; }
 }
 
 .format {
@@ -1084,9 +1194,32 @@ body.page-root {
   color: var(--ink-muted);
 }
 
+.premium-status[data-state="active"] {
+  border-color: rgba(166, 130, 55, 0.4);
+  background: linear-gradient(110deg, #fffdf7, #faf2df);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 5px rgba(100, 77, 29, 0.04),
+    0 0 18px rgba(192, 152, 65, 0.12);
+}
+
+.premium-status-icon {
+  display: inline-block;
+  margin-right: 0.45rem;
+  color: #977024;
+}
+
+.premium-status-expiry {
+  display: inline-block;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+}
+
 .premium-checkout {
   display: grid;
-  justify-items: start;
+  justify-items: center;
+  text-align: center;
   gap: 0.55rem;
   margin-top: 0.8rem;
   border-top: 1px solid var(--elev-border-light);

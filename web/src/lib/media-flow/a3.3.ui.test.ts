@@ -110,11 +110,11 @@ describe("PRD2-A3.3 Premium UI", () => {
     expect(radios[0]?.disabled).toBe(false);
     expect(radios.slice(1).every((radio) => radio.disabled)).toBe(true);
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Видео со звуком");
-    expect(text).toContain("Видео без звука");
-    expect(text).toContain("Аудио · 128 кбит/с");
-    expect(text.match(/Доступно в Premium/g)).toHaveLength(2);
-    expect(document.querySelector("[aria-label*='Доступно в Premium']")).not.toBeNull();
+    expect(text).toContain("Видео + аудио");
+    expect(text).toContain("Без звуковой дорожки");
+    expect(text).toContain("128 кбит/с");
+    expect(text.match(/Доступно с Premium/g)).toHaveLength(2);
+    expect(document.querySelector("input[aria-describedby]")).not.toBeNull();
   });
 
   it("shows the explicit TEST CTA only when the derived server flag is available", () => {

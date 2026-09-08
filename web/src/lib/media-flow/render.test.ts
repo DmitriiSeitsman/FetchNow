@@ -151,7 +151,7 @@ describe("render", () => {
     expect(mux?.hidden).toBe(true);
   });
 
-  it("shows quality choices only when policy allows and media has 2+ options", () => {
+  it("shows even a single quality when policy allows selection", () => {
     document.body.innerHTML = `
       <fieldset data-flow-quality><div data-flow-formats></div></fieldset>
       <button data-flow-download></button>
@@ -175,11 +175,11 @@ describe("render", () => {
         downloadEligible: true,
       }),
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
     expect(document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled).toBe(
       false,
     );
-    expect(document.querySelector("input[type=radio]")).toBeNull();
+    expect(document.querySelector<HTMLInputElement>("input[type=radio]")?.checked).toBe(true);
 
     renderFlow(document, snapshot({ canSelectQuality: true }));
     expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
@@ -206,7 +206,9 @@ describe("render", () => {
         downloadEligible: false,
       }),
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
+    expect(document.querySelectorAll("input[type=radio]")).toHaveLength(0);
+    expect(document.querySelector("[data-category-panel='audio_only']")?.textContent).toContain("нет доступных вариантов аудио");
 
     // Legacy snapshots omit canSelectQuality; treat as allowed when 2+ options exist.
     const legacySnapshot = snapshot({});

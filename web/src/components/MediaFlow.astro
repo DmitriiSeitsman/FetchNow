@@ -93,8 +93,8 @@ const enabled = isMediaFlowEnabled();
       <span data-flow-duration></span>
     </p>
   </article>
-  <fieldset class="quality-card" data-flow-quality hidden>
-    <legend class="card-title">Выберите качество</legend>
+  <fieldset class="quality-card" data-flow-quality aria-labelledby="flow-quality-title" hidden>
+    <h2 class="card-title" id="flow-quality-title">Выберите вариант скачивания</h2>
     <div class="quality-list" data-flow-formats hidden></div>
     <div class="premium-checkout" data-flow-premium-checkout hidden>
       <span class="test-badge">ТЕСТ</span>
@@ -184,6 +184,7 @@ const enabled = isMediaFlowEnabled();
     Отправлено в браузер
   </p>
   <div class="flow-actions">
+    <p class="selection-summary" data-flow-selection-summary aria-live="polite" hidden></p>
     <button class="btn btn-primary" type="button" data-flow-download hidden>
       Подготовить скачивание
     </button>

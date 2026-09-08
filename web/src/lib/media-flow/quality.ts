@@ -27,6 +27,38 @@ export type QualityGroupingOptions = {
   selectedFormatId?: string | null;
 };
 
+/** Standalone display ranking only; does not change admission or default selection. */
+export function groupStandaloneOptions(
+  formats: readonly MediaFormat[],
+  premiumActive: boolean,
+  selectedFormatId: string | null,
+): QualityOption[] {
+  const metric = (f: MediaFormat): number | null => {
+    const n = f.mediaKind === "video_only" ? f.height : f.bitrateKbps;
+    return n !== null && Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const groups = new Map<string, MediaFormat[]>();
+  for (const f of formats) {
+    if (f.mediaKind === "normal_video") continue;
+    const key = `${f.mediaKind}:${metric(f) ?? normalizeQualityLabel(f.qualityLabel)}`;
+    groups.set(key, [...(groups.get(key) ?? []), f]);
+  }
+  return [...groups].map(([key, members]) => {
+    members.sort((a, b) =>
+      Number(b.formatOptionId === selectedFormatId) - Number(a.formatOptionId === selectedFormatId) ||
+      Number(b.container === "mp4") - Number(a.container === "mp4") ||
+      a.container.localeCompare(b.container) ||
+      a.audioCodec.localeCompare(b.audioCodec) ||
+      a.videoCodec.localeCompare(b.videoCodec) ||
+      a.formatOptionId.localeCompare(b.formatOptionId));
+    return { key, members, representative: members[0], label: members[0].qualityLabel, eligible: premiumActive };
+  }).sort((a, b) =>
+    a.representative.mediaKind.localeCompare(b.representative.mediaKind) ||
+    (metric(b.representative) ?? -1) - (metric(a.representative) ?? -1) ||
+    a.key.localeCompare(b.key) ||
+    a.representative.formatOptionId.localeCompare(b.representative.formatOptionId));
+}
+
 const CONTAINER_RANK: Readonly<Record<string, number>> = Object.freeze({
   mp4: 0,
   webm: 1,
