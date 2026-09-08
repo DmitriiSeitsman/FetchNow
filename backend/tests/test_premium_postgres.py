@@ -10,12 +10,15 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from fetchnow.api.main import create_app
 from fetchnow.core.config import Settings
 from fetchnow.db.session import create_engine, create_session_factory
 from fetchnow.payments.catalog import get_product
@@ -114,6 +117,187 @@ async def _identity(session: AsyncSession) -> uuid.UUID:
     token_hash = hash_anonymous_token(generate_anonymous_token())
     row = await repo.create_client(token_hash=token_hash, now=now, ttl_seconds=86_400)
     return row.id
+
+
+def _result_form(*, raw_out_sum: str, inv_id: int, signature: str) -> str:
+    """Synthetic ResultURL with the field names observed in production."""
+    return urlencode(
+        [
+            ("OutSum", raw_out_sum),
+            ("InvId", str(inv_id)),
+            ("SignatureValue", signature),
+            ("EMail", "buyer@example.invalid"),
+            ("Fee", "0.10"),
+            ("IncCurrLabel", "BankCard"),
+            ("IncSum", raw_out_sum),
+            ("IsTest", "1"),
+            ("PaymentMethod", "BankCard"),
+            ("crc", "synthetic"),
+            ("inv_id", "synthetic"),
+            ("out_summ", "synthetic"),
+        ]
+    )
+
+
+async def _post_result(
+    settings: Settings,
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    raw_out_sum: str,
+    inv_id: int,
+    signature: str,
+) -> Response:
+    app = create_app(settings)
+    app.state.settings = settings
+    app.state.payment_service = PaymentService(settings)
+    app.state.session_factory = sessions
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        return await client.post(
+            "/api/v1/payments/robokassa/result",
+            content=_result_form(
+                raw_out_sum=raw_out_sum,
+                inv_id=inv_id,
+                signature=signature,
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+
+async def _seed_pending_order(
+    settings: Settings,
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    idempotency_key: str,
+) -> int:
+    async with sessions() as seed:
+        await _cleanup(seed)
+        identity_id = await _identity(seed)
+        created = await PaymentService(settings).create_order(
+            anonymous_client_id=identity_id,
+            product_code="premium_24h",
+            idempotency_key=idempotency_key,
+            session=seed,
+        )
+        inv_id = created.order.provider_invoice_id
+        await seed.commit()
+        return inv_id
+
+
+@pytest.mark.asyncio
+async def test_resulturl_with_provider_metadata_is_paid_and_idempotent(
+    sessions: async_sessionmaker[AsyncSession], migrated_database: str
+) -> None:
+    settings = _settings(migrated_database)
+    inv_id = await _seed_pending_order(
+        settings, sessions, idempotency_key="R" * 32
+    )
+    signature = sign_callback(
+        raw_out_sum="10.000000", inv_id=inv_id, password2="password-two"
+    )
+
+    first = await _post_result(
+        settings,
+        sessions,
+        raw_out_sum="10.000000",
+        inv_id=inv_id,
+        signature=signature,
+    )
+    duplicate = await _post_result(
+        settings,
+        sessions,
+        raw_out_sum="10.000000",
+        inv_id=inv_id,
+        signature=signature,
+    )
+
+    assert first.status_code == 200
+    assert first.text == f"OK{inv_id}"
+    assert duplicate.status_code == 200
+    assert duplicate.text == f"OK{inv_id}"
+    async with sessions() as session:
+        order = await PaymentOrderRepository(session).get_by_invoice_id(inv_id)
+        assert order is not None
+        assert order.status == "paid"
+        assert len((await session.scalars(select(PremiumEntitlement))).all()) == 1
+        await _cleanup(session)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resulturls_with_provider_metadata_create_one_entitlement(
+    sessions: async_sessionmaker[AsyncSession], migrated_database: str
+) -> None:
+    settings = _settings(migrated_database)
+    inv_id = await _seed_pending_order(
+        settings, sessions, idempotency_key="S" * 32
+    )
+    signature = sign_callback(
+        raw_out_sum="10.000000", inv_id=inv_id, password2="password-two"
+    )
+
+    responses = await asyncio.gather(
+        _post_result(
+            settings,
+            sessions,
+            raw_out_sum="10.000000",
+            inv_id=inv_id,
+            signature=signature,
+        ),
+        _post_result(
+            settings,
+            sessions,
+            raw_out_sum="10.000000",
+            inv_id=inv_id,
+            signature=signature,
+        ),
+    )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [response.text for response in responses] == [f"OK{inv_id}"] * 2
+    async with sessions() as session:
+        assert len((await session.scalars(select(PremiumEntitlement))).all()) == 1
+        await _cleanup(session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["invalid_signature", "amount_mismatch"])
+async def test_invalid_resulturl_with_provider_metadata_does_not_mutate(
+    sessions: async_sessionmaker[AsyncSession],
+    migrated_database: str,
+    failure: str,
+) -> None:
+    settings = _settings(migrated_database)
+    inv_id = await _seed_pending_order(
+        settings, sessions, idempotency_key="T" * 32
+    )
+    raw_out_sum = "11.000000" if failure == "amount_mismatch" else "10.000000"
+    signature = (
+        sign_callback(
+            raw_out_sum=raw_out_sum,
+            inv_id=inv_id,
+            password2="password-two",
+        )
+        if failure == "amount_mismatch"
+        else "0" * 64
+    )
+
+    response = await _post_result(
+        settings,
+        sessions,
+        raw_out_sum=raw_out_sum,
+        inv_id=inv_id,
+        signature=signature,
+    )
+
+    assert response.status_code == 400
+    assert response.text == "ERROR"
+    async with sessions() as session:
+        order = await PaymentOrderRepository(session).get_by_invoice_id(inv_id)
+        assert order is not None
+        assert order.status == "pending"
+        assert (await session.scalars(select(PremiumEntitlement))).all() == []
+        await _cleanup(session)
 
 
 @pytest.mark.asyncio

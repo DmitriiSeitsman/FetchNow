@@ -135,62 +135,6 @@ _PAYMENT_AUDIT_FIELDS = (
 _SAFE_PAYMENT_FINGERPRINT = re.compile(r"^[0-9a-f]{16}$")
 _SAFE_PAYMENT_STATES = frozenset({"created", "pending", "paid", "expired"})
 
-_PAYMENT_CALLBACK_DIAGNOSTIC_LOGGER = "fetchnow.payments.callback_diagnostic"
-_PAYMENT_CALLBACK_DIAGNOSTIC_FIELDS = (
-    "content_type_category",
-    "callback_field_names",
-    "expected_fields_present",
-    "unexpected_callback_field_names",
-    "parser_entered",
-    "parser_accepted",
-    "inv_id_parsing_attempted",
-    "inv_id_valid",
-    "signature_verification_attempted",
-    "signature_valid",
-    "amount_validation_attempted",
-    "amount_valid",
-    "order_lookup_succeeded",
-    "receipt_validation_attempted",
-    "rejection_stage",
-    "rejection_category",
-    "response_outcome",
-)
-_SAFE_CALLBACK_FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-_SAFE_CALLBACK_CONTENT_TYPES = frozenset(
-    {"form_urlencoded", "missing", "other"}
-)
-_SAFE_CALLBACK_STAGES = frozenset(
-    {
-        "none",
-        "content_type",
-        "form_decode",
-        "field_schema",
-        "inv_id",
-        "order_lookup",
-        "signature",
-        "amount",
-        "snapshot",
-        "persistence",
-    }
-)
-_SAFE_CALLBACK_CATEGORIES = frozenset(
-    {
-        "none",
-        "content_type_invalid",
-        "form_invalid",
-        "required_field_missing",
-        "duplicate_field",
-        "unexpected_field",
-        "inv_id_invalid",
-        "order_not_found",
-        "signature_invalid",
-        "amount_invalid",
-        "snapshot_invalid",
-        "payments_disabled",
-        "internal_error",
-    }
-)
-
 
 def _safe_payment_audit_value(field: str, value: Any) -> Any | None:
     if field == "payment_order_fingerprint":
@@ -207,42 +151,6 @@ def _safe_payment_audit_value(field: str, value: Any) -> Any | None:
         return value if value in _SAFE_PAYMENT_STATES else None
     if field in {"signature_valid", "amount_match", "is_test"}:
         return value if type(value) is bool else None
-    return None
-
-
-def _safe_callback_diagnostic_value(field: str, value: Any) -> Any | None:
-    if field == "content_type_category":
-        return value if value in _SAFE_CALLBACK_CONTENT_TYPES else None
-    if field in {"callback_field_names", "unexpected_callback_field_names"}:
-        if not isinstance(value, tuple | list) or len(value) > 16:
-            return None
-        if not all(
-            isinstance(item, str) and _SAFE_CALLBACK_FIELD_NAME.fullmatch(item)
-            for item in value
-        ):
-            return None
-        return list(value)
-    if field in {
-        "expected_fields_present",
-        "parser_entered",
-        "parser_accepted",
-        "inv_id_parsing_attempted",
-        "inv_id_valid",
-        "signature_verification_attempted",
-        "signature_valid",
-        "amount_validation_attempted",
-        "amount_valid",
-        "receipt_validation_attempted",
-    }:
-        return value if type(value) is bool else None
-    if field == "order_lookup_succeeded":
-        return value if value is None or type(value) is bool else None
-    if field == "rejection_stage":
-        return value if value in _SAFE_CALLBACK_STAGES else None
-    if field == "rejection_category":
-        return value if value in _SAFE_CALLBACK_CATEGORIES else None
-    if field == "response_outcome":
-        return value if value in {"OK", "ERROR"} else None
     return None
 
 
@@ -305,13 +213,6 @@ class JsonFormatter(logging.Formatter):
         if record.name == _PAYMENT_AUDIT_LOGGER:
             for field in _PAYMENT_AUDIT_FIELDS:
                 value = _safe_payment_audit_value(field, getattr(record, field, None))
-                if value is not None:
-                    payload[field] = value
-        if record.name == _PAYMENT_CALLBACK_DIAGNOSTIC_LOGGER:
-            for field in _PAYMENT_CALLBACK_DIAGNOSTIC_FIELDS:
-                value = _safe_callback_diagnostic_value(
-                    field, getattr(record, field, None)
-                )
                 if value is not None:
                     payload[field] = value
         if record.name == _DOWNLOAD_DIAGNOSTICS_LOGGER:
