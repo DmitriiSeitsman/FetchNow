@@ -12,7 +12,6 @@ from httpx import ASGITransport, AsyncClient
 from fetchnow.api.main import create_app
 from fetchnow.api.v1 import payments
 from fetchnow.core.config import Settings
-from fetchnow.payments.callback_diagnostic import CallbackDiagnostic
 from fetchnow.payments.models import PaymentOrder
 from fetchnow.payments.robokassa import PAYMENT_ACTION
 from fetchnow.payments.service import CallbackResult, CreatedPayment, PaymentService
@@ -310,11 +309,10 @@ async def test_valid_callback_has_no_cookie_requirement_and_exact_ack(
 @pytest.mark.parametrize(
     "body",
     [
-        "OutSum=1.00&InvId=42",
         "OutSum=1.00&InvId=42&InvId=43&SignatureValue=x",
+        "OutSum=1.00&OutSum=2.00&InvId=42&SignatureValue=x",
+        "OutSum=1.00&InvId=42&SignatureValue=x&SignatureValue=y",
         "OutSum=1.00&InvId=0&SignatureValue=x",
-        "OutSum=1.00&InvId=42&SignatureValue=x&Shp_order=1",
-        "OutSum=1.00&InvId=42&SignatureValue=x&Unexpected=1",
     ],
 )
 async def test_malformed_callback_is_generic_and_not_acknowledged(
@@ -334,42 +332,67 @@ async def test_malformed_callback_is_generic_and_not_acknowledged(
 
 
 @pytest.mark.asyncio
-async def test_callback_diagnostic_reports_names_and_parser_stage_only(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "body",
+    [
+        "InvId=42&SignatureValue=x",
+        "OutSum=1.00&SignatureValue=x",
+        "OutSum=1.00&InvId=42",
+    ],
+)
+async def test_callback_requires_each_authoritative_field(
+    monkeypatch: pytest.MonkeyPatch, body: str
 ) -> None:
     service = _StubPaymentService(_row())
-    captured: list[CallbackDiagnostic] = []
-    monkeypatch.setattr(
-        payments, "emit_callback_diagnostic_once", captured.append
-    )
     client, _app = await _client(monkeypatch, service)
     async with client:
         response = await client.post(
             "/api/v1/payments/robokassa/result",
-            content=(
-                "OutSum=1.00&InvId=42&SignatureValue="
-                + "a" * 64
-                + "&IsTest=1"
-            ),
+            content=body,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     assert response.status_code == 400
-    assert len(captured) == 1
-    diagnostic = captured[0]
-    assert diagnostic.field_names == (
-        "InvId",
-        "IsTest",
-        "OutSum",
-        "SignatureValue",
-    )
-    assert diagnostic.expected_fields_present is True
-    assert diagnostic.unexpected_field_names == ("IsTest",)
-    assert diagnostic.parser_entered is True
-    assert diagnostic.parser_accepted is False
-    assert diagnostic.signature_verification_attempted is False
-    assert diagnostic.rejection_stage == "field_schema"
-    assert diagnostic.rejection_category == "unexpected_field"
+    assert response.text == "ERROR"
     service.accept_callback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extras",
+    [
+        (
+            "&EMail=buyer%40example.invalid&Fee=0.10&IncCurrLabel=BankCard"
+            "&IncSum=1.00&IsTest=1&PaymentMethod=BankCard"
+            "&crc=synthetic&inv_id=synthetic&out_summ=synthetic"
+        ),
+        "&SomeFutureProviderField=synthetic&Shp_untrusted=ignored",
+    ],
+)
+async def test_callback_ignores_non_authoritative_provider_metadata(
+    monkeypatch: pytest.MonkeyPatch, extras: str
+) -> None:
+    service = _StubPaymentService(_row())
+    client, _app = await _client(monkeypatch, service)
+    signature = "a" * 64
+    async with client:
+        response = await client.post(
+            "/api/v1/payments/robokassa/result",
+            content=f"OutSum=1.00&InvId=42&SignatureValue={signature}{extras}",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    assert response.status_code == 200
+    assert response.text == "OK42"
+    service.accept_callback.assert_awaited_once()
+    call = service.accept_callback.await_args
+    assert call.kwargs["raw_out_sum"] == "1.00"
+    assert call.kwargs["inv_id"] == 42
+    assert call.kwargs["supplied_signature"] == signature
+    assert set(call.kwargs) == {
+        "raw_out_sum",
+        "inv_id",
+        "supplied_signature",
+        "session",
+    }
 
 
 @pytest.mark.asyncio

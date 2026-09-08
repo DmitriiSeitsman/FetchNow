@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.core.config import Settings
-from fetchnow.payments.callback_diagnostic import CallbackDiagnostic
 from fetchnow.payments.catalog import PRODUCT_CODE, get_product
 from fetchnow.payments.errors import (
     InvalidCallbackError,
@@ -151,78 +150,29 @@ class PaymentService:
         inv_id: int,
         supplied_signature: str,
         session: AsyncSession,
-        diagnostic: CallbackDiagnostic | None = None,
     ) -> CallbackResult:
         self._require_test_mode()
         repo = PaymentOrderRepository(session)
         snapshot = await repo.get_by_invoice_id(inv_id)
         if snapshot is None:
-            if diagnostic is not None:
-                diagnostic.order_lookup_succeeded = False
-                diagnostic.rejection_stage = "order_lookup"
-                diagnostic.rejection_category = "order_not_found"
             raise InvalidCallbackError()
-        if diagnostic is not None:
-            diagnostic.order_lookup_succeeded = True
         expected = sign_callback(
             raw_out_sum=raw_out_sum,
             inv_id=inv_id,
             password2=self._settings.robokassa_test_password2.get_secret_value(),
         )
-        if diagnostic is not None:
-            diagnostic.signature_verification_attempted = True
         if not signature_matches(supplied=supplied_signature, expected=expected):
-            if diagnostic is not None:
-                diagnostic.rejection_stage = "signature"
-                diagnostic.rejection_category = "signature_invalid"
             raise InvalidCallbackError()
-        if diagnostic is not None:
-            diagnostic.signature_valid = True
-            diagnostic.amount_validation_attempted = True
-        try:
-            amount_matches = (
-                parse_callback_out_sum(raw_out_sum) == snapshot.amount_minor
-            )
-        except InvalidCallbackError:
-            if diagnostic is not None:
-                diagnostic.rejection_stage = "amount"
-                diagnostic.rejection_category = "amount_invalid"
-            raise
-        if not amount_matches:
-            if diagnostic is not None:
-                diagnostic.rejection_stage = "amount"
-                diagnostic.rejection_category = "amount_invalid"
+        if parse_callback_out_sum(raw_out_sum) != snapshot.amount_minor:
             raise InvalidCallbackError()
-        if diagnostic is not None:
-            diagnostic.amount_valid = True
-        try:
-            self._validate_callback_snapshot(snapshot)
-        except InvalidCallbackError:
-            if diagnostic is not None:
-                diagnostic.rejection_stage = "snapshot"
-                diagnostic.rejection_category = "snapshot_invalid"
-            raise
+        self._validate_callback_snapshot(snapshot)
 
         row = await repo.lock_by_invoice_id(inv_id)
         if row is None:
-            if diagnostic is not None:
-                diagnostic.order_lookup_succeeded = False
-                diagnostic.rejection_stage = "order_lookup"
-                diagnostic.rejection_category = "order_not_found"
             raise InvalidCallbackError()
         if parse_callback_out_sum(raw_out_sum) != row.amount_minor:
-            if diagnostic is not None:
-                diagnostic.amount_valid = False
-                diagnostic.rejection_stage = "amount"
-                diagnostic.rejection_category = "amount_invalid"
             raise InvalidCallbackError()
-        try:
-            self._validate_callback_snapshot(row)
-        except InvalidCallbackError:
-            if diagnostic is not None:
-                diagnostic.rejection_stage = "snapshot"
-                diagnostic.rejection_category = "snapshot_invalid"
-            raise
+        self._validate_callback_snapshot(row)
         now = await repo.database_now()
         transitioned = await repo.mark_paid(row, now=now)
         if row.status == PaymentOrderState.PAID.value:
