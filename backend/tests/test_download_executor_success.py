@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -14,9 +15,13 @@ from fetchnow.core.config import Settings
 from fetchnow.downloads.artifacts import MIN_ORPHAN_GRACE_SECONDS, ArtifactStore
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.downloads.executor import DownloadClaimSnapshot, DownloadExecutor
+from fetchnow.downloads.progress import (
+    DownloadProgressStage,
+    assert_progress_transition,
+)
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import ResolvedDownloadSelection
-from fetchnow.media_inspection.models import FormatCategory
+from fetchnow.media_inspection.models import FormatCategory, MediaKind
 from fetchnow.media_inspection.protocols import ProcessResult
 
 _DB = "postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow"
@@ -60,6 +65,25 @@ def _selection() -> ResolvedDownloadSelection:
     )
 
 
+def _audio_selection() -> ResolvedDownloadSelection:
+    return ResolvedDownloadSelection(
+        format_option_id="fmt_abc123",
+        container="m4a",
+        width=None,
+        height=None,
+        fps=None,
+        has_video=False,
+        has_audio=True,
+        category=FormatCategory.AUDIO_ONLY,
+        quality_label="audio",
+        free_tier_eligible=False,
+        approx_bytes=100,
+        provider_format_token="audio-source",
+        media_kind=MediaKind.AUDIO_ONLY,
+        bitrate_kbps=128,
+    )
+
+
 def _snap(*, fence: int = 1) -> DownloadClaimSnapshot:
     now = datetime.now(tz=UTC)
     return DownloadClaimSnapshot(
@@ -94,12 +118,21 @@ class _FakeSession:
 class _WritingRunner:
     """Writes a valid artifact into workspace.output/ then exits 0."""
 
-    def __init__(self, payload: bytes = b"executor-payload") -> None:
+    def __init__(
+        self,
+        payload: bytes = b"executor-payload",
+        *,
+        filename: str = "artifact.mp4",
+        exit_code: int = 0,
+    ) -> None:
         self.payload = payload
+        self.filename = filename
+        self.exit_code = exit_code
         self.calls = 0
+        self.argv_calls: list[list[str]] = []
 
     async def run(self, argv: list[str], **kwargs: object) -> ProcessResult:
-        del argv
+        self.argv_calls.append(list(argv))
         self.calls += 1
         started = kwargs.get("started")
         setter = getattr(started, "set", None)
@@ -108,14 +141,37 @@ class _WritingRunner:
         output_dir = kwargs.get("output_dir")
         assert isinstance(output_dir, str)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        (Path(output_dir) / "artifact.mp4").write_bytes(self.payload)
+        if self.exit_code == 0:
+            (Path(output_dir) / self.filename).write_bytes(self.payload)
         return ProcessResult(
-            exit_code=0,
+            exit_code=self.exit_code,
             stdout=b"",
             stderr=b"",
             timed_out=False,
             cancelled=False,
+            process_exit_category=("ZERO" if self.exit_code == 0 else "NONZERO"),
         )
+
+
+def _recording_progress(
+    executor: DownloadExecutor, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[DownloadProgressStage], AsyncMock]:
+    stages: list[DownloadProgressStage] = []
+    current = [DownloadProgressStage.QUEUED]
+
+    async def _advance(
+        _snap: DownloadClaimSnapshot, stage: DownloadProgressStage
+    ) -> None:
+        assert_progress_transition(current[0], stage)
+        current[0] = stage
+        stages.append(stage)
+
+    advance = AsyncMock(side_effect=_advance)
+    monkeypatch.setattr(executor, "_advance_progress", advance)
+    monkeypatch.setattr(
+        executor, "_persist_progress_percent", AsyncMock(return_value=True)
+    )
+    return stages, advance
 
 
 def _executor(
@@ -315,3 +371,96 @@ async def test_executor_complete_ready_raise_leaves_orphan(
     fail.assert_awaited()
     published_dirs = [p for p in (store.root / "published").iterdir() if p.is_dir()]
     assert len(published_dirs) == 1
+
+
+@pytest.mark.asyncio
+async def test_standalone_audio_reaches_ready_without_video_mux_or_transcoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _WritingRunner(filename="artifact.m4a")
+    executor = _executor(settings, store, runner=runner)
+    snap = _snap()
+    selection = _audio_selection()
+
+    _patch_download_tooling(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    resolve = AsyncMock(return_value=selection)
+    monkeypatch.setattr(executor, "_resolve_selection", resolve)
+    stages, _ = _recording_progress(executor, monkeypatch)
+    monkeypatch.setattr(
+        MediaDownloadJobRepository,
+        "database_now",
+        AsyncMock(return_value=datetime.now(tz=UTC)),
+    )
+
+    async def _complete_ready(**_kwargs: object) -> bool:
+        assert stages[-1] is DownloadProgressStage.PUBLISHING
+        assert_progress_transition(stages[-1], DownloadProgressStage.READY)
+        stages.append(DownloadProgressStage.READY)
+        return True
+
+    complete = AsyncMock(side_effect=_complete_ready)
+    monkeypatch.setattr(MediaDownloadJobRepository, "complete_ready", complete)
+
+    await executor.execute(snap)
+
+    resolve.assert_awaited_once_with(snap)
+    complete.assert_awaited_once()
+    assert stages == [
+        DownloadProgressStage.INSPECTING,
+        DownloadProgressStage.DOWNLOADING_AUDIO,
+        DownloadProgressStage.PUBLISHING,
+        DownloadProgressStage.READY,
+    ]
+    assert runner.calls == 1
+    argv = runner.argv_calls[0]
+    assert argv[argv.index("-f") + 1] == "audio-source"
+    assert "-x" not in argv
+    assert "--extract-audio" not in argv
+    assert "--audio-format" not in argv
+    assert "ffmpeg" not in " ".join(argv).lower()
+
+    published = [p for p in (store.root / "published").iterdir() if p.is_dir()]
+    assert len(published) == 1
+    assert (published[0] / "artifact.m4a").read_bytes() == runner.payload
+    manifest = json.loads((published[0] / "manifest.json").read_text())
+    assert manifest["container"] == "m4a"
+    assert manifest["contentType"] == "audio/mp4"
+    assert not (store.root / str(snap.job_id)).exists()
+
+
+@pytest.mark.asyncio
+async def test_standalone_audio_source_failure_never_publishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path / "artifacts")
+    settings = _settings(tmp_path)
+    runner = _WritingRunner(filename="artifact.m4a", exit_code=1)
+    executor = _executor(settings, store, runner=runner)
+    snap = _snap()
+
+    _patch_download_tooling(executor, monkeypatch)
+    monkeypatch.setattr(executor, "lease_still_owned", AsyncMock(return_value=True))
+    resolve = AsyncMock(return_value=_audio_selection())
+    monkeypatch.setattr(executor, "_resolve_selection", resolve)
+    stages, _ = _recording_progress(executor, monkeypatch)
+    fail = AsyncMock()
+    monkeypatch.setattr(executor, "_fail", fail)
+
+    await executor.execute(snap)
+
+    resolve.assert_awaited_once_with(snap)
+    assert stages == [
+        DownloadProgressStage.INSPECTING,
+        DownloadProgressStage.DOWNLOADING_AUDIO,
+    ]
+    fail.assert_awaited_once_with(snap, DownloadErrorCode.DOWNLOAD_TOOL_FAILED)
+    assert runner.calls == 1
+    assert "-x" not in runner.argv_calls[0]
+    assert "--extract-audio" not in runner.argv_calls[0]
+    published = store.root / "published"
+    assert not published.exists() or not any(published.iterdir())

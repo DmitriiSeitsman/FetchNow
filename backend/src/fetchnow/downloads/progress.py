@@ -82,6 +82,7 @@ _ALLOWED: dict[DownloadProgressStage, frozenset[DownloadProgressStage]] = {
     DownloadProgressStage.DOWNLOADING_AUDIO: frozenset(
         {
             DownloadProgressStage.MUXING,
+            DownloadProgressStage.PUBLISHING,
             DownloadProgressStage.RETRYING,
             DownloadProgressStage.FAILED,
             DownloadProgressStage.CANCELLED,
