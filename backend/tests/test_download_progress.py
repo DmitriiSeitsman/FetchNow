@@ -24,6 +24,10 @@ from fetchnow.downloads.states import MediaDownloadJobState
             DownloadProgressStage.DOWNLOADING_AUDIO,
         ),
         (DownloadProgressStage.DOWNLOADING_AUDIO, DownloadProgressStage.MUXING),
+        (
+            DownloadProgressStage.DOWNLOADING_AUDIO,
+            DownloadProgressStage.PUBLISHING,
+        ),
         (DownloadProgressStage.MUXING, DownloadProgressStage.VERIFYING),
         (DownloadProgressStage.VERIFYING, DownloadProgressStage.PUBLISHING),
         (DownloadProgressStage.PUBLISHING, DownloadProgressStage.READY),
