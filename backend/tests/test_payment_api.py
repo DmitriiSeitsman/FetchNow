@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from fetchnow.api.main import create_app
 from fetchnow.api.v1 import payments
 from fetchnow.core.config import Settings
+from fetchnow.payments.callback_diagnostic import CallbackDiagnostic
 from fetchnow.payments.models import PaymentOrder
 from fetchnow.payments.robokassa import PAYMENT_ACTION
 from fetchnow.payments.service import CallbackResult, CreatedPayment, PaymentService
@@ -329,6 +330,45 @@ async def test_malformed_callback_is_generic_and_not_acknowledged(
         )
     assert response.status_code == 400
     assert response.text == "ERROR"
+    service.accept_callback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_callback_diagnostic_reports_names_and_parser_stage_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _StubPaymentService(_row())
+    captured: list[CallbackDiagnostic] = []
+    monkeypatch.setattr(
+        payments, "emit_callback_diagnostic_once", captured.append
+    )
+    client, _app = await _client(monkeypatch, service)
+    async with client:
+        response = await client.post(
+            "/api/v1/payments/robokassa/result",
+            content=(
+                "OutSum=1.00&InvId=42&SignatureValue="
+                + "a" * 64
+                + "&IsTest=1"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    assert response.status_code == 400
+    assert len(captured) == 1
+    diagnostic = captured[0]
+    assert diagnostic.field_names == (
+        "InvId",
+        "IsTest",
+        "OutSum",
+        "SignatureValue",
+    )
+    assert diagnostic.expected_fields_present is True
+    assert diagnostic.unexpected_field_names == ("IsTest",)
+    assert diagnostic.parser_entered is True
+    assert diagnostic.parser_accepted is False
+    assert diagnostic.signature_verification_attempted is False
+    assert diagnostic.rejection_stage == "field_schema"
+    assert diagnostic.rejection_category == "unexpected_field"
     service.accept_callback.assert_not_awaited()
 
 
