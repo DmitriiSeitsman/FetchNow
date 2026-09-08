@@ -5,10 +5,11 @@ import {
   formatEstimatedDownloadTime,
   estimateDownloadSeconds,
 } from "./estimate";
-import { providerDisplayName } from "./contracts";
+import { providerDisplayName, type MediaKind } from "./contracts";
 import { progressView } from "./progress";
 import {
   groupQualityOptions,
+  groupStandaloneOptions,
   qualityTechnicalLabel,
   type QualityOption,
 } from "./quality";
@@ -40,51 +41,130 @@ function disabledReason(
 
 function semanticLabel(format: FlowSnapshot["formats"][number]): string {
   if (format.mediaKind === "audio_only") {
-    const bitrate = format.bitrateKbps ? ` · ${Math.round(format.bitrateKbps)} кбит/с` : "";
-    return `Аудио${bitrate}`;
+    return format.bitrateKbps !== null && format.bitrateKbps > 0
+      ? `${Math.round(format.bitrateKbps)} кбит/с` : "Аудиодорожка";
   }
-  if (format.mediaKind === "video_only") {
-    return `Видео без звука · ${qualityTechnicalLabel(format)}`;
-  }
-  return `Видео со звуком · ${qualityTechnicalLabel(format)}`;
+  return qualityTechnicalLabel(format);
 }
 
-function standaloneOptions(snapshot: FlowSnapshot): QualityOption[] {
-  const byKind = new Map<string, FlowSnapshot["formats"][number]>();
-  for (const format of snapshot.formats) {
-    if (format.mediaKind === "normal_video") continue;
-    const metric = format.mediaKind === "video_only"
-      ? format.height ?? format.qualityLabel
-      : format.bitrateKbps ?? format.qualityLabel;
-    const key = `${format.mediaKind}:${metric}`;
-    const current = byKind.get(key);
-    if (!current || (current.container !== "mp4" && format.container === "mp4")) {
-      byKind.set(key, format);
-    }
+const CATEGORIES = [
+  { kind: "normal_video", title: "Видео + аудио", tab: "Видео + аудио", subtitle: "Обычная загрузка", empty: "Для этой ссылки нет доступных вариантов видео со звуком" },
+  { kind: "video_only", title: "Только видео", tab: "Видео", subtitle: "Без звуковой дорожки", empty: "Для этой ссылки нет доступных вариантов видео без звука" },
+  { kind: "audio_only", title: "Только аудио", tab: "Аудио", subtitle: "Без изображения", empty: "Для этой ссылки нет доступных вариантов аудио" },
+] as const;
+
+// Presentation state belongs to this selector, never to the download/session model.
+const categoryViews = new WeakMap<HTMLElement, { active: MediaKind; selected: string | null; result: FlowSnapshot["result"] }>();
+let selectorSequence = 0;
+
+function renderCategories(list: HTMLElement, options: QualityOption[], snapshot: FlowSnapshot): void {
+  const selected = snapshot.formats.find((f) => f.formatOptionId === snapshot.selectedFormatId);
+  let view = categoryViews.get(list);
+  if (!view || view.result !== snapshot.result) {
+    view = { active: selected?.mediaKind ?? "normal_video", selected: snapshot.selectedFormatId, result: snapshot.result };
+    categoryViews.set(list, view);
+  } else if (view.selected !== snapshot.selectedFormatId) {
+    view.active = selected?.mediaKind ?? view.active;
+    view.selected = snapshot.selectedFormatId;
   }
-  return [...byKind.entries()]
-    .map(([key, representative]) => ({
-      key,
-      representative,
-      members: [representative],
-      label: semanticLabel(representative),
-      eligible: snapshot.premiumState === "active",
-    }))
-    .sort((a, b) => {
-      if (a.representative.mediaKind !== b.representative.mediaKind) {
-        return a.representative.mediaKind === "video_only" ? -1 : 1;
-      }
-      return (b.representative.height ?? b.representative.bitrateKbps ?? 0) -
-        (a.representative.height ?? a.representative.bitrateKbps ?? 0);
+  const focused = list.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+  const focusedValue = focused instanceof HTMLInputElement ? focused.value : null;
+  const focusedTab = focused?.dataset.categoryTab;
+  const prefix = list.dataset.selectorId ?? `quality-${++selectorSequence}`;
+  list.dataset.selectorId = prefix;
+  list.replaceChildren();
+  const tabs = document.createElement("div");
+  tabs.className = "category-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Тип скачивания");
+  const cards = document.createElement("div");
+  cards.className = "category-cards";
+  const activate = (kind: MediaKind) => {
+    view.active = kind;
+    tabs.querySelectorAll<HTMLButtonElement>("[role=tab]").forEach((tab) => {
+      const active = tab.dataset.categoryTab === kind;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
     });
+    cards.querySelectorAll<HTMLElement>("[data-category-panel]").forEach((panel) => {
+      panel.dataset.active = String(panel.dataset.categoryPanel === kind);
+    });
+  };
+  for (const category of CATEGORIES) {
+    const grouped = options.filter((o) => o.representative.mediaKind === category.kind);
+    const premium = category.kind !== "normal_video" && grouped.length > 0;
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.id = `${prefix}-tab-${category.kind}`;
+    tab.dataset.categoryTab = category.kind;
+    tab.setAttribute("aria-controls", `${prefix}-panel-${category.kind}`);
+    tab.textContent = category.tab;
+    if (premium) {
+      const marker = document.createElement("span");
+      marker.className = "category-tab-premium";
+      marker.textContent = "Premium";
+      tab.append(marker);
+    }
+    tab.addEventListener("click", () => activate(category.kind));
+    tab.addEventListener("keydown", (event) => {
+      const index = CATEGORIES.findIndex((c) => c.kind === category.kind);
+      const next = event.key === "ArrowRight" ? (index + 1) % 3 : event.key === "ArrowLeft" ? (index + 2) % 3 : event.key === "Home" ? 0 : event.key === "End" ? 2 : null;
+      if (next === null) return;
+      event.preventDefault();
+      activate(CATEGORIES[next].kind);
+      tabs.querySelector<HTMLButtonElement>(`[data-category-tab="${CATEGORIES[next].kind}"]`)?.focus();
+    });
+    tabs.append(tab);
+    const panel = document.createElement("section");
+    panel.className = "category-card";
+    panel.dataset.categoryPanel = category.kind;
+    panel.id = `${prefix}-panel-${category.kind}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.tabIndex = 0;
+    panel.setAttribute("aria-labelledby", `${prefix}-heading-${category.kind}`);
+    const heading = document.createElement("h3");
+    heading.id = `${prefix}-heading-${category.kind}`;
+    heading.textContent = category.title;
+    if (premium) {
+      const badge = document.createElement("span");
+      badge.className = "premium-badge";
+      badge.textContent = "Premium";
+      heading.append(badge);
+    }
+    const subtitle = document.createElement("p");
+    subtitle.className = "category-subtitle";
+    subtitle.textContent = category.subtitle;
+    const help = document.createElement("p");
+    help.className = "category-help";
+    help.id = `${prefix}-help-${category.kind}`;
+    help.textContent = !grouped.length ? category.empty : !premium || snapshot.premiumState === "active" ? "" : snapshot.premiumState === "loading" ? "Проверяем Premium…" : snapshot.premiumState === "error" ? "Не удалось проверить статус Premium" : "Доступно с Premium";
+    help.hidden = !help.textContent;
+    panel.append(heading, subtitle, help);
+    for (const option of grouped) {
+      const row = qualityRow(option, snapshot, snapshot.canSelectQuality !== false);
+      const radio = row.querySelector("input")!;
+      radio.setAttribute("aria-label", `${category.title}, ${category.subtitle}, ${semanticLabel(option.representative)}, ${formatDetail(option.representative)}`);
+      if (help.textContent) radio.setAttribute("aria-describedby", help.id);
+      panel.append(row);
+    }
+    cards.append(panel);
+  }
+  list.append(tabs, cards);
+  activate(view.active);
+  if (focusedValue) {
+    [...list.querySelectorAll<HTMLInputElement>("input")].find((r) => r.value === focusedValue && !r.disabled)?.focus({ preventScroll: true });
+  } else if (focusedTab) {
+    tabs.querySelector<HTMLButtonElement>(`[data-category-tab="${focusedTab}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
   const parts: string[] = [format.container.toUpperCase()];
-  if (typeof format.fps === "number" && Number.isFinite(format.fps) && format.fps > 0) {
+  if (format.mediaKind !== "audio_only" && typeof format.fps === "number" && Number.isFinite(format.fps) && format.fps > 0) {
     parts.push(`${Math.round(format.fps)} fps`);
   }
-  parts.push(formatApproxBytes(format.approxBytes));
+  if (format.approxBytes !== null) parts.push(formatApproxBytes(format.approxBytes));
   return parts.join(" · ");
 }
 
@@ -116,25 +196,16 @@ function qualityRow(
   radio.checked = snapshot.selectedFormatId === format.formatOptionId;
   const title = document.createElement("span");
   title.className = "format-label";
-  title.textContent = format.mediaKind === "normal_video"
-    ? `Видео со звуком · ${option.label}`
-    : option.label;
+  title.textContent = semanticLabel(format);
   const detail = document.createElement("span");
   detail.className = "format-detail";
   detail.textContent = formatDetail(format);
   item.append(radio, title, detail);
-  if (!option.eligible) {
+  if (!option.eligible && !format.requiresPremium) {
     const reason = document.createElement("span");
     reason.className = "format-reason";
     reason.textContent = disabledReason(format, snapshot.muxingBlocked);
     item.append(reason);
-  }
-  if (format.requiresPremium) {
-    const badge = document.createElement("span");
-    badge.className = "premium-badge";
-    badge.textContent = "Premium";
-    item.append(badge);
-    item.setAttribute("aria-label", `${title.textContent}. ${option.eligible ? "Premium активен" : "Доступно в Premium"}`);
   }
   if (radio.checked && option.eligible) {
     item.classList.add("format-selected");
@@ -166,7 +237,14 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     premium.dataset.state = snapshot.premiumState;
     if (snapshot.premiumState === "active" && snapshot.premiumStatus?.active) {
       const expiry = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.premiumStatus.expiresAt));
-      premium.textContent = `Premium активен · Доступ до ${expiry}`;
+      const icon = document.createElement("span");
+      icon.className = "premium-status-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = "✦";
+      const detail = document.createElement("span");
+      detail.className = "premium-status-expiry";
+      detail.textContent = `Доступ до ${expiry}`;
+      premium.replaceChildren(icon, document.createTextNode("Premium активен · "), detail);
     } else if (snapshot.premiumState === "loading") {
       premium.textContent = "Проверяем статус Premium…";
     } else if (snapshot.premiumState === "error") {
@@ -384,28 +462,31 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     muxingBlocked: snapshot.muxingBlocked,
     selectedFormatId: snapshot.selectedFormatId,
   });
-  const options = [...normalOptions, ...standaloneOptions(snapshot)];
-  // Hide with 0–1 grouped options: a single auto-selected format still downloads.
+  const options = [...normalOptions, ...groupStandaloneOptions(snapshot.formats, snapshot.premiumState === "active", snapshot.selectedFormatId)];
   // Quality options only render during the inspected phase before preparation.
   const showQuality =
     snapshot.phase === "inspected" &&
     snapshot.canSelectQuality !== false &&
-    options.length > 1 &&
     snapshot.result !== null;
   const list = root.querySelector("[data-flow-formats]");
   if (list instanceof HTMLElement) {
-    list.replaceChildren();
     list.hidden = !showQuality;
     if (showQuality) {
-      const selectable = snapshot.phase === "inspected" && snapshot.canSelectQuality !== false;
-      for (const option of options) {
-        list.append(qualityRow(option, snapshot, selectable));
-      }
+      renderCategories(list, options, snapshot);
+    } else {
+      list.replaceChildren();
+      categoryViews.delete(list);
     }
   }
   const qualityCard = root.querySelector("[data-flow-quality]");
   if (qualityCard instanceof HTMLElement) {
     qualityCard.hidden = !showQuality;
+  }
+  const summary = root.querySelector<HTMLElement>("[data-flow-selection-summary]");
+  if (summary) {
+    const selected = snapshot.formats.find((f) => f.formatOptionId === snapshot.selectedFormatId);
+    summary.hidden = snapshot.phase !== "inspected" || !selected;
+    summary.textContent = selected ? `Выбрано: ${CATEGORIES.find((c) => c.kind === selected.mediaKind)?.title} · ${semanticLabel(selected)} · ${formatDetail(selected)}` : "";
   }
 
   const mux = root.querySelector("[data-flow-mux]");

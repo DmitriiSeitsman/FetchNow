@@ -132,7 +132,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     expect(astroSource).not.toContain("vk.com/video");
   });
 
-  it("shows approximate size or the unknown-size message in quality rows", () => {
+  it("shows approximate size and omits unknown size in quality rows", () => {
     mountFlow();
     const formats = [progressiveFormat, alternateFormat];
     renderFlow(
@@ -158,7 +158,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
         downloadEligible: true,
       }),
     );
-    expect(el(".format-detail").textContent).toContain(UNKNOWN_SIZE_LABEL);
+    expect(el(".format-detail").textContent).not.toContain(UNKNOWN_SIZE_LABEL);
     expect(el(".format-detail").textContent).not.toContain("≈");
   });
 
