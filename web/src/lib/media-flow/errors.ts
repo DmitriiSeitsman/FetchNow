@@ -165,7 +165,7 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     retryable: true,
   },
   DOWNLOAD_TOO_LARGE: {
-    text: "Файл больше лимита бесплатного скачивания.",
+    text: "Файл превышает допустимый размер для подготовки.",
     retryable: false,
   },
   DOWNLOAD_TOOL_FAILED: {
@@ -193,7 +193,7 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     retryable: true,
   },
   FILE_TOO_LARGE: {
-    text: "Файл больше лимита бесплатного скачивания.",
+    text: "Файл превышает допустимый размер для подготовки.",
     retryable: false,
   },
   // Keep the stated maximum in sync with MAX_SOURCE_DURATION_SECONDS.
@@ -223,7 +223,7 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     retryable: false,
   },
   SAVE_FAILED: {
-    text: "Файл не удалось сохранить полностью. Он не отмечен как завершённый.",
+    text: "Не удалось сохранить файл. Можно повторить попытку или скачать его обычным способом.",
     retryable: false,
   },
   CONTRACT: { text: GENERIC, retryable: false },

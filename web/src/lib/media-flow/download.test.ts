@@ -566,7 +566,11 @@ describe("download resource lifecycle", () => {
 describe("pre-stream header rejection cancels the body", () => {
   const token = "tokentokentokentokentokentokentoken12";
 
-  async function rejectPrestream(headers: Headers, cancelFails = false) {
+  async function rejectPrestream(
+    headers: Headers,
+    cancelFails = false,
+    expectedArtifactBytes?: number,
+  ) {
     const tracked = trackedBody([new Uint8Array([1, 2, 3])], "3", headers);
     if (cancelFails) {
       tracked.cancel.mockImplementation(async () => {
@@ -582,6 +586,7 @@ describe("pre-stream header rejection cancels the body", () => {
         token,
         container: "mp4",
         suggestedFilename: SAVE_NAME,
+        expectedArtifactBytes,
         signal: new AbortController().signal,
         deps: {
           origin: "http://localhost",
@@ -643,15 +648,34 @@ describe("pre-stream header rejection cancels the body", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it("cancels and releases on oversized Content-Length", async () => {
+  it("does not reject a server-authoritative 732 MiB artifact with the obsolete 512 MiB guard", async () => {
     const { tracked, close, thrown } = await rejectPrestream(
       new Headers({
         "Content-Type": "video/mp4",
-        "Content-Length": "536870913",
+        "Content-Length": "768014215",
+        // Stop after the size validation without allocating a 732 MiB body.
+        "Content-Disposition": "inline; filename=nope.mp4",
+      }),
+      false,
+      768_014_215,
+    );
+    expect(thrown).toMatchObject({ code: "CONTRACT" });
+    expect(tracked.cancel).toHaveBeenCalledOnce();
+    expect(tracked.releaseLock).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("rejects Content-Length that disagrees with READY artifactBytes", async () => {
+    const { tracked, close, thrown } = await rejectPrestream(
+      new Headers({
+        "Content-Type": "video/mp4",
+        "Content-Length": "4",
         "Content-Disposition": DISPOSITION,
       }),
+      false,
+      3,
     );
-    expect(thrown).toMatchObject({ code: "DOWNLOAD_TOO_LARGE" });
+    expect(thrown).toMatchObject({ code: "CONTRACT" });
     expect(tracked.cancel).toHaveBeenCalledOnce();
     expect(tracked.releaseLock).toHaveBeenCalledOnce();
     expect(close).not.toHaveBeenCalled();

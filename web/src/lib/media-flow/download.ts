@@ -11,7 +11,6 @@ export const ALLOWED_CONTENT_TYPES = new Set([
   "audio/ogg",
 ]);
 
-const MAX_BYTES = 536_870_912;
 const MAX_ERROR_BODY_BYTES = 8192;
 const ATTR_CHAR = /^[A-Za-z0-9!#$&+\-.^_`|~]$/;
 
@@ -324,6 +323,8 @@ export async function saveArtifactStream(input: {
   token: string;
   container: string;
   suggestedFilename: string;
+  /** Exact server-authoritative size published on the READY download job. */
+  expectedArtifactBytes?: number | null;
   signal: AbortSignal;
   deps?: DownloadDeps;
 }): Promise<void> {
@@ -445,8 +446,23 @@ export async function saveArtifactStream(input: {
       );
     }
     const expected = Number(lengthHeader);
-    if (!Number.isFinite(expected) || expected <= 0 || expected > MAX_BYTES) {
-      throw flowErrorFromCode("DOWNLOAD_TOO_LARGE");
+    if (!Number.isSafeInteger(expected) || expected <= 0) {
+      throw new FlowError(
+        "CONTRACT",
+        GENERIC_USER_MESSAGE,
+      );
+    }
+    if (
+      input.expectedArtifactBytes !== undefined &&
+      (input.expectedArtifactBytes === null ||
+        !Number.isSafeInteger(input.expectedArtifactBytes) ||
+        input.expectedArtifactBytes <= 0 ||
+        expected !== input.expectedArtifactBytes)
+    ) {
+      throw new FlowError(
+        "CONTRACT",
+        GENERIC_USER_MESSAGE,
+      );
     }
     const filename = parseContentDispositionFilename(
       response.headers.get("Content-Disposition"),

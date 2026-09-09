@@ -20,6 +20,29 @@ function setText(el: Element | null, text: string): void {
   }
 }
 
+function freeQuotaPlanCopy(snapshot: FlowSnapshot): string {
+  const quota = snapshot.freeQuota;
+  if (quota?.tier !== "free") {
+    return "Лимит бесплатных загрузок";
+  }
+  const hours =
+    quota.windowSeconds !== undefined && quota.windowSeconds % 3600 === 0
+      ? quota.windowSeconds / 3600
+      : null;
+  if (hours === null) {
+    return `До ${quota.downloadLimit} бесплатных загрузок`;
+  }
+  const downloadWord =
+    quota.downloadLimit % 10 === 1 && quota.downloadLimit % 100 !== 11
+      ? "загрузка"
+      : quota.downloadLimit % 10 >= 2 &&
+          quota.downloadLimit % 10 <= 4 &&
+          (quota.downloadLimit % 100 < 12 || quota.downloadLimit % 100 > 14)
+        ? "загрузки"
+        : "загрузок";
+  return `${quota.downloadLimit} ${downloadWord} за ${hours} ч`;
+}
+
 function disabledReason(
   format: FlowSnapshot["formats"][number],
   muxingBlocked: boolean,
@@ -495,15 +518,27 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       snapshot.result !== null && normalOptions.every((option) => !option.eligible);
     mux.hidden = !onlyIncomplete || snapshot.phase === "idle";
   }
-  const hasLockedPremium = options.some(
-    (option) => option.representative.requiresPremium && !option.eligible,
-  );
   const checkout = root.querySelector<HTMLElement>("[data-flow-premium-checkout]");
   if (checkout) {
-    checkout.hidden =
-      snapshot.premiumState !== "free" ||
-      !hasLockedPremium ||
-      !snapshot.testCheckoutAvailable;
+    // Product visibility is independent of standalone stream availability.
+    // The containing quality card already scopes this offer to inspected media.
+    checkout.hidden = snapshot.premiumState !== "free";
+  }
+  setText(root.querySelector("[data-flow-free-plan-quota]"), freeQuotaPlanCopy(snapshot));
+  const exhausted =
+    snapshot.freeQuota?.tier === "free" &&
+    snapshot.freeQuota.downloadsRemaining === 0;
+  setText(
+    root.querySelector("[data-flow-premium-next-step]"),
+    exhausted
+      ? "Бесплатные загрузки закончились. Оформите Premium на 24 часа, чтобы продолжить пользоваться сервисом."
+      : "Premium снимает ограничения количества загрузок и скорости со стороны FetchNow.",
+  );
+  const testCheckout = root.querySelector<HTMLElement>(
+    "[data-flow-premium-test-checkout]",
+  );
+  if (testCheckout) {
+    testCheckout.hidden = !snapshot.testCheckoutAvailable;
   }
   const checkoutButton = root.querySelector<HTMLButtonElement>("[data-flow-premium-cta]");
   if (checkoutButton) {

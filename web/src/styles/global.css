@@ -1220,17 +1220,63 @@ body.page-root {
   display: grid;
   justify-items: center;
   text-align: center;
-  gap: 0.55rem;
+  gap: 0.75rem;
   margin-top: 0.8rem;
   border-top: 1px solid var(--elev-border-light);
   padding-top: 0.85rem;
 }
 
-.premium-checkout p {
+.premium-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  width: 100%;
+  text-align: left;
+}
+
+.premium-plan {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  border: 1px solid var(--elev-border-light);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: var(--surface);
+}
+
+.premium-plan--premium {
+  border-color: rgba(166, 130, 55, 0.32);
+  background: linear-gradient(120deg, #fffdf8, #faf4e7);
+}
+
+.premium-plan h3,
+.premium-plan p,
+.premium-next-step,
+.premium-test-checkout p {
   margin: 0;
+}
+
+.premium-plan h3 {
+  color: var(--navy-deep);
+  font-size: 0.88rem;
+}
+
+.premium-plan p,
+.premium-next-step,
+.premium-test-checkout p {
   color: var(--ink-muted);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.premium-next-step {
+  max-width: 42rem;
+}
+
+.premium-test-checkout {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
 }
 
 .shell-payment {
@@ -1382,8 +1428,12 @@ body.page-root {
 }
 
 /* The hidden attribute must win over the layout display above. */
-.loader[hidden],
+.loader[hidden] {
+  display: none;
+}
+
 .premium-checkout[hidden],
+.premium-test-checkout[hidden],
 .progress-card[hidden],
 .progress-actions[hidden],
 .quality-card[hidden],
@@ -1460,6 +1510,10 @@ body.page-root {
 
   .premium-checkout .btn {
     width: 100%;
+  }
+
+  .premium-comparison {
+    grid-template-columns: 1fr;
   }
 }
 

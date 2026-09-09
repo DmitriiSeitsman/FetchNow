@@ -148,7 +148,7 @@ describe("controller cancellation and lifecycle", () => {
     expect(store.map.size).toBe(1);
   });
 
-  it("does not treat stream AbortError as picker cancellation", async () => {
+  it("returns to READY with fallback actions after a stream AbortError", async () => {
     const api = mockApi();
     const save = vi.fn(async () => {
       throw new DOMException("The user aborted a request.", "AbortError");
@@ -156,8 +156,68 @@ describe("controller cancellation and lifecycle", () => {
     const { controller, store } = makeController(api, save);
     await reachReady(controller);
     await controller.saveFile();
-    expect(controller.snapshot().phase).toBe("download_failed");
+    expect(controller.snapshot().phase).toBe("ready");
     expect(controller.snapshot().busy).toBe(false);
+    expect(controller.snapshot().errorText).toContain("скачать его обычным способом");
+    expect(controller.snapshot().canSaveAs).toBe(true);
+    expect(controller.snapshot().canNativeDownload).toBe(true);
+    expect(store.map.size).toBe(1);
+  });
+
+  it.each([
+    ["network", new TypeError("fetch failed")],
+    ["write", new Error("write failed")],
+    ["response validation", flowErrorFromCode("CONTRACT")],
+  ])(
+    "keeps the prepared job and grant after a local %s failure",
+    async (_label, localError) => {
+      const api = mockApi();
+      const save = vi.fn(async () => {
+        throw localError;
+      });
+      const { controller, store } = makeController(api, save);
+      await reachReady(controller);
+      await controller.saveFile();
+      const snap = controller.snapshot();
+      expect(snap.phase).toBe("ready");
+      expect(snap.canSaveAs).toBe(true);
+      expect(snap.canNativeDownload).toBe(true);
+      expect(snap.errorText).toContain("повторить попытку");
+      expect(api.createDownloadJob).toHaveBeenCalledTimes(1);
+      expect(store.map.size).toBe(1);
+    },
+  );
+
+  it("retries local save against the existing prepared job without new admission", async () => {
+    const api = mockApi();
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("write failed"))
+      .mockResolvedValueOnce(undefined);
+    const { controller } = makeController(api, save);
+    await reachReady(controller);
+    const preparedJobId = controller.snapshot().selectedFormat?.formatOptionId;
+    await controller.saveFile();
+    expect(controller.snapshot().phase).toBe("ready");
+    await controller.saveFile();
+    expect(controller.snapshot().phase).toBe("completed");
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[0]?.[0].downloadJobId).toBe(save.mock.calls[1]?.[0].downloadJobId);
+    expect(save.mock.calls[0]?.[0].expectedArtifactBytes).toBeGreaterThan(0);
+    expect(api.createDownloadJob).toHaveBeenCalledTimes(1);
+    expect(preparedJobId).toBe(OPTION_ID);
+  });
+
+  it("does not present an expired server artifact as locally recoverable", async () => {
+    const api = mockApi();
+    const save = vi.fn(async () => {
+      throw flowErrorFromCode("DOWNLOAD_EXPIRED");
+    });
+    const { controller, store } = makeController(api, save);
+    await reachReady(controller);
+    await controller.saveFile();
+    expect(controller.snapshot().phase).toBe("expired");
+    expect(controller.snapshot().canSaveAs).toBe(false);
     expect(store.map.size).toBe(0);
   });
 
