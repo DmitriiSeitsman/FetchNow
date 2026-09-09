@@ -89,9 +89,13 @@ function mount(): void {
     <fieldset data-flow-quality hidden>
       <div data-flow-formats hidden></div>
       <div data-flow-premium-checkout hidden>
-        <span class="test-badge">ТЕСТ</span>
-        <p>Тестовый режим оплаты. Не является коммерческой покупкой.</p>
-        <button type="button" data-flow-premium-cta>Тестовая оплата Premium</button>
+        <div data-flow-free-plan-quota></div>
+        <p data-flow-premium-next-step></p>
+        <div data-flow-premium-test-checkout hidden>
+          <span class="test-badge">ТЕСТ</span>
+          <p>Тестовый режим оплаты. Не является коммерческой покупкой.</p>
+          <button type="button" data-flow-premium-cta>Тестовая оплата Premium</button>
+        </div>
       </div>
     </fieldset>
     <button data-flow-download></button>
@@ -117,12 +121,16 @@ describe("PRD2-A3.3 Premium UI", () => {
     expect(document.querySelector("input[aria-describedby]")).not.toBeNull();
   });
 
-  it("shows the explicit TEST CTA only when the derived server flag is available", () => {
+  it("keeps Premium information visible but gates the TEST CTA by the server flag", () => {
     const checkout = document.querySelector<HTMLElement>(
       "[data-flow-premium-checkout]",
     );
+    const testCheckout = document.querySelector<HTMLElement>(
+      "[data-flow-premium-test-checkout]",
+    );
     renderFlow(document, snapshot({ testCheckoutAvailable: false }));
-    expect(checkout?.hidden).toBe(true);
+    expect(checkout?.hidden).toBe(false);
+    expect(testCheckout?.hidden).toBe(true);
 
     const css = readFileSync(join(here, "../../styles/global.css"), "utf8");
     expect(css).toMatch(
@@ -131,6 +139,7 @@ describe("PRD2-A3.3 Premium UI", () => {
 
     renderFlow(document, snapshot({ testCheckoutAvailable: true }));
     expect(checkout?.hidden).toBe(false);
+    expect(testCheckout?.hidden).toBe(false);
     expect(checkout?.textContent).toContain("ТЕСТ");
     expect(checkout?.textContent).toContain("Не является коммерческой покупкой");
     expect(checkout?.textContent).not.toContain("1 ₽");
@@ -223,7 +232,7 @@ describe("PRD2-A3.3 Premium UI", () => {
     ).toBe(true);
   });
 
-  it("does not invent standalone locks when the source did not provide them", () => {
+  it("keeps Premium visible without inventing standalone locks", () => {
     const formats = [
       progressiveFormat,
       { ...progressiveFormat, formatOptionId: videoOnly.formatOptionId, height: 480 },
@@ -239,7 +248,38 @@ describe("PRD2-A3.3 Premium UI", () => {
     expect(document.body.textContent).not.toContain("Доступно в Premium");
     expect(
       document.querySelector<HTMLElement>("[data-flow-premium-checkout]")?.hidden,
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("shows the Premium next step when Free quota is exhausted", () => {
+    renderFlow(
+      document,
+      snapshot({
+        testCheckoutAvailable: true,
+        freeQuota: {
+          tier: "free",
+          downloadLimit: 3,
+          downloadsUsed: 3,
+          downloadsReserved: 0,
+          downloadsRemaining: 0,
+          windowSeconds: 86_400,
+          premiumExpiresAt: null,
+          resetAt: "2026-09-09T12:00:00Z",
+        },
+      }),
+    );
+    expect(document.querySelector("[data-flow-quota]")?.textContent).toContain(
+      "Лимит бесплатных загрузок исчерпан",
+    );
+    expect(document.querySelector("[data-flow-free-plan-quota]")?.textContent).toBe(
+      "3 загрузки за 24 ч",
+    );
+    expect(document.querySelector("[data-flow-premium-next-step]")?.textContent).toContain(
+      "Оформите Premium на 24 часа",
+    );
+    expect(
+      document.querySelector<HTMLElement>("[data-flow-premium-test-checkout]")?.hidden,
+    ).toBe(false);
   });
 
   it("contains the existing 390px-safe responsive treatment for Premium controls", () => {

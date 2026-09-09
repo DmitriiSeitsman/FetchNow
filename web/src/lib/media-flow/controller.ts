@@ -486,10 +486,11 @@ export class MediaFlowController {
     this.emit();
   }
 
-  private returnToReady(generation: number): void {
+  private returnToReady(generation: number, errorText: string | null = null): void {
     if (!this.machine.isCurrentGeneration(generation)) {
       return;
     }
+    this.errorText = errorText;
     if (this.machine.current === "saving") {
       this.machine.transition("ready", generation);
     }
@@ -1140,6 +1141,7 @@ export class MediaFlowController {
         token: this.token,
         container: this.downloadJob.selectedFormat.container,
         suggestedFilename: this.downloadJob.suggestedFilename,
+        expectedArtifactBytes: this.downloadJob.artifactBytes,
         signal: this.abort.signal,
       });
       if (!this.machine.isCurrentGeneration(generation)) {
@@ -1163,11 +1165,14 @@ export class MediaFlowController {
       if (isAbortError(err) && controllerAborted) {
         return;
       }
-      if (isAbortError(err)) {
-        this.fail("download_failed", flowErrorFromCode("SAVE_FAILED"), generation);
+      if (err instanceof FlowError && err.code === "DOWNLOAD_EXPIRED") {
+        this.fail("expired", err, generation);
         return;
       }
-      this.fail("download_failed", err, generation);
+      // The server-side job was already READY before this local FSA attempt.
+      // A fetch, stream, metadata, permission, write, or close failure must not
+      // discard that prepared artifact or its ordinary browser-download grant.
+      this.returnToReady(generation, userMessageForCode("SAVE_FAILED").text);
     }
   }
 

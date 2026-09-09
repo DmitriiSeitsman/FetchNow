@@ -255,6 +255,40 @@ describe("render", () => {
     expect(link?.hidden).toBe(false);
   });
 
+  it("keeps READY save and ordinary-download actions visible with a local save error", () => {
+    document.body.innerHTML = `
+      <p data-flow-status></p>
+      <section data-flow-ready hidden>
+        <span data-flow-ready-details></span>
+        <span data-flow-ready-speed hidden></span>
+        <span data-flow-ready-time hidden></span>
+        <button data-flow-save-as hidden></button>
+        <a data-flow-native-download hidden download></a>
+      </section>
+      <p data-flow-grant-pending hidden></p>
+      <p data-flow-handoff hidden></p>
+      <p data-flow-https hidden></p>
+    `;
+    renderFlow(
+      document,
+      snapshot({
+        phase: "ready",
+        errorText:
+          "Не удалось сохранить файл. Можно повторить попытку или скачать его обычным способом.",
+        canSaveAs: true,
+        canNativeDownload: true,
+        downloadHref:
+          "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
+      }),
+    );
+    expect(document.querySelector<HTMLElement>("[data-flow-status]")?.textContent).toContain(
+      "скачать его обычным способом",
+    );
+    expect(document.querySelector<HTMLElement>("[data-flow-ready]")?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("[data-flow-save-as]")?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("[data-flow-native-download]")?.hidden).toBe(false);
+  });
+
   it("does not write into a detached flow root", () => {
     const root = document.createElement("section");
     root.innerHTML = `<p data-flow-quota hidden></p><p data-flow-status></p>`;

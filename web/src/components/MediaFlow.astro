@@ -97,11 +97,29 @@ const enabled = isMediaFlowEnabled();
     <h2 class="card-title" id="flow-quality-title">Выберите вариант скачивания</h2>
     <div class="quality-list" data-flow-formats hidden></div>
     <div class="premium-checkout" data-flow-premium-checkout hidden>
-      <span class="test-badge">ТЕСТ</span>
-      <p>Тестовый режим оплаты. Не является коммерческой покупкой.</p>
-      <button class="btn btn-ghost" type="button" data-flow-premium-cta>
-        Тестовая оплата Premium
-      </button>
+      <div class="premium-comparison" aria-label="Сравнение бесплатной загрузки и Premium">
+        <section class="premium-plan premium-plan--free">
+          <h3>Бесплатно</h3>
+          <p data-flow-free-plan-quota>Лимит бесплатных загрузок</p>
+          <p>С ограничением скорости FetchNow</p>
+        </section>
+        <section class="premium-plan premium-plan--premium">
+          <h3>Premium · 24 часа</h3>
+          <p>Без ограничения скорости со стороны FetchNow</p>
+          <p>Без лимита бесплатных загрузок</p>
+          <p>Отдельное видео и аудио, когда источник это поддерживает</p>
+        </section>
+      </div>
+      <p class="premium-next-step" data-flow-premium-next-step>
+        Premium снимает ограничения количества загрузок и скорости со стороны FetchNow.
+      </p>
+      <div class="premium-test-checkout" data-flow-premium-test-checkout hidden>
+        <span class="test-badge">ТЕСТ</span>
+        <p>Тестовый режим оплаты. Не является коммерческой покупкой.</p>
+        <button class="btn btn-ghost" type="button" data-flow-premium-cta>
+          Тестовая оплата Premium
+        </button>
+      </div>
     </div>
   </fieldset>
   <section class="progress-card" data-flow-progress data-tone="active" hidden>
