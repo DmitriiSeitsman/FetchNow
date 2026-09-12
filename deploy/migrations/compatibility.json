@@ -136,6 +136,23 @@
       "data_loss": "none",
       "database_downgrade": "forbidden",
       "rationale": "Create the new premium_entitlements table and indexes only. Existing payment_orders rows and application behavior remain unchanged until a new application issues entitlements on ResultURL. No entitlement data is backfilled by migration."
+    },
+    {
+      "from_heads": [
+        "0009_premium_entitlements"
+      ],
+      "to_heads": [
+        "0010_successful_delivery_quota"
+      ],
+      "included_revisions": [
+        "0010_successful_delivery_quota"
+      ],
+      "execution_mode": "online_expand",
+      "online_with_previous_application": true,
+      "previous_application_rollback_compatible": true,
+      "data_loss": "none",
+      "database_downgrade": "forbidden",
+      "rationale": "Create the bounded free_download_delivery_ranges ledger and indexes only. Existing quota entries and jobs are not rewritten; the default compatibility mode preserves READY-time consumption while old and new application revisions coexist."
     }
   ]
 }

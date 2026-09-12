@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -118,5 +119,79 @@ class FreeDownloadQuotaEntry(Base):
         DateTime(timezone=True), nullable=True
     )
     released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class FreeDownloadDeliveryRange(Base):
+    """Bounded server-observed delivery prefix for one Free response."""
+
+    __tablename__ = "free_download_delivery_ranges"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('active', 'closed')",
+            name="ck_free_delivery_ranges_state",
+        ),
+        CheckConstraint(
+            "artifact_bytes > 0",
+            name="ck_free_delivery_ranges_artifact_bytes_positive",
+        ),
+        CheckConstraint(
+            "fence_token >= 0",
+            name="ck_free_delivery_ranges_fence_nonneg",
+        ),
+        CheckConstraint(
+            "request_start >= 0 AND request_start < request_end_exclusive "
+            "AND request_end_exclusive <= artifact_bytes",
+            name="ck_free_delivery_ranges_request",
+        ),
+        CheckConstraint(
+            "served_end_exclusive >= request_start "
+            "AND served_end_exclusive <= request_end_exclusive",
+            name="ck_free_delivery_ranges_served",
+        ),
+        CheckConstraint(
+            "(state = 'active' AND lease_expires_at IS NOT NULL "
+            "AND lease_expires_at > started_at AND closed_at IS NULL) OR "
+            "(state = 'closed' AND lease_expires_at IS NULL "
+            "AND closed_at IS NOT NULL AND closed_at >= started_at)",
+            name="ck_free_delivery_ranges_lifecycle",
+        ),
+        Index(
+            "ix_free_delivery_ranges_entry_state_start",
+            "quota_entry_id",
+            "state",
+            "request_start",
+        ),
+        Index(
+            "ix_free_delivery_ranges_active_lease",
+            "quota_entry_id",
+            "lease_expires_at",
+            postgresql_where=text("state = 'active'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    quota_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("free_download_quota_entries.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fence_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    artifact_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_start: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_end_exclusive: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    served_end_exclusive: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

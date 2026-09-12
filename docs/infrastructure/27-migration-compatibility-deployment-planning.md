@@ -1,5 +1,15 @@
 # 27. Migration Compatibility and Deployment Planning (PRD1C3B1)
 
+## PRD2-A4.2 additive envelope
+
+`0009_premium_entitlements → 0010_successful_delivery_quota` is an
+`online_expand` transition. It creates only the delivery coverage ledger and
+indexes, performs no backfill, and leaves old application reads/writes intact.
+The default READY compatibility flag must remain true during migration and the
+mixed-version application rollout. Disable it only afterward through the
+canonical runtime-config transaction. Rollback restores the flag to true before
+an application rollback; production database downgrade remains forbidden.
+
 PRD1C3B1 adds a **read-only deployment planner** and a **strict migration
 compatibility contract**. It does **not** create backups, run Alembic
 upgrade/downgrade/stamp, mutate PostgreSQL, recreate containers, write

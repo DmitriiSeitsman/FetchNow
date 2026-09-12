@@ -447,6 +447,12 @@ class Settings(BaseSettings):
         default=False,
         alias="FREE_DOWNLOAD_QUOTA_ENABLED",
     )
+    # Temporary mixed-version rollout guard. True preserves legacy READY-time
+    # quota consumption until operators explicitly activate delivery evidence.
+    free_download_quota_ready_compatibility_mode: bool = Field(
+        default=True,
+        alias="FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE",
+    )
     free_download_limit: int = Field(
         default=3,
         alias="FREE_DOWNLOAD_LIMIT",

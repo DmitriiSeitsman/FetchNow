@@ -317,6 +317,9 @@ class DownloadExecutor:
                     artifact_content_type=published.content_type,
                     artifact_container=published.container,
                     now=now,
+                    consume_quota_on_ready=(
+                        self._settings.free_download_quota_ready_compatibility_mode
+                    ),
                 )
                 await session.commit()
             if applied:
