@@ -22,7 +22,7 @@ direct call to the Python activation helper.
 
 `state/current.json` remains schema v2 and continues to describe application
 and database release identity. Config rollout adds the separate
-`state/runtime-config.json` authority. Schema 3 is bound to the active revision and
+`state/runtime-config.json` authority. Schema 4 is bound to the active revision and
 deployment ID and contains only:
 
 - normalized values from the reviewed non-secret runtime allowlist;
@@ -55,6 +55,8 @@ pair also remains readable and is never silently padded with the A3.3 checkout
 flag. After the A3.3 source rollout, explicit no-delta initialization writes
 schema 3 with `PREMIUM_TEST_CHECKOUT_VISIBLE=false` unless an operator has
 already diverged the live environment, in which case initialization fails.
+Schema 3 remains readable against its frozen key set. Schema 4 adds only the
+successful-delivery compatibility flag and never silently pads older state.
 
 ## Config classification
 
@@ -64,6 +66,7 @@ The initial mutation allowlist is intentionally narrow:
 |---|---|---|---|
 | `PREMIUM_TEST_CHECKOUT_VISIBLE` | runtime-only boolean | `api` | allowed |
 | `FREE_DOWNLOAD_QUOTA_ENABLED` | runtime-only | `api` | allowed |
+| `FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE` | temporary runtime-only boolean | `api`, `delivery`, `worker` | allowed |
 | `FREE_DELIVERY_RATE_LIMIT_ENABLED` | runtime-only | `api`, `delivery` | allowed |
 | `FREE_DELIVERY_RATE_BYTES_PER_SECOND` | runtime-only bounded integer | `api`, `delivery` | allowed |
 | `FREE_DOWNLOAD_LIMIT` | runtime-wired | `api`, `worker` | classified, not allowlisted |
@@ -154,6 +157,14 @@ and repeats scoped and global health. The temporary file is deleted afterward.
   same canonical config-rollout command.
 
 Config rollback never changes source revision or database schema.
+
+For successful-delivery quota activation, first deploy migration 0010 and the
+new application with the flag still `true`. Then atomically edit only
+`FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=false` and run this canonical
+config transaction. It recreates api, delivery, and worker at the already
+accepted immutable image IDs. To roll back, restore only the flag to `true` and
+complete config health before considering an application rollback. Never run
+this switch concurrently with a migration or source rollout.
 
 ## Production quota example
 

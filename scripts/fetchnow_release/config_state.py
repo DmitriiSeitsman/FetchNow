@@ -14,6 +14,7 @@ from .config_contract import (
     build_config_fingerprint,
     legacy_runtime_config_fingerprint_schema1,
     legacy_runtime_config_fingerprint_schema2,
+    legacy_runtime_config_fingerprint_schema3,
     normalize_build_values,
     normalize_runtime_values,
     runtime_config_fingerprint,
@@ -22,9 +23,10 @@ from .journal_io import atomic_write_json, read_json
 from .revision import validate_full_sha
 
 RUNTIME_CONFIG_STATE_NAME = "runtime-config.json"
-RUNTIME_CONFIG_STATE_SCHEMA = 3
+RUNTIME_CONFIG_STATE_SCHEMA = 4
 LEGACY_RUNTIME_CONFIG_STATE_SCHEMA = 1
 LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_2 = 2
+LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_3 = 3
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -94,6 +96,7 @@ def validate_runtime_config_state(state: RuntimeConfigState) -> None:
     if state.schema_version not in {
         LEGACY_RUNTIME_CONFIG_STATE_SCHEMA,
         LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_2,
+        LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_3,
         RUNTIME_CONFIG_STATE_SCHEMA,
     }:
         raise ConfigStateError("unsupported runtime config state schema")
@@ -117,6 +120,10 @@ def validate_runtime_config_state(state: RuntimeConfigState) -> None:
             )
         elif state.schema_version == LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_2:
             expected_runtime_fingerprint = legacy_runtime_config_fingerprint_schema2(
+                state.runtime_values
+            )
+        elif state.schema_version == LEGACY_RUNTIME_CONFIG_STATE_SCHEMA_3:
+            expected_runtime_fingerprint = legacy_runtime_config_fingerprint_schema3(
                 state.runtime_values
             )
         else:

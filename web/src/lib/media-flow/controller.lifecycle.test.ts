@@ -89,6 +89,36 @@ async function reachReady(controller: MediaFlowController): Promise<void> {
 }
 
 describe("controller cancellation and lifecycle", () => {
+  it("silently refreshes quota after a successful File System Access save", async () => {
+    const getFreeQuota = vi.fn(async () => null);
+    const api = { ...mockApi(), getFreeQuota };
+    const { controller } = makeController(api, vi.fn(async () => undefined));
+    await reachReady(controller);
+    getFreeQuota.mockClear();
+
+    await controller.saveFile();
+    await vi.waitFor(() => expect(getFreeQuota).toHaveBeenCalledOnce());
+    expect(controller.snapshot().phase).toBe("completed");
+  });
+
+  it("coalesces quota refreshes when foreground events follow native handoff", async () => {
+    const quota = deferred<null>();
+    const getFreeQuota = vi.fn(async () => null);
+    const api = { ...mockApi(), getFreeQuota };
+    const { controller } = makeController(api, vi.fn());
+    await reachReady(controller);
+    await vi.waitFor(() => expect(controller.snapshot().canNativeDownload).toBe(true));
+    getFreeQuota.mockClear();
+    getFreeQuota.mockImplementation(() => quota.promise);
+    expect(controller.onNativeDownloadClick()).toBe(true);
+
+    controller.onForegroundResume();
+    controller.onForegroundResume();
+    expect(getFreeQuota).toHaveBeenCalledOnce();
+    quota.resolve(null);
+    await vi.waitFor(() => expect(controller.snapshot().quotaLoading).toBe(false));
+  });
+
   it("returns to ready and stays not busy after picker cancellation", async () => {
     const api = mockApi();
     const save = vi.fn(async () => {

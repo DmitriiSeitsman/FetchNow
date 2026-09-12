@@ -22,6 +22,21 @@ docker compose --env-file .env.staging --project-name fetchnow-staging \
 
 Первая команда проверяет readiness; переменные должны быть загружены в операторскую shell без печати. `alembic current` — **CHECK**, показывает текущую revision. `upgrade head` — **WARNING modifying**, применяет migrations до последней revision. В репозитории head — `0007_free_download_quota` (после `0006_browser_delivery_grants` / `0005_download_file_details` / `0004_download_observability` / `0003_download_jobs` / `0002_media_jobs` / `0001_baseline`). PRD1E-B2 добавляет только таблицы `anonymous_clients` и `free_download_quota_entries`, их constraints и indexes; historical migrations не изменяются. Миграция additive и применяется до отдельного включения admission-флага. PR6 добавляет таблицу `media_download_jobs`. PR10 добавляет `progress_stage` и `cancel_requested_at`. PR12 добавляет nullable `suggested_filename` и `progress_percent`; previous PR11 applications may INSERT/UPDATE without those columns. A BEFORE UPDATE trigger clears `progress_percent` when `progress_stage` changes and the percent value is unchanged (`NEW IS NOT DISTINCT FROM OLD`). PostgreSQL cannot distinguish an omitted column from an explicit assignment of the same value; both are normalized to NULL so a rolled-back PR11 application remains CHECK-compatible after a PR12 percent write. An explicit write of a different illegal percent still fails the CHECK. Public API `cancelled` кодируется как PR9 `public_state=expired` плюс `progress_stage=cancelled` и `cancel_requested_at`. Online expand сохраняет `progress_stage` server default **и** BEFORE trigger, который выставляет coherent `progress_stage` для PR9 UPDATE, не пишущих новую колонку, и не переписывает PR10 cancellation encoding. CHECK по-прежнему отклоняет explicit illegal PR10 state/stage pairs. Downgrade drops the PR12 trigger, function, constraints, and columns; a new `public_state` enum is not required.
 
+### Successful-delivery ledger (revision 0010)
+
+Current repository head is `0010_successful_delivery_quota` (the older head
+reference above describes the PRD1E-B2 historical stage). Revision 0010
+additively creates `free_download_delivery_ranges`. Each row binds a quota entry
+to an exact artifact id, fence and byte size; stores requested half-open bounds,
+the durable served prefix, active/closed state and lease timestamps; and is
+protected by range, generation-size and lifecycle CHECK constraints. Indexes
+support entry/state/range lookup and partial live-lease lookup.
+
+The migration performs no backfill: existing consumed and reserved entries keep
+their state. The previous application ignores the new table, so application
+rollback does not require database downgrade. Apply 0010 before disabling READY
+compatibility mode.
+
 ## Проверка и ошибки
 
 После migration: снова `alembic current`, затем API readiness. `connection refused` означает сеть/процесс; authentication failed — credentials; database does not exist — неверное имя/инициализация. Не меняйте password в одном service: URL API/worker и PostgreSQL должны согласовываться.
