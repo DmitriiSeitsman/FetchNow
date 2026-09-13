@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -12,9 +13,12 @@ from fetchnow.core.config import Settings
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.progress import DownloadProgressStage
 from fetchnow.downloads.states import MediaDownloadJobState
+from fetchnow.quota.delivery import DeliveryQuotaAccounting
 from fetchnow.quota.errors import QuotaInvariantError
 from fetchnow.quota.models import FreeDownloadQuotaEntry
 from fetchnow.quota.repository import QuotaRepository
+
+logger = logging.getLogger("fetchnow.quota.reconcile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +40,53 @@ class QuotaReconciler:
 
     async def run(self, *, session: AsyncSession, limit: int = 64) -> ReconcileResult:
         quota = QuotaRepository(session)
+        accounting = DeliveryQuotaAccounting(
+            compatibility_mode=(
+                self._settings.free_download_quota_ready_compatibility_mode
+            )
+        )
         now = await quota.database_now()
+        invalid = (
+            await session.execute(
+                select(
+                    FreeDownloadQuotaEntry.anonymous_client_id,
+                    FreeDownloadQuotaEntry.download_job_id,
+                )
+                .join(
+                    MediaDownloadJob,
+                    MediaDownloadJob.id == FreeDownloadQuotaEntry.download_job_id,
+                )
+                .where(
+                    FreeDownloadQuotaEntry.state.in_(("released", "expired")),
+                    MediaDownloadJob.public_state
+                    == MediaDownloadJobState.READY.value,
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if invalid is not None:
+            invalid_client_id, invalid_job_id = invalid
+            client = await quota.lock_client(invalid_client_id)
+            job = await session.scalar(
+                select(MediaDownloadJob)
+                .where(MediaDownloadJob.id == invalid_job_id)
+                .with_for_update()
+            )
+            entry = await quota.lock_entry_for_download(invalid_job_id)
+            if (
+                client is not None
+                and job is not None
+                and entry is not None
+                and job.public_state == MediaDownloadJobState.READY.value
+                and entry.state in {"released", "expired"}
+            ):
+                logger.error(
+                    "free_quota_reconcile outcome=invariant_failed "
+                    "reason=downloadable_terminal_reservation"
+                )
+                raise QuotaInvariantError(
+                    "downloadable Free artifact has terminal unconsumed quota"
+                )
         candidates = list(
             (
                 await session.execute(
@@ -69,8 +119,18 @@ class QuotaReconciler:
             if job.public_state == MediaDownloadJobState.READY.value:
                 if job.completed_at is None:
                     raise QuotaInvariantError("ready job lacks completion timestamp")
-                quota.consume_locked(entry, now=job.completed_at)
-                consumed += 1
+                if accounting.compatibility_mode:
+                    quota.consume_locked(entry, now=job.completed_at)
+                    consumed += 1
+                else:
+                    result = await accounting.reconcile_locked(
+                        session=session,
+                        quota=quota,
+                        job=job,
+                        entry=entry,
+                        now=now,
+                    )
+                    consumed += int(result.consumed)
             elif job.public_state == MediaDownloadJobState.FAILED.value:
                 quota.release_locked(entry, now=now)
                 released += 1

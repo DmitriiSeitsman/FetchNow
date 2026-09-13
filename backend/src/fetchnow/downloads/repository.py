@@ -344,6 +344,7 @@ class MediaDownloadJobRepository:
         artifact_content_type: str,
         artifact_container: str,
         now: datetime,
+        consume_quota_on_ready: bool = True,
     ) -> bool:
         """Mark downloading job ready when lease owner + fence still match."""
         del now
@@ -355,7 +356,11 @@ class MediaDownloadJobRepository:
         assert_transition(
             MediaDownloadJobState.DOWNLOADING, MediaDownloadJobState.READY
         )
-        quota = await self._lock_quota_identity_for_job(job_id)
+        quota = (
+            await self._lock_quota_identity_for_job(job_id)
+            if consume_quota_on_ready
+            else None
+        )
         result = await self._session.execute(
             update(MediaDownloadJob)
             .where(
@@ -384,7 +389,7 @@ class MediaDownloadJobRepository:
             )
         )
         applied = bool(result.rowcount)
-        if applied:
+        if applied and consume_quota_on_ready:
             await self._consume_quota_after_job_lock(quota, job_id=job_id)
         return applied
 
@@ -702,6 +707,45 @@ class MediaDownloadJobRepository:
             )
             if job is None:
                 continue
+            entry = None
+            if quota is not None:
+                entry = await quota.lock_entry_for_download(job.id)
+                if entry is None:
+                    raise QuotaInvariantError(
+                        "quota entry disappeared during job expiry"
+                    )
+                if (
+                    job.public_state == MediaDownloadJobState.READY.value
+                    and entry.state in {"released", "expired"}
+                ):
+                    raise QuotaInvariantError(
+                        "downloadable Free artifact has terminal unconsumed quota"
+                    )
+                if (
+                    entry.state == "reserved"
+                    and job.public_state == MediaDownloadJobState.READY.value
+                ):
+                    # Local import avoids the downloads package's public
+                    # re-export cycle while keeping this lifecycle path shared.
+                    from fetchnow.quota.delivery import DeliveryQuotaAccounting
+
+                    accounting = DeliveryQuotaAccounting(compatibility_mode=False)
+                    await accounting.reconcile_locked(
+                        session=self._session,
+                        quota=quota,
+                        job=job,
+                        entry=entry,
+                        now=now,
+                    )
+                    if (
+                        entry.state == "reserved"
+                        and await accounting.has_live_attempt_locked(
+                            session=self._session,
+                            entry=entry,
+                            now=now,
+                        )
+                    ):
+                        continue
             if is_stored_cancelled(
                 job.public_state, job.progress_stage, job.cancel_requested_at
             ):
@@ -729,18 +773,12 @@ class MediaDownloadJobRepository:
                 job.completed_at = now
             # A consumed ready entry remains consumed; expiry is artifact
             # lifecycle only. Every other live reservation is released.
-            if quota is not None:
-                entry = await quota.lock_entry_for_download(job.id)
-                if entry is None:
-                    raise QuotaInvariantError(
-                        "quota entry disappeared during job expiry"
-                    )
-                if entry.state == "reserved":
-                    quota.release_locked(
-                        entry,
-                        now=await quota.database_now(),
-                        expired=True,
-                    )
+            if quota is not None and entry is not None and entry.state == "reserved":
+                quota.release_locked(
+                    entry,
+                    now=await quota.database_now(),
+                    expired=True,
+                )
             changed += 1
         if changed:
             await self._session.flush()

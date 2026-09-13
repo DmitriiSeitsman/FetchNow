@@ -179,6 +179,7 @@ def write_env(
                 "PUBLIC_SEARCH_INDEXING_ENABLED=false",
                 "PREMIUM_TEST_CHECKOUT_VISIBLE=false",
                 "FREE_DOWNLOAD_QUOTA_ENABLED=false",
+                "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=true",
                 "POSTGRES_DB=fetchnow",
                 "POSTGRES_USER=fetchnow",
                 f"POSTGRES_PASSWORD={valid_test_password()}",
@@ -1473,6 +1474,7 @@ def main(argv: list[str] | None = None) -> int:
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
             "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
             "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
+            "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
             "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
         }:
             raise RuntimeError("active runtime config state not initialized")
@@ -1523,6 +1525,7 @@ def main(argv: list[str] | None = None) -> int:
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
             "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
             "FREE_DOWNLOAD_QUOTA_ENABLED": "true",
+            "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
             "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
         }:
             raise RuntimeError("quota config rollout did not commit active state")

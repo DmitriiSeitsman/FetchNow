@@ -55,12 +55,21 @@ transaction. The unique `(media_job_id, format_option_id)` download key and the
 unique quota `download_job_id` ensure retries and concurrent duplicates reserve
 only once. Parallel distinct admissions serialize on the anonymous-client row.
 
-A reservation consumes capacity immediately but becomes a counted success only
-in the same transaction that the fenced worker transition commits `ready`.
-Terminal failure, cancellation, or pre-ready expiry releases it atomically.
-Retries retain it. Worker lifecycle and reconciliation honor existing
-reservations even when `FREE_DOWNLOAD_QUOTA_ENABLED` is later false; that flag
-controls only admission of new quota-governed downloads in the API.
+A reservation consumes capacity immediately. With successful-delivery mode
+active, READY alone remains reserved: the first persisted server-observed union
+covering the exact artifact interval `[0, artifact_bytes)` becomes the counted
+success. One full response or several Range/resume responses may complete it;
+overlap and replay do not add usage, and HEAD or an isolated probe does not
+consume. Terminal failure, cancellation, or undelivered expiry releases or
+expires the reservation. Retries retain it. Worker lifecycle and reconciliation
+honor existing reservations even when `FREE_DOWNLOAD_QUOTA_ENABLED` is later
+false; that flag controls only admission of new quota-governed downloads.
+
+`FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=true` temporarily preserves the
+legacy READY transition for mixed-version rollout. It defaults true. Setting it
+false enables delivery-evidence-only consumption after migration and application
+rollout. Server observation occurs after a chunk is yielded and ASGI resumes;
+this is not proof of network receipt or successful local-disk persistence.
 
 Status returns `tier`, `downloadLimit`, `downloadsUsed`, `downloadsReserved`,
 `downloadsRemaining`, `windowSeconds`, `premiumExpiresAt`, and `resetAt`.

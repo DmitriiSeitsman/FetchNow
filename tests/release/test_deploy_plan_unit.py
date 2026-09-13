@@ -70,7 +70,7 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
     contract = load_compatibility_contract(
         ROOT / "deploy" / "migrations" / "compatibility.json"
     )
-    assert graph.heads == ("0009_premium_entitlements",)
+    assert graph.heads == ("0010_successful_delivery_quota",)
 
     steps = (
         (
@@ -113,6 +113,11 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
             frozenset({"0009_premium_entitlements"}),
             frozenset({"0009_premium_entitlements"}),
         ),
+        (
+            frozenset({"0009_premium_entitlements"}),
+            frozenset({"0010_successful_delivery_quota"}),
+            frozenset({"0010_successful_delivery_quota"}),
+        ),
     )
     for from_heads, to_heads, included in steps:
         # Sanity: included set matches Alembic forward delta for this step.
@@ -143,6 +148,7 @@ def test_repository_contract_covers_sequential_alembic_transitions() -> None:
             "0007_free_download_quota",
             "0008_payment_orders",
             "0009_premium_entitlements",
+            "0010_successful_delivery_quota",
         }
     )
     with pytest.raises(CompatibilityError, match="no compatibility transition"):

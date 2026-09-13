@@ -24,6 +24,7 @@ from fetchnow_release.config_contract import (  # noqa: E402
     changed_runtime_keys,
     legacy_runtime_config_fingerprint_schema1,
     legacy_runtime_config_fingerprint_schema2,
+    legacy_runtime_config_fingerprint_schema3,
     runtime_config_fingerprint,
     runtime_values_from_compose,
 )
@@ -76,10 +77,12 @@ def _runtime(
     limiter: str = "false",
     rate: str = "524288",
     checkout: str = "false",
+    compatibility: str = "true",
 ) -> dict[str, str]:
     return {
         "PREMIUM_TEST_CHECKOUT_VISIBLE": checkout,
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": compatibility,
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
     }
@@ -96,6 +99,7 @@ def _rendered(
     api = {
         "PREMIUM_TEST_CHECKOUT_VISIBLE": checkout,
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
         **(extra_api or {}),
@@ -103,9 +107,14 @@ def _rendered(
     return {
         "services": {
             "api": {"environment": api},
-            "worker": {"environment": {}},
+            "worker": {
+                "environment": {
+                    "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
+                }
+            },
             "delivery": {
                 "environment": {
+                    "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
                     "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
                     "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
                 }
@@ -135,13 +144,18 @@ def _live(
     env["api"] = {
         "PREMIUM_TEST_CHECKOUT_VISIBLE": checkout,
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
         **(extra_api or {}),
     }
     env["delivery"] = {
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
+    }
+    env["worker"] = {
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
     }
     return ids, env
 
@@ -175,6 +189,7 @@ def _env_file(
     values = {
         "PREMIUM_TEST_CHECKOUT_VISIBLE": checkout,
         "FREE_DOWNLOAD_QUOTA_ENABLED": quota,
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE": "true",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": limiter,
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": rate,
         **_build_values(indexing=indexing),
@@ -241,6 +256,31 @@ def _persist_legacy_schema2_state(deploy: Path) -> None:
             deployment_id=DEPLOYMENT_ID,
             latest_config_rollout_id=None,
             runtime_config_fingerprint=legacy_runtime_config_fingerprint_schema2(
+                values
+            ),
+            runtime_values=values,
+            build_config_fingerprint=build_config_fingerprint(_build_values()),
+            build_values=_build_values(),
+            updated_at_utc="2026-08-30T00:00:00Z",
+        ),
+    )
+
+
+def _persist_legacy_schema3_state(deploy: Path) -> None:
+    values = {
+        "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
+        "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
+    }
+    write_runtime_config_state(
+        deploy,
+        RuntimeConfigState(
+            schema_version=3,
+            revision=REVISION,
+            deployment_id=DEPLOYMENT_ID,
+            latest_config_rollout_id=None,
+            runtime_config_fingerprint=legacy_runtime_config_fingerprint_schema3(
                 values
             ),
             runtime_values=values,
@@ -401,11 +441,15 @@ def test_allowlist_and_wiring_are_narrow() -> None:
     assert set(RUNTIME_CONFIG_ALLOWLIST) == {
         "PREMIUM_TEST_CHECKOUT_VISIBLE",
         "FREE_DOWNLOAD_QUOTA_ENABLED",
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED",
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND",
     }
     assert affected_services(("PREMIUM_TEST_CHECKOUT_VISIBLE",)) == ("api",)
     assert affected_services(("FREE_DOWNLOAD_QUOTA_ENABLED",)) == ("api",)
+    assert affected_services(
+        ("FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE",)
+    ) == ("api", "delivery", "worker")
     assert affected_services(
         (
             "FREE_DELIVERY_RATE_BYTES_PER_SECOND",
@@ -497,6 +541,19 @@ def test_existing_schema2_runtime_state_remains_readable(tmp_path: Path) -> None
     assert state is not None
     assert state.schema_version == 2
     assert state.runtime_values == {
+        "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
+        "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
+        "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",
+    }
+
+
+def test_existing_schema3_runtime_state_remains_readable(tmp_path: Path) -> None:
+    _persist_legacy_schema3_state(tmp_path)
+    state = load_runtime_config_state(tmp_path)
+    assert state is not None
+    assert state.schema_version == 3
+    assert state.runtime_values == {
+        "PREMIUM_TEST_CHECKOUT_VISIBLE": "false",
         "FREE_DOWNLOAD_QUOTA_ENABLED": "false",
         "FREE_DELIVERY_RATE_LIMIT_ENABLED": "false",
         "FREE_DELIVERY_RATE_BYTES_PER_SECOND": "524288",

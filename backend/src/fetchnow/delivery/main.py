@@ -17,6 +17,7 @@ from fetchnow.db.session import create_engine, create_session_factory
 from fetchnow.delivery.routes import router as delivery_router
 from fetchnow.delivery.service import DeliveryService
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
+from fetchnow.quota.delivery import DeliveryQuotaAccounting
 
 
 def create_delivery_app(settings: Settings | None = None) -> FastAPI:
@@ -44,6 +45,11 @@ def create_delivery_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = session_factory
         app.state.settings = settings
         app.state.delivery_service = delivery_service
+        app.state.delivery_quota_accounting = DeliveryQuotaAccounting(
+            compatibility_mode=(
+                settings.free_download_quota_ready_compatibility_mode
+            )
+        )
         try:
             yield
         finally:

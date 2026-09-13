@@ -583,6 +583,9 @@ export class MediaFlowController {
   onForegroundResume(): void {
     void this.refreshPremium(true);
     void this.refreshPaymentConfig(true);
+    if (this.nativeDownloadHandoff) {
+      void this.refreshQuota(true);
+    }
     if (this.machine.current !== "ready") {
       return;
     }
@@ -1153,6 +1156,7 @@ export class MediaFlowController {
       this.token = null;
       this.machine.endAction();
       this.emit();
+      void this.refreshQuota(true);
     } catch (err) {
       if (!this.machine.isCurrentGeneration(generation)) {
         return;

@@ -896,6 +896,25 @@ def check_free_quota_env_split() -> None:
         "FREE_DOWNLOAD_QUOTA_ENABLED" not in worker_env,
         "base: worker lifecycle must not receive the admission feature flag",
     )
+    for service_name, service_env in (
+        ("api", api_env),
+        ("worker", worker_env),
+        ("delivery", delivery_env),
+    ):
+        _assert(
+            str(
+                service_env.get(
+                    "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE", "false"
+                )
+            ).lower()
+            in {"true", "1"},
+            "base: successful-delivery compatibility mode must default true "
+            f"on {service_name}",
+        )
+    _assert(
+        "FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE" not in init_env,
+        "base: storage-init must not receive quota compatibility mode",
+    )
     for key, expected in (
         ("FREE_DOWNLOAD_LIMIT", "3"),
         ("FREE_DOWNLOAD_WINDOW_SECONDS", "86400"),

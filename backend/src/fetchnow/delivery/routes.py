@@ -26,6 +26,13 @@ from fetchnow.downloads.canonical_uuid import parse_canonical_uuid4
 from fetchnow.downloads.errors import DownloadError, DownloadErrorCode
 from fetchnow.jobs.credentials import parse_access_token
 from fetchnow.jobs.errors import JobError, JobErrorCode
+from fetchnow.quota.delivery import (
+    DELIVERY_CHECKPOINT_BYTES,
+    DELIVERY_CHECKPOINT_SECONDS,
+    DELIVERY_FINALIZE_TIMEOUT_SECONDS,
+    DeliveryAccountingAttempt,
+    DeliveryQuotaAccounting,
+)
 
 router = APIRouter(prefix="/media", tags=["media-delivery"])
 logger = logging.getLogger("fetchnow.delivery.routes")
@@ -49,6 +56,74 @@ def _delivery_service(request: Request) -> DeliveryService:
     if service is None:
         raise RuntimeError("delivery_service is not configured")
     return service  # type: ignore[no-any-return]
+
+
+def _quota_accounting(request: Request) -> DeliveryQuotaAccounting | None:
+    """Return required production accounting; legacy test wiring may omit it."""
+    service = getattr(request.app.state, "delivery_quota_accounting", None)
+    if isinstance(service, DeliveryQuotaAccounting):
+        return service
+    settings = getattr(request.app.state, "settings", None)
+    if getattr(settings, "app_env", None) == "test":
+        return None
+    raise RuntimeError("delivery_quota_accounting is not configured")
+
+
+async def _checkpoint_accounting(
+    *,
+    accounting: DeliveryQuotaAccounting,
+    attempt: DeliveryAccountingAttempt,
+    observed_end: int,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        async with session_factory() as session:
+            await accounting.checkpoint(
+                attempt_id=attempt.id,
+                observed_end=observed_end,
+                session=session,
+            )
+            await session.commit()
+    except Exception:
+        logger.info("delivery_accounting_checkpoint outcome=failed")
+        raise
+
+
+async def _finalize_accounting(
+    *,
+    accounting: DeliveryQuotaAccounting,
+    attempt: DeliveryAccountingAttempt,
+    observed_end: int,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Finalize in a cancellation-shielded, timeout-bounded fresh transaction."""
+
+    async def finalize() -> None:
+        async with session_factory() as session:
+            try:
+                await accounting.finalize(
+                    attempt_id=attempt.id,
+                    observed_end=observed_end,
+                    session=session,
+                )
+                await session.commit()
+            except BaseException:
+                await session.rollback()
+                raise
+
+    bounded = asyncio.create_task(
+        asyncio.wait_for(finalize(), timeout=DELIVERY_FINALIZE_TIMEOUT_SECONDS)
+    )
+    try:
+        await asyncio.shield(bounded)
+    except asyncio.CancelledError:
+        # The request task may be cancelled after bytes were observed. Preserve
+        # that evidence before propagating cancellation to Starlette.
+        try:
+            await asyncio.shield(bounded)
+        except Exception:
+            logger.info("delivery_accounting_finalize outcome=failed")
+        raise
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -121,6 +196,7 @@ async def _handle_content(
     token = parsed
 
     service = _delivery_service(request)
+    accounting = _quota_accounting(request)
     session_factory = _session_factory(request)
     handle: OpenArtifactHandle | None = None
     permit_held = False
@@ -194,6 +270,22 @@ async def _handle_content(
             _cleanup_prestream()
             return Response(status_code=status, headers=headers, content=b"")
 
+        accounting_attempt: DeliveryAccountingAttempt | None = None
+        if accounting is not None:
+            async with session_factory() as session:
+                accounting_attempt = await accounting.begin(
+                    authorization=authz,
+                    start=start,
+                    end=start + length,
+                    session=session,
+                    revalidate=lambda fresh: service.authorize(
+                        download_job_id=download_job_id,
+                        access_token=token,
+                        session=fresh,
+                    ),
+                )
+                await session.commit()
+
         # Keep FD/permit under pre-stream ownership until StreamingResponse
         # construction succeeds. body() may be created as a constructor arg;
         # its finally must not release until ownership is transferred.
@@ -204,6 +296,9 @@ async def _handle_content(
             bytes_sent = 0
             started = time.monotonic()
             rate = delivery_rate
+            observed_end = start
+            checkpoint_end = start
+            checkpoint_at = time.monotonic()
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
@@ -214,6 +309,26 @@ async def _handle_content(
                 ):
                     bytes_sent += len(chunk)
                     yield chunk
+                    observed_end += len(chunk)
+                    now_mono = time.monotonic()
+                    if (
+                        accounting is not None
+                        and accounting_attempt is not None
+                        and (
+                            observed_end - checkpoint_end
+                            >= DELIVERY_CHECKPOINT_BYTES
+                            or now_mono - checkpoint_at
+                            >= DELIVERY_CHECKPOINT_SECONDS
+                        )
+                    ):
+                        await _checkpoint_accounting(
+                            accounting=accounting,
+                            attempt=accounting_attempt,
+                            observed_end=observed_end,
+                            session_factory=session_factory,
+                        )
+                        checkpoint_end = observed_end
+                        checkpoint_at = now_mono
                 logger.info(
                     "media_delivery_completed outcome=ok mode=%s rate=%s "
                     "range=%s bytes=%s duration_ms=%s",
@@ -234,10 +349,25 @@ async def _handle_content(
                     round((time.monotonic() - started) * 1000),
                 )
                 raise
+            except Exception:
+                logger.info("media_delivery_completed outcome=stream_error")
+                raise
             finally:
-                if stream_owns_permit and permit_held:
-                    service.semaphore.release()
-                    permit_held = False
+                try:
+                    if accounting is not None and accounting_attempt is not None:
+                        try:
+                            await _finalize_accounting(
+                                accounting=accounting,
+                                attempt=accounting_attempt,
+                                observed_end=observed_end,
+                                session_factory=session_factory,
+                            )
+                        except Exception:
+                            logger.info("delivery_accounting_finalize outcome=failed")
+                finally:
+                    if stream_owns_permit and permit_held:
+                        service.semaphore.release()
+                        permit_held = False
 
         response = StreamingResponse(
             body(),
@@ -336,6 +466,7 @@ async def _handle_browser_grant_content(
         return _error_response(exc, request_id)
 
     service = _delivery_service(request)
+    accounting = _quota_accounting(request)
     session_factory = _session_factory(request)
     handle: OpenArtifactHandle | None = None
     permit_held = False
@@ -415,6 +546,22 @@ async def _handle_browser_grant_content(
             )
             return Response(status_code=status, headers=headers, content=b"")
 
+        accounting_attempt: DeliveryAccountingAttempt | None = None
+        if accounting is not None:
+            async with session_factory() as session:
+                accounting_attempt = await accounting.begin(
+                    authorization=authz,
+                    start=start,
+                    end=start + length,
+                    session=session,
+                    revalidate=lambda fresh: service.authorize_browser_grant(
+                        grant_id=grant_id,
+                        raw_token=raw_token,
+                        session=fresh,
+                    ),
+                )
+                await session.commit()
+
         stream_handle = handle
 
         async def body() -> AsyncIterator[bytes]:
@@ -422,6 +569,9 @@ async def _handle_browser_grant_content(
             bytes_sent = 0
             started = time.monotonic()
             rate = delivery_rate
+            observed_end = start
+            checkpoint_end = start
+            checkpoint_at = time.monotonic()
             try:
                 async for chunk in iter_fd_range(
                     stream_handle,
@@ -432,6 +582,26 @@ async def _handle_browser_grant_content(
                 ):
                     bytes_sent += len(chunk)
                     yield chunk
+                    observed_end += len(chunk)
+                    now_mono = time.monotonic()
+                    if (
+                        accounting is not None
+                        and accounting_attempt is not None
+                        and (
+                            observed_end - checkpoint_end
+                            >= DELIVERY_CHECKPOINT_BYTES
+                            or now_mono - checkpoint_at
+                            >= DELIVERY_CHECKPOINT_SECONDS
+                        )
+                    ):
+                        await _checkpoint_accounting(
+                            accounting=accounting,
+                            attempt=accounting_attempt,
+                            observed_end=observed_end,
+                            session_factory=session_factory,
+                        )
+                        checkpoint_end = observed_end
+                        checkpoint_at = now_mono
                 logger.info(
                     "browser_delivery_started outcome=ok mode=%s rate=%s "
                     "range=%s bytes=%s duration_ms=%s",
@@ -456,9 +626,21 @@ async def _handle_browser_grant_content(
                 logger.info("browser_delivery_failed outcome=stream_error")
                 raise
             finally:
-                if stream_owns_permit and permit_held:
-                    service.semaphore.release()
-                    permit_held = False
+                try:
+                    if accounting is not None and accounting_attempt is not None:
+                        try:
+                            await _finalize_accounting(
+                                accounting=accounting,
+                                attempt=accounting_attempt,
+                                observed_end=observed_end,
+                                session_factory=session_factory,
+                            )
+                        except Exception:
+                            logger.info("delivery_accounting_finalize outcome=failed")
+                finally:
+                    if stream_owns_permit and permit_held:
+                        service.semaphore.release()
+                        permit_held = False
 
         response = StreamingResponse(
             body(),

@@ -348,6 +348,14 @@ public smoke remains open.
 
 ## 5. Normal production release
 
+For PRD2-A4.2, keep
+`FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=true` through migration, rollout,
+health, and delivery-evidence smoke. Only after all new application containers
+are accepted may a separately authorized canonical config rollout change that
+single key to `false`. Do not combine it with source rollout or any other env
+change. Rollback first restores `true`, verifies health, and only then rolls the
+application back; do not downgrade revision 0010.
+
 ### Preconditions (GO)
 
 - Target SHA is an ancestor of `origin/main` (release ancestry rules).
