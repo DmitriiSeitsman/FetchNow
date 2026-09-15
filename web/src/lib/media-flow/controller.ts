@@ -7,6 +7,7 @@ import {
   type MediaFormat,
   type ProgressStage,
   type FreeQuota,
+  type PaymentProductSummary,
   type PremiumStatus,
   isFormatOptionId,
 } from "./contracts";
@@ -15,13 +16,10 @@ import { flowStatusText, STAGE_LABEL } from "./progress";
 import { pickHighestEligibleFormat, reconcileSelectedFormatId } from "./quality";
 import { generateAccessToken } from "./credentials";
 import {
-  fileSystemAccessSupported,
   computeGrantRefreshDelayMs,
   GRANT_HANDOFF_SAFETY_MS,
   GRANT_REISSUE_BUFFER_MS,
   isSecureDeliveryContext,
-  PickerCancelledError,
-  saveArtifactStream,
 } from "./download";
 import {
   FlowError,
@@ -49,6 +47,12 @@ import {
 
 export type PremiumUiState = "loading" | "free" | "active" | "error";
 
+/**
+ * Bounded Free → Premium promotion attempts per prepared job. The backend is
+ * idempotent, so this only stops a broken client from hammering the endpoint.
+ */
+export const MAX_PREMIUM_UPGRADE_ATTEMPTS = 3;
+
 function canUseFormat(format: MediaFormat, premiumActive: boolean): boolean {
   if (!isFormatOptionId(format.formatOptionId)) return false;
   if (format.mediaKind === "normal_video") return isDownloadEligible(format);
@@ -74,11 +78,8 @@ export type FlowSnapshot = {
   grantArming: boolean;
   canNativeDownload: boolean;
   canRetryGrant: boolean;
-  canSaveAs: boolean;
   downloadHref: string | null;
   nativeDownloadHandoff: boolean;
-  /** The browser cannot pick a save location; a capability, not a phase. */
-  browserUnsupported: boolean;
   busy: boolean;
   canSubmit: boolean;
   canStartOver: boolean;
@@ -92,17 +93,21 @@ export type FlowSnapshot = {
   premiumState?: PremiumUiState;
   premiumStatus?: PremiumStatus | null;
   testCheckoutAvailable?: boolean;
+  paymentProduct?: PaymentProductSummary | null;
   checkoutBusy?: boolean;
+  /** Contextual copy for a Premium action, never the global flow status. */
+  premiumError?: string | null;
+  upgradePending?: boolean;
+  /** True once this prepared job delivers under the Premium policy. */
+  promoted?: boolean;
 };
 
 export type ControllerHooks = {
   api?: MediaApi;
   session?: FlowSession;
   machine?: FlowMachine;
-  save?: typeof saveArtifactStream;
   generateToken?: () => string;
   documentHidden?: () => boolean;
-  pickerSupported?: () => boolean;
   secureContext?: () => boolean;
   onChange?: (snapshot: FlowSnapshot) => void;
   now?: () => number;
@@ -115,10 +120,8 @@ export class MediaFlowController {
   private readonly api: MediaApi;
   private readonly session: FlowSession;
   private readonly machine: FlowMachine;
-  private readonly save: typeof saveArtifactStream;
   private readonly generateToken: () => string;
   private readonly documentHidden: () => boolean;
-  private readonly pickerSupported: () => boolean;
   private readonly secureContext: () => boolean;
   private readonly now: () => number;
   private readonly onChange?: (snapshot: FlowSnapshot) => void;
@@ -152,17 +155,21 @@ export class MediaFlowController {
   private premiumState: PremiumUiState = "loading";
   private premiumStatus: PremiumStatus | null = null;
   private testCheckoutAvailable = false;
+  private paymentProduct: PaymentProductSummary | null = null;
   private checkoutBusy = false;
+  private premiumError: string | null = null;
+  private upgradePending = false;
+  private promoted = false;
+  private upgradeAttempts = 0;
+  private autoUpgradeGeneration: number | null = null;
 
   constructor(hooks: ControllerHooks = {}) {
     this.api = hooks.api ?? new MediaApi();
     this.session = hooks.session ?? new FlowSession();
     this.machine = hooks.machine ?? new FlowMachine();
-    this.save = hooks.save ?? saveArtifactStream;
     this.generateToken = hooks.generateToken ?? generateAccessToken;
     this.documentHidden =
       hooks.documentHidden ?? (() => globalThis.document?.hidden === true);
-    this.pickerSupported = hooks.pickerSupported ?? fileSystemAccessSupported;
     this.secureContext = hooks.secureContext ?? isSecureDeliveryContext;
     this.now = hooks.now ?? Date.now;
     this.onChange = hooks.onChange;
@@ -198,6 +205,7 @@ export class MediaFlowController {
       phase === "ready" &&
       !httpsRequired &&
       !this.grantArming &&
+      !this.upgradePending &&
       !armed &&
       (this.grantNeedsRetry || this.downloadPath === null);
     return {
@@ -214,22 +222,17 @@ export class MediaFlowController {
       muxingBlocked,
       httpsRequired,
       grantArming: this.grantArming,
-      canNativeDownload: phase === "ready" && armed,
+      canNativeDownload: phase === "ready" && armed && !this.upgradePending,
       canRetryGrant,
-      canSaveAs: phase === "ready" && this.pickerSupported(),
-      downloadHref: armed ? this.downloadPath : null,
+      downloadHref: armed && !this.upgradePending ? this.downloadPath : null,
       nativeDownloadHandoff: this.nativeDownloadHandoff,
-      browserUnsupported: !this.pickerSupported(),
       busy:
         this.machine.isBusy() ||
         this.grantArming ||
-        [
-          "submitting",
-          "inspecting",
-          "enqueueing_download",
-          "downloading",
-          "saving",
-        ].includes(phase),
+        this.upgradePending ||
+        ["submitting", "inspecting", "enqueueing_download", "downloading"].includes(
+          phase,
+        ),
       canSubmit: phase === "idle",
       canStartOver: phase !== "idle",
       canCancelTask:
@@ -244,20 +247,28 @@ export class MediaFlowController {
       premiumState: this.premiumState,
       premiumStatus: this.premiumStatus,
       testCheckoutAvailable: this.testCheckoutAvailable,
+      paymentProduct: this.paymentProduct,
       checkoutBusy: this.checkoutBusy,
+      premiumError: this.premiumError,
+      upgradePending: this.upgradePending,
+      promoted: this.promoted,
     };
   }
 
   async initializeAccount(): Promise<void> {
     await this.refreshQuota(true);
-    await Promise.all([this.refreshPremium(true), this.refreshPaymentConfig(true)]);
+    await Promise.all([this.refreshPremium(), this.refreshPaymentConfig()]);
   }
 
   async initializeQuota(): Promise<void> {
     await this.refreshQuota(true);
   }
 
-  async refreshPremium(silent = true): Promise<void> {
+  /**
+   * Premium lookups run in the background, so a failure stays silent: the UI
+   * shows nothing and every Premium capability keeps failing closed as Free.
+   */
+  async refreshPremium(): Promise<void> {
     if (this.premiumRefresh !== null) {
       await this.premiumRefresh;
       return;
@@ -275,7 +286,6 @@ export class MediaFlowController {
         if (isAbortError(err) || this.closed) return;
         this.premiumStatus = null;
         this.premiumState = "error";
-        if (!silent) this.errorText = "Не удалось обновить статус Premium.";
       } finally {
         this.emit();
       }
@@ -286,9 +296,12 @@ export class MediaFlowController {
     } finally {
       this.premiumRefresh = null;
     }
+    if (this.premiumState === "active") {
+      void this.upgradeToPremium();
+    }
   }
 
-  private async refreshPaymentConfig(silent = true): Promise<void> {
+  private async refreshPaymentConfig(): Promise<void> {
     if (this.paymentConfigRefresh !== null) {
       await this.paymentConfigRefresh;
       return;
@@ -297,11 +310,14 @@ export class MediaFlowController {
     const run = async () => {
       try {
         const config = await this.api.getPaymentConfig(this.quotaAbort.signal);
-        if (!this.closed) this.testCheckoutAvailable = config.testCheckoutAvailable;
+        if (!this.closed) {
+          this.testCheckoutAvailable = config.testCheckoutAvailable;
+          this.paymentProduct = config.product ?? null;
+        }
       } catch (err) {
         if (!isAbortError(err) && !this.closed) {
           this.testCheckoutAvailable = false;
-          if (!silent) this.errorText = "Тестовая оплата сейчас недоступна.";
+          this.paymentProduct = null;
         }
       } finally {
         this.emit();
@@ -321,9 +337,10 @@ export class MediaFlowController {
       !this.testCheckoutAvailable ||
       this.premiumState !== "free" ||
       typeof this.api.createPaymentOrder !== "function"
-    ) return;
+    )
+      return;
     this.checkoutBusy = true;
-    this.errorText = null;
+    this.premiumError = null;
     this.emit();
     try {
       const created = await this.api.createPaymentOrder(
@@ -335,13 +352,111 @@ export class MediaFlowController {
       this.submitPaymentForm(created);
     } catch (err) {
       if (isAbortError(err) || this.closed) return;
-      this.errorText = err instanceof FlowError
-        ? err.userMessage
-        : "Не удалось начать тестовую оплату. Попробуйте ещё раз.";
-      await this.refreshPaymentConfig(true);
+      this.premiumError =
+        err instanceof FlowError
+          ? err.userMessage
+          : "Не удалось начать тестовую оплату. Попробуйте ещё раз.";
+      await this.refreshPaymentConfig();
     } finally {
       this.checkoutBusy = false;
       this.emit();
+    }
+  }
+
+  /**
+   * Promote the prepared Free artifact to the Premium delivery policy.
+   *
+   * The server owns the decision and the quota bookkeeping; this only asks
+   * once per prepared job, drops the Free grant href first so a Premium
+   * artifact is never handed out under Free shaping, and re-arms afterwards.
+   * A failure always leaves the ordinary Free download usable.
+   */
+  async upgradeToPremium(options: { userInitiated?: boolean } = {}): Promise<void> {
+    const userInitiated = options.userInitiated === true;
+    if (
+      this.closed ||
+      this.machine.current !== "ready" ||
+      this.promoted ||
+      this.upgradePending ||
+      !this.token ||
+      !this.downloadJob ||
+      typeof this.api.upgradeDownloadJobToPremium !== "function"
+    ) {
+      return;
+    }
+    if (this.premiumState !== "active") {
+      if (userInitiated) {
+        this.premiumError =
+          "Premium сейчас не подтверждён. Обновите страницу и попробуйте снова.";
+        this.emit();
+      }
+      return;
+    }
+    if (this.upgradeAttempts >= MAX_PREMIUM_UPGRADE_ATTEMPTS) return;
+    const generation = this.machine.generationId;
+    if (!userInitiated) {
+      if (this.autoUpgradeGeneration === generation) return;
+      this.autoUpgradeGeneration = generation;
+    }
+    const jobId = this.downloadJob.id;
+    const token = this.token;
+    this.upgradeAttempts += 1;
+    this.upgradePending = true;
+    this.premiumError = null;
+    this.clearGrantState();
+    this.emit();
+    try {
+      const job = await this.api.upgradeDownloadJobToPremium(
+        jobId,
+        token,
+        this.quotaAbort.signal,
+      );
+      if (
+        this.closed ||
+        !this.machine.isCurrentGeneration(generation) ||
+        this.machine.current !== "ready"
+      ) {
+        return;
+      }
+      this.downloadJob = job;
+      this.promoted = true;
+      this.upgradePending = false;
+      this.persist();
+      this.emit();
+      void this.refreshQuota(true);
+    } catch (err) {
+      if (
+        this.closed ||
+        !this.machine.isCurrentGeneration(generation) ||
+        this.machine.current !== "ready"
+      ) {
+        return;
+      }
+      this.upgradePending = false;
+      if (!isAbortError(err)) {
+        const mapped =
+          err instanceof FlowError ? err : flowErrorFromCode("INTERNAL_ERROR");
+        // A delivery already in flight is a wait-and-retry state worth naming
+        // even when nobody clicked; every other failure stays quiet unless the
+        // downloader asked for the upgrade.
+        if (mapped.code === "DELIVERY_IN_PROGRESS" || userInitiated) {
+          this.premiumError = mapped.userMessage;
+        }
+        if (mapped.code === "MEDIA_CAPABILITY_REQUIRES_PREMIUM") {
+          void this.refreshPremium();
+        }
+      }
+      this.emit();
+    } finally {
+      if (
+        !this.closed &&
+        this.machine.isCurrentGeneration(generation) &&
+        this.machine.current === "ready"
+      ) {
+        this.upgradePending = false;
+        // Re-arm unconditionally: the artifact is still deliverable either way.
+        void this.armNativeDownload(generation);
+      }
     }
   }
 
@@ -486,19 +601,6 @@ export class MediaFlowController {
     this.emit();
   }
 
-  private returnToReady(generation: number, errorText: string | null = null): void {
-    if (!this.machine.isCurrentGeneration(generation)) {
-      return;
-    }
-    this.errorText = errorText;
-    if (this.machine.current === "saving") {
-      this.machine.transition("ready", generation);
-    }
-    this.machine.endAction();
-    this.persist();
-    this.emit();
-  }
-
   private clearResumeDownloadId(): void {
     this.resumeDownloadId = null;
   }
@@ -520,6 +622,15 @@ export class MediaFlowController {
     this.downloadPath = null;
     this.nativeDownloadHandoff = false;
     this.grantGeneration += 1;
+  }
+
+  /** Promotion is a property of one prepared artifact, never of the session. */
+  private clearUpgradeState(): void {
+    this.upgradePending = false;
+    this.promoted = false;
+    this.premiumError = null;
+    this.upgradeAttempts = 0;
+    this.autoUpgradeGeneration = null;
   }
 
   private grantStillValid(safetyMs = 0): boolean {
@@ -581,8 +692,8 @@ export class MediaFlowController {
   }
 
   onForegroundResume(): void {
-    void this.refreshPremium(true);
-    void this.refreshPaymentConfig(true);
+    void this.refreshPremium();
+    void this.refreshPaymentConfig();
     if (this.nativeDownloadHandoff) {
       void this.refreshQuota(true);
     }
@@ -615,6 +726,7 @@ export class MediaFlowController {
     this.selectedFormatId = null;
     this.errorText = null;
     this.restored = false;
+    this.clearUpgradeState();
     this.clearResumeDownloadId();
     this.machine.resetToIdle();
     await Promise.all([this.restore(), this.initializeAccount()]);
@@ -631,6 +743,7 @@ export class MediaFlowController {
     this.selectedFormatId = null;
     this.errorText = null;
     this.restored = false;
+    this.clearUpgradeState();
     this.clearResumeDownloadId();
     this.session.clear();
     this.emit();
@@ -686,6 +799,7 @@ export class MediaFlowController {
     this.downloadJob = null;
     this.selectedFormatId = null;
     this.clearGrantState();
+    this.clearUpgradeState();
     this.clearResumeDownloadId();
     try {
       this.machine.transition("submitting");
@@ -873,6 +987,7 @@ export class MediaFlowController {
     }
     this.errorText = null;
     this.clearGrantState();
+    this.clearUpgradeState();
     try {
       this.machine.transition("enqueueing_download");
     } catch {
@@ -912,9 +1027,13 @@ export class MediaFlowController {
       if (isAbortError(err) && this.abort?.signal.aborted === true) {
         return;
       }
-      if (err instanceof FlowError && err.code === "MEDIA_CAPABILITY_REQUIRES_PREMIUM") {
-        await this.refreshPremium(true);
-        this.errorText = "Срок Premium истёк или доступ не подтверждён. Обновите статус и попробуйте снова.";
+      if (
+        err instanceof FlowError &&
+        err.code === "MEDIA_CAPABILITY_REQUIRES_PREMIUM"
+      ) {
+        await this.refreshPremium();
+        this.errorText =
+          "Срок Premium истёк или доступ не подтверждён. Обновите статус и попробуйте снова.";
         this.machine.transition("inspected", generation);
         this.machine.endAction();
         this.emit();
@@ -988,6 +1107,11 @@ export class MediaFlowController {
     this.persist();
     this.emit();
     void this.refreshQuota(true);
+    if (this.premiumState === "active" && !this.promoted) {
+      // upgradeToPremium arms the grant itself once the policy is settled.
+      void this.upgradeToPremium();
+      return;
+    }
     void this.armNativeDownload(generation);
   }
 
@@ -1112,72 +1236,6 @@ export class MediaFlowController {
     this.grantNeedsRetry = true;
     this.emit();
     void this.armNativeDownload();
-  }
-
-  async saveFile(): Promise<void> {
-    if (this.machine.current !== "ready" || !this.machine.beginAction()) {
-      return;
-    }
-    if (!this.pickerSupported()) {
-      this.machine.endAction();
-      this.emit();
-      return;
-    }
-    if (!this.token || !this.downloadJob) {
-      this.machine.endAction();
-      return;
-    }
-    this.errorText = null;
-    try {
-      this.machine.transition("saving");
-    } catch {
-      this.machine.endAction();
-      return;
-    }
-    const generation = this.machine.generationId;
-    this.abort?.abort();
-    this.abort = new AbortController();
-    this.emit();
-    try {
-      await this.save({
-        downloadJobId: this.downloadJob.id,
-        token: this.token,
-        container: this.downloadJob.selectedFormat.container,
-        suggestedFilename: this.downloadJob.suggestedFilename,
-        expectedArtifactBytes: this.downloadJob.artifactBytes,
-        signal: this.abort.signal,
-      });
-      if (!this.machine.isCurrentGeneration(generation)) {
-        return;
-      }
-      this.clearGrantState();
-      this.machine.transition("completed", generation);
-      this.session.clear();
-      this.token = null;
-      this.machine.endAction();
-      this.emit();
-      void this.refreshQuota(true);
-    } catch (err) {
-      if (!this.machine.isCurrentGeneration(generation)) {
-        return;
-      }
-      const controllerAborted = this.abort?.signal.aborted === true;
-      if (err instanceof PickerCancelledError) {
-        this.returnToReady(generation);
-        return;
-      }
-      if (isAbortError(err) && controllerAborted) {
-        return;
-      }
-      if (err instanceof FlowError && err.code === "DOWNLOAD_EXPIRED") {
-        this.fail("expired", err, generation);
-        return;
-      }
-      // The server-side job was already READY before this local FSA attempt.
-      // A fetch, stream, metadata, permission, write, or close failure must not
-      // discard that prepared artifact or its ordinary browser-download grant.
-      this.returnToReady(generation, userMessageForCode("SAVE_FAILED").text);
-    }
   }
 
   async cancelTask(): Promise<void> {

@@ -70,7 +70,6 @@ function controller(
     api: api as unknown as MediaApi,
     session: new FlowSession(memoryStore()),
     generateToken: generateAccessToken,
-    pickerSupported: () => false,
     secureContext: () => true,
     documentHidden: () => false,
     createIdempotencyKey: () => "A".repeat(32),
@@ -119,7 +118,9 @@ describe("PRD2-A3.3 controller boundaries", () => {
     await flow.startTestCheckout();
     expect(flow.snapshot().checkoutBusy).toBe(false);
     expect(flow.snapshot().testCheckoutAvailable).toBe(true);
-    expect(flow.snapshot().errorText).toContain("Не удалось начать тестовую оплату");
+    // Checkout trouble speaks next to the checkout button, not as flow status.
+    expect(flow.snapshot().errorText).toBeNull();
+    expect(flow.snapshot().premiumError).toContain("Не удалось начать тестовую оплату");
   });
 
   it("does not collapse identity/bootstrap failure into a Free Premium state", async () => {

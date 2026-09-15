@@ -27,16 +27,14 @@
   --ring-primary: 0 6px 16px rgba(15, 81, 50, 0.24);
   --ring-quiet: 0 4px 12px rgba(18, 54, 95, 0.14);
   /* Soft dimensional elevation (ambient + contact + inset highlight). */
-  --elev-surface:
-    0 1px 2px rgba(7, 26, 49, 0.04), 0 4px 14px rgba(7, 26, 49, 0.06);
-  --elev-raised:
-    0 2px 4px rgba(7, 26, 49, 0.05), 0 10px 22px rgba(7, 26, 49, 0.09);
-  --elev-primary:
-    0 2px 5px rgba(15, 81, 50, 0.22), 0 8px 20px rgba(15, 81, 50, 0.16);
+  --elev-surface: 0 1px 2px rgba(7, 26, 49, 0.04), 0 4px 14px rgba(7, 26, 49, 0.06);
+  --elev-raised: 0 2px 4px rgba(7, 26, 49, 0.05), 0 10px 22px rgba(7, 26, 49, 0.09);
+  --elev-primary: 0 2px 5px rgba(15, 81, 50, 0.22), 0 8px 20px rgba(15, 81, 50, 0.16);
   --elev-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.74);
   --elev-inset-pressed: inset 0 2px 5px rgba(7, 26, 49, 0.1);
   --elev-border-light: rgba(18, 54, 95, 0.12);
-  --glow-green-soft: 0 0 0 1px rgba(20, 108, 67, 0.1), 0 6px 18px rgba(20, 108, 67, 0.14);
+  --glow-green-soft:
+    0 0 0 1px rgba(20, 108, 67, 0.1), 0 6px 18px rgba(20, 108, 67, 0.14);
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: var(--font-sans);
@@ -59,8 +57,16 @@ body {
   font-family: var(--font-body);
   color: var(--ink);
   background:
-    radial-gradient(1100px 560px at 8% -8%, rgba(219, 231, 245, 0.9) 0%, transparent 58%),
-    radial-gradient(880px 480px at 100% 0%, rgba(227, 242, 233, 0.55) 0%, transparent 52%),
+    radial-gradient(
+      1100px 560px at 8% -8%,
+      rgba(219, 231, 245, 0.9) 0%,
+      transparent 58%
+    ),
+    radial-gradient(
+      880px 480px at 100% 0%,
+      rgba(227, 242, 233, 0.55) 0%,
+      transparent 52%
+    ),
     radial-gradient(1200px 600px at 10% -10%, #dbe7f5 0%, transparent 55%),
     radial-gradient(900px 500px at 100% 0%, #e6eef7 0%, transparent 50%),
     linear-gradient(165deg, #eef3fa 0%, var(--paper) 45%, #e3ecf6 100%);
@@ -786,7 +792,12 @@ body.page-root {
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, #1a7d4c 0%, var(--leaf) 48%, var(--leaf-deep) 100%);
+  background: linear-gradient(
+    180deg,
+    #1a7d4c 0%,
+    var(--leaf) 48%,
+    var(--leaf-deep) 100%
+  );
   color: #ffffff;
   border-color: rgba(15, 81, 50, 0.32);
   box-shadow: var(--elev-primary), var(--elev-inset-highlight);
@@ -935,6 +946,65 @@ body.page-root {
   border-top: 3px solid var(--leaf);
 }
 
+.ready-card--premium {
+  border-top: 3px solid rgba(166, 130, 55, 0.55);
+  border-color: rgba(166, 130, 55, 0.32);
+  background: linear-gradient(120deg, #fffdf8, #faf4e7);
+}
+
+/* Emphasis is a slightly firmer edge, never motion or glow. */
+.ready-card--premium[data-emphasis="highlight"] {
+  border-color: rgba(166, 130, 55, 0.5);
+  box-shadow:
+    var(--elev-raised),
+    var(--elev-inset-highlight),
+    inset 0 0 0 1px rgba(166, 130, 55, 0.18);
+}
+
+.ready-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ready-card-price {
+  margin: 0;
+  color: var(--navy-deep);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.ready-card-benefits {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.ready-card-note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.ready-premium-state {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.premium-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 .ready-card-title {
   margin: 0;
   font-size: 1.1rem;
@@ -1026,7 +1096,11 @@ body.page-root {
   margin-top: 0.2rem;
 }
 
-.category-cards { display: grid; gap: 0.75rem; align-items: start; }
+.category-cards {
+  display: grid;
+  gap: 0.75rem;
+  align-items: start;
+}
 .category-card {
   min-width: 0;
   padding: 0.85rem;
@@ -1037,7 +1111,9 @@ body.page-root {
   text-align: left;
   overflow-wrap: anywhere;
 }
-.category-card[data-active="false"] { display: none; }
+.category-card[data-active="false"] {
+  display: none;
+}
 .category-card h3 {
   display: flex;
   align-items: center;
@@ -1046,12 +1122,15 @@ body.page-root {
   margin: 0;
   font-size: 1rem;
 }
-.category-subtitle, .category-help {
+.category-subtitle,
+.category-help {
   margin: 0.3rem 0 0.75rem;
   font-size: 0.8rem;
   color: var(--ink-muted);
 }
-.category-help { line-height: 1.5; }
+.category-help {
+  line-height: 1.5;
+}
 .category-card .format {
   grid-template-columns: auto minmax(0, 1fr);
   margin-top: 0.35rem;
@@ -1068,7 +1147,9 @@ body.page-root {
   background: transparent;
   border-style: solid;
 }
-.category-card .format-disabled .format-label { color: var(--navy-deep); }
+.category-card .format-disabled .format-label {
+  color: var(--navy-deep);
+}
 .category-card .format-selected {
   border-color: var(--leaf);
   background: var(--leaf-wash);
@@ -1088,9 +1169,15 @@ body.page-root {
     left: 50%;
     translate: -50% 0;
   }
-  .category-tabs { display: none; }
-  .category-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .category-card[data-active="false"] { display: block; }
+  .category-tabs {
+    display: none;
+  }
+  .category-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .category-card[data-active="false"] {
+    display: block;
+  }
 }
 
 .format {
@@ -1319,7 +1406,10 @@ body.page-root {
 .format-selected {
   border-color: var(--blue-accent);
   background: var(--leaf-wash);
-  box-shadow: var(--elev-raised), inset 0 0 0 1px var(--blue-accent), var(--elev-inset-highlight);
+  box-shadow:
+    var(--elev-raised),
+    inset 0 0 0 1px var(--blue-accent),
+    var(--elev-inset-highlight);
 }
 
 .progress-card {
@@ -1369,7 +1459,12 @@ body.page-root {
   height: 100%;
   width: 0;
   overflow: hidden;
-  background: linear-gradient(180deg, #1f8a54 0%, var(--leaf) 55%, var(--leaf-deep) 100%);
+  background: linear-gradient(
+    180deg,
+    #1f8a54 0%,
+    var(--leaf) 55%,
+    var(--leaf-deep) 100%
+  );
   transition:
     width var(--motion-entrance) var(--ease-out),
     background-color var(--motion-base) var(--ease-out);
@@ -1448,8 +1543,23 @@ body.page-root {
 .ready-choice[hidden],
 .ready-card[hidden],
 .ready-card-speed[hidden],
-.ready-card-time[hidden] {
+.ready-card-time[hidden],
+.ready-card-price[hidden],
+.ready-card-note[hidden],
+.premium-error[hidden] {
   display: none;
+}
+
+/* Free and Premium sit side by side once there is room for both. */
+@media (min-width: 720px) {
+  .ready-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .ready-choice-grid:has(.ready-card--premium[hidden]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .spinner {

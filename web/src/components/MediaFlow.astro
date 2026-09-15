@@ -48,8 +48,7 @@ const enabled = isMediaFlowEnabled();
               rx="1"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
-            ></rect>
+              stroke-width="2"></rect>
             <path
               fill="none"
               stroke="currentColor"
@@ -61,7 +60,14 @@ const enabled = isMediaFlowEnabled();
           </svg>
         </button>
       </div>
-      <p class="hint field-hint" data-flow-paste-hint role="status" aria-live="polite" hidden></p>
+      <p
+        class="hint field-hint"
+        data-flow-paste-hint
+        role="status"
+        aria-live="polite"
+        hidden
+      >
+      </p>
     </div>
     <div class="flow-submit-row">
       <button
@@ -80,11 +86,9 @@ const enabled = isMediaFlowEnabled();
   <ProviderSupport id="flow-hint" />
   <p class="hint" data-flow-quota hidden></p>
   <p class="hint" data-flow-quota-reset hidden></p>
-  <p class="premium-status" data-flow-premium-status role="status" aria-live="polite" hidden></p>
+  <p class="premium-status" data-flow-premium-status hidden></p>
   <p class="status" data-flow-status aria-live="polite"></p>
-  <p class="hint" data-flow-restored hidden>
-    Восстановлена текущая задача скачивания.
-  </p>
+  <p class="hint" data-flow-restored hidden>Восстановлена текущая задача скачивания.</p>
   <article class="meta-card" data-flow-meta hidden>
     <h2 class="meta-title" data-flow-title></h2>
     <p class="meta-line">
@@ -93,11 +97,19 @@ const enabled = isMediaFlowEnabled();
       <span data-flow-duration></span>
     </p>
   </article>
-  <fieldset class="quality-card" data-flow-quality aria-labelledby="flow-quality-title" hidden>
+  <fieldset
+    class="quality-card"
+    data-flow-quality
+    aria-labelledby="flow-quality-title"
+    hidden
+  >
     <h2 class="card-title" id="flow-quality-title">Выберите вариант скачивания</h2>
     <div class="quality-list" data-flow-formats hidden></div>
     <div class="premium-checkout" data-flow-premium-checkout hidden>
-      <div class="premium-comparison" aria-label="Сравнение бесплатной загрузки и Premium">
+      <div
+        class="premium-comparison"
+        aria-label="Сравнение бесплатной загрузки и Premium"
+      >
         <section class="premium-plan premium-plan--free">
           <h3>Бесплатно</h3>
           <p data-flow-free-plan-quota>Лимит бесплатных загрузок</p>
@@ -120,6 +132,7 @@ const enabled = isMediaFlowEnabled();
           Тестовая оплата Premium
         </button>
       </div>
+      <p class="premium-error" data-flow-premium-error role="alert" hidden></p>
     </div>
   </fieldset>
   <section class="progress-card" data-flow-progress data-tone="active" hidden>
@@ -147,7 +160,8 @@ const enabled = isMediaFlowEnabled();
       <span class="progress-fill" data-flow-progress-fill></span>
     </div>
     <p class="hint progress-note">
-      Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен примерный размер.
+      Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен
+      примерный размер.
     </p>
     <div class="progress-actions" data-flow-progress-actions hidden>
       <button class="btn btn-ghost" type="button" data-flow-cancel hidden>
@@ -163,21 +177,13 @@ const enabled = isMediaFlowEnabled();
     </div>
     <div class="ready-choice-grid">
       <article class="ready-card ready-card--free" data-flow-ready-free>
-        <h3 class="ready-card-title">Бесплатно</h3>
+        <h3 class="ready-card-title" data-flow-ready-free-title>Бесплатно</h3>
         <div class="ready-card-body">
           <p class="ready-card-speed" data-flow-ready-speed hidden></p>
           <p class="ready-card-time" data-flow-ready-time hidden></p>
         </div>
         <div class="ready-card-actions">
-          <button class="btn btn-primary" type="button" data-flow-save-as hidden>
-            Сохранить как…
-          </button>
-          <a
-            class="btn btn-primary"
-            data-flow-native-download
-            hidden
-            download
-          >
+          <a class="btn btn-primary" data-flow-native-download hidden download>
             Скачать бесплатно
           </a>
           <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>
@@ -185,24 +191,60 @@ const enabled = isMediaFlowEnabled();
           </button>
         </div>
       </article>
+      <article
+        class="ready-card ready-card--premium"
+        data-flow-ready-premium
+        data-emphasis="compact"
+        hidden
+      >
+        <div class="ready-card-head">
+          <h3 class="ready-card-title">Premium · 24 часа</h3>
+          <span class="test-badge" data-flow-ready-premium-test hidden>ТЕСТ</span>
+        </div>
+        <p class="ready-card-price" data-flow-ready-premium-price hidden></p>
+        <ul class="ready-card-benefits">
+          <li>Доступ на 24 часа</li>
+          <li>Без ограничения скорости со стороны FetchNow</li>
+          <li>Без лимита бесплатных загрузок</li>
+          <li>Отдельное видео и аудио, когда источник это поддерживает</li>
+        </ul>
+        <div class="ready-card-actions">
+          <button
+            class="btn btn-primary"
+            type="button"
+            data-flow-ready-premium-cta
+            hidden
+          >
+            Скачать быстрее с Premium
+          </button>
+        </div>
+        <p class="ready-card-note" data-flow-ready-premium-note hidden></p>
+      </article>
+    </div>
+    <div class="ready-premium-state">
+      <p class="premium-error" data-flow-ready-premium-error role="alert" hidden></p>
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-flow-premium-upgrade-retry
+        hidden
+      >
+        Ускорить загрузку с Premium
+      </button>
     </div>
   </section>
 
   <p class="hint" data-flow-mux hidden>
-    Не удалось подготовить совместимый единый файл с видео и звуком без
-    перекодирования.
+    Не удалось подготовить совместимый единый файл с видео и звуком без перекодирования.
   </p>
   <p class="hint" data-flow-https hidden>
     Откройте эту страницу по HTTPS, чтобы скачать подготовленный файл.
   </p>
-  <p class="hint" data-flow-grant-pending hidden>
-    Готовим безопасное скачивание…
-  </p>
-  <p class="hint" data-flow-handoff hidden>
-    Отправлено в браузер
-  </p>
+  <p class="hint" data-flow-grant-pending hidden>Готовим безопасное скачивание…</p>
+  <p class="hint" data-flow-handoff hidden>Отправлено в браузер</p>
   <div class="flow-actions">
-    <p class="selection-summary" data-flow-selection-summary aria-live="polite" hidden></p>
+    <p class="selection-summary" data-flow-selection-summary aria-live="polite" hidden>
+    </p>
     <button class="btn btn-primary" type="button" data-flow-download hidden>
       Подготовить скачивание
     </button>

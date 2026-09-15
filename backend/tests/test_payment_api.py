@@ -166,7 +166,7 @@ async def test_test_checkout_visibility_gate_blocks_new_orders_only(
         )
     assert config.status_code == 200
     assert config.headers["cache-control"] == "no-store"
-    assert config.json() == {"testCheckoutAvailable": False}
+    assert config.json() == {"testCheckoutAvailable": False, "product": None}
     assert create.status_code == 503
     assert create.json()["error"]["code"] == "PAYMENTS_DISABLED"
     assert app.state.session_factory.call_count == 0
@@ -187,7 +187,28 @@ async def test_payment_config_requires_test_mode_and_visibility(
     async with client:
         response = await client.get("/api/v1/payments/config")
     assert response.status_code == 200
-    assert response.json() == {"testCheckoutAvailable": False}
+    assert response.json() == {"testCheckoutAvailable": False, "product": None}
+
+
+@pytest.mark.asyncio
+async def test_payment_config_exposes_safe_product_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _app = await _client(monkeypatch, PaymentService(_settings()))
+    async with client:
+        response = await client.get("/api/v1/payments/config")
+    assert response.status_code == 200
+    assert response.json() == {
+        "testCheckoutAvailable": True,
+        "product": {
+            "productCode": "premium_24h",
+            "amountMinor": 100,
+            "currency": "RUB",
+            "entitlementDurationSeconds": 86_400,
+        },
+    }
+    assert "password" not in response.text.lower()
+    assert "receipt" not in response.json()
 
 
 @pytest.mark.asyncio

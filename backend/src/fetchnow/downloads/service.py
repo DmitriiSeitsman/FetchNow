@@ -32,6 +32,7 @@ from fetchnow.downloads.progress import (
     DownloadProgressStage,
     progress_for_public_state,
 )
+from fetchnow.downloads.promote import DownloadPremiumUpgradeService
 from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.selection import format_snapshot_from_media_format
 from fetchnow.downloads.snapshot_codec import (
@@ -366,6 +367,28 @@ class DownloadJobService:
             )
         await session.flush()
         return self._to_view(updated, created=False)
+
+    async def upgrade_to_premium(
+        self,
+        *,
+        download_job_id: uuid.UUID,
+        access_token: str,
+        anonymous_client_id: uuid.UUID,
+        session: AsyncSession,
+    ) -> DownloadJobView:
+        """Promote a READY Free NORMAL_VIDEO job to the Premium policy snapshot."""
+        if not self._settings.media_downloads_enabled:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOADS_DISABLED,
+                internal_reason="DOWNLOADS_DISABLED",
+            )
+        result = await DownloadPremiumUpgradeService(self._settings).upgrade(
+            download_job_id=download_job_id,
+            access_token=access_token,
+            anonymous_client_id=anonymous_client_id,
+            session=session,
+        )
+        return self._to_view(result.job, created=result.created)
 
     @staticmethod
     def _public_snapshot(job: MediaDownloadJob) -> dict[str, Any]:

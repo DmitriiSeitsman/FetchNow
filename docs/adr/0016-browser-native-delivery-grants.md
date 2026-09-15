@@ -10,9 +10,9 @@ PR7 delivery requires `Authorization: Bearer <parent accessToken>`. Native
 header. Putting the parent token (or a raw delivery ticket) in a URL leaks
 through logs, history, referrers, and screenshots.
 
-Chromium’s File System Access API (`showSaveFilePicker`) can stream with a
-Bearer header, but Firefox, Safari, and most mobile browsers lack it. Making
-FSA the only Save path produced `BROWSER_UNSUPPORTED` dead ends.
+Earlier drafts considered Chromium’s File System Access API
+(`showSaveFilePicker`) as an optional Save path. Making FSA primary produced
+Firefox/Safari dead ends; A4.2.1 removes FSA from the product UI entirely.
 
 ## Decision
 
@@ -36,17 +36,10 @@ Introduce a short-lived **browser delivery grant**:
    single-use (Range / retries); the short TTL and artifact binding are the
    replay boundary.
 
-Optional “Save as…” may still use File System Access on Chromium. Absence of
-FSA is not an error, and the grant anchor never depends on it.
-
-**Amendment (UI prominence only, no transport change).** The ready screen used
-to render both actions side by side and, on browsers without FSA, a disabled
-“Save as…” plus an explanatory note. The buttons are now chosen by capability:
-where `showSaveFilePicker` exists, “Save as…” leads and the grant anchor stays
-mounted as a secondary action; where it does not, “Save as…” and its note are
-not rendered at all and the anchor is the single primary action. The grant
-protocol, the anchor path, and the guarantee that the anchor works without FSA
-are unchanged.
+**Amendment (A4.2.1).** The READY screen no longer offers File System Access
+«Сохранить как…». The grant anchor is the single ordinary download control
+(«Скачать бесплатно» / «Скачать снова» / Premium equivalent). Transport,
+cookie binding, and grant protocol are unchanged.
 
 ## Consequences
 

@@ -4,8 +4,13 @@ import {
   formatDeliverySpeed,
   formatEstimatedDownloadTime,
   estimateDownloadSeconds,
+  PREMIUM_HIGHLIGHT_ETA_SECONDS,
 } from "./estimate";
-import { providerDisplayName, type MediaKind } from "./contracts";
+import {
+  providerDisplayName,
+  type MediaKind,
+  type PaymentProductSummary,
+} from "./contracts";
 import { progressView } from "./progress";
 import {
   groupQualityOptions,
@@ -43,6 +48,22 @@ function freeQuotaPlanCopy(snapshot: FlowSnapshot): string {
   return `${quota.downloadLimit} ${downloadWord} за ${hours} ч`;
 }
 
+/** Server-published minor units only; the client never invents a price. */
+function formatProductPrice(
+  product: PaymentProductSummary | null | undefined,
+): string | null {
+  if (!product) {
+    return null;
+  }
+  const whole = product.amountMinor % 100 === 0;
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: product.currency,
+    minimumFractionDigits: whole ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(product.amountMinor / 100);
+}
+
 function disabledReason(
   format: FlowSnapshot["formats"][number],
   muxingBlocked: boolean,
@@ -65,32 +86,66 @@ function disabledReason(
 function semanticLabel(format: FlowSnapshot["formats"][number]): string {
   if (format.mediaKind === "audio_only") {
     return format.bitrateKbps !== null && format.bitrateKbps > 0
-      ? `${Math.round(format.bitrateKbps)} кбит/с` : "Аудиодорожка";
+      ? `${Math.round(format.bitrateKbps)} кбит/с`
+      : "Аудиодорожка";
   }
   return qualityTechnicalLabel(format);
 }
 
 const CATEGORIES = [
-  { kind: "normal_video", title: "Видео + аудио", tab: "Видео + аудио", subtitle: "Обычная загрузка", empty: "Для этой ссылки нет доступных вариантов видео со звуком" },
-  { kind: "video_only", title: "Только видео", tab: "Видео", subtitle: "Без звуковой дорожки", empty: "Для этой ссылки нет доступных вариантов видео без звука" },
-  { kind: "audio_only", title: "Только аудио", tab: "Аудио", subtitle: "Без изображения", empty: "Для этой ссылки нет доступных вариантов аудио" },
+  {
+    kind: "normal_video",
+    title: "Видео + аудио",
+    tab: "Видео + аудио",
+    subtitle: "Обычная загрузка",
+    empty: "Для этой ссылки нет доступных вариантов видео со звуком",
+  },
+  {
+    kind: "video_only",
+    title: "Только видео",
+    tab: "Видео",
+    subtitle: "Без звуковой дорожки",
+    empty: "Для этой ссылки нет доступных вариантов видео без звука",
+  },
+  {
+    kind: "audio_only",
+    title: "Только аудио",
+    tab: "Аудио",
+    subtitle: "Без изображения",
+    empty: "Для этой ссылки нет доступных вариантов аудио",
+  },
 ] as const;
 
 // Presentation state belongs to this selector, never to the download/session model.
-const categoryViews = new WeakMap<HTMLElement, { active: MediaKind; selected: string | null; result: FlowSnapshot["result"] }>();
+const categoryViews = new WeakMap<
+  HTMLElement,
+  { active: MediaKind; selected: string | null; result: FlowSnapshot["result"] }
+>();
 let selectorSequence = 0;
 
-function renderCategories(list: HTMLElement, options: QualityOption[], snapshot: FlowSnapshot): void {
-  const selected = snapshot.formats.find((f) => f.formatOptionId === snapshot.selectedFormatId);
+function renderCategories(
+  list: HTMLElement,
+  options: QualityOption[],
+  snapshot: FlowSnapshot,
+): void {
+  const selected = snapshot.formats.find(
+    (f) => f.formatOptionId === snapshot.selectedFormatId,
+  );
   let view = categoryViews.get(list);
   if (!view || view.result !== snapshot.result) {
-    view = { active: selected?.mediaKind ?? "normal_video", selected: snapshot.selectedFormatId, result: snapshot.result };
+    view = {
+      active: selected?.mediaKind ?? "normal_video",
+      selected: snapshot.selectedFormatId,
+      result: snapshot.result,
+    };
     categoryViews.set(list, view);
   } else if (view.selected !== snapshot.selectedFormatId) {
     view.active = selected?.mediaKind ?? view.active;
     view.selected = snapshot.selectedFormatId;
   }
-  const focused = list.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+  const focused = list.contains(document.activeElement)
+    ? (document.activeElement as HTMLElement)
+    : null;
   const focusedValue = focused instanceof HTMLInputElement ? focused.value : null;
   const focusedTab = focused?.dataset.categoryTab;
   const prefix = list.dataset.selectorId ?? `quality-${++selectorSequence}`;
@@ -132,11 +187,24 @@ function renderCategories(list: HTMLElement, options: QualityOption[], snapshot:
     tab.addEventListener("click", () => activate(category.kind));
     tab.addEventListener("keydown", (event) => {
       const index = CATEGORIES.findIndex((c) => c.kind === category.kind);
-      const next = event.key === "ArrowRight" ? (index + 1) % 3 : event.key === "ArrowLeft" ? (index + 2) % 3 : event.key === "Home" ? 0 : event.key === "End" ? 2 : null;
+      const next =
+        event.key === "ArrowRight"
+          ? (index + 1) % 3
+          : event.key === "ArrowLeft"
+            ? (index + 2) % 3
+            : event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? 2
+                : null;
       if (next === null) return;
       event.preventDefault();
       activate(CATEGORIES[next].kind);
-      tabs.querySelector<HTMLButtonElement>(`[data-category-tab="${CATEGORIES[next].kind}"]`)?.focus();
+      tabs
+        .querySelector<HTMLButtonElement>(
+          `[data-category-tab="${CATEGORIES[next].kind}"]`,
+        )
+        ?.focus();
     });
     tabs.append(tab);
     const panel = document.createElement("section");
@@ -161,13 +229,21 @@ function renderCategories(list: HTMLElement, options: QualityOption[], snapshot:
     const help = document.createElement("p");
     help.className = "category-help";
     help.id = `${prefix}-help-${category.kind}`;
-    help.textContent = !grouped.length ? category.empty : !premium || snapshot.premiumState === "active" ? "" : snapshot.premiumState === "loading" ? "Проверяем Premium…" : snapshot.premiumState === "error" ? "Не удалось проверить статус Premium" : "Доступно с Premium";
+    // Unknown Premium state is presented as Free: locks stay closed silently.
+    help.textContent = !grouped.length
+      ? category.empty
+      : !premium || snapshot.premiumState === "active"
+        ? ""
+        : "Доступно с Premium";
     help.hidden = !help.textContent;
     panel.append(heading, subtitle, help);
     for (const option of grouped) {
       const row = qualityRow(option, snapshot, snapshot.canSelectQuality !== false);
       const radio = row.querySelector("input")!;
-      radio.setAttribute("aria-label", `${category.title}, ${category.subtitle}, ${semanticLabel(option.representative)}, ${formatDetail(option.representative)}`);
+      radio.setAttribute(
+        "aria-label",
+        `${category.title}, ${category.subtitle}, ${semanticLabel(option.representative)}, ${formatDetail(option.representative)}`,
+      );
       if (help.textContent) radio.setAttribute("aria-describedby", help.id);
       panel.append(row);
     }
@@ -176,15 +252,24 @@ function renderCategories(list: HTMLElement, options: QualityOption[], snapshot:
   list.append(tabs, cards);
   activate(view.active);
   if (focusedValue) {
-    [...list.querySelectorAll<HTMLInputElement>("input")].find((r) => r.value === focusedValue && !r.disabled)?.focus({ preventScroll: true });
+    [...list.querySelectorAll<HTMLInputElement>("input")]
+      .find((r) => r.value === focusedValue && !r.disabled)
+      ?.focus({ preventScroll: true });
   } else if (focusedTab) {
-    tabs.querySelector<HTMLButtonElement>(`[data-category-tab="${focusedTab}"]`)?.focus({ preventScroll: true });
+    tabs
+      .querySelector<HTMLButtonElement>(`[data-category-tab="${focusedTab}"]`)
+      ?.focus({ preventScroll: true });
   }
 }
 
 function formatDetail(format: FlowSnapshot["formats"][number]): string {
   const parts: string[] = [format.container.toUpperCase()];
-  if (format.mediaKind !== "audio_only" && typeof format.fps === "number" && Number.isFinite(format.fps) && format.fps > 0) {
+  if (
+    format.mediaKind !== "audio_only" &&
+    typeof format.fps === "number" &&
+    Number.isFinite(format.fps) &&
+    format.fps > 0
+  ) {
     parts.push(`${Math.round(format.fps)} fps`);
   }
   if (format.approxBytes !== null) parts.push(formatApproxBytes(format.approxBytes));
@@ -236,6 +321,77 @@ function qualityRow(
   return item;
 }
 
+/**
+ * The Premium half of the READY comparison. It is an upsell only while Premium
+ * is not held; once the job delivers under Premium the card steps aside and the
+ * single download action carries the flow.
+ */
+function renderReadyPremium(
+  section: HTMLElement,
+  snapshot: FlowSnapshot,
+  estimatedSeconds: number | null,
+  premiumDelivery: boolean,
+): void {
+  const card = section.querySelector<HTMLElement>("[data-flow-ready-premium]");
+  const premiumHeld = snapshot.premiumState === "active" || premiumDelivery;
+  const product = snapshot.paymentProduct ?? null;
+  if (card) {
+    card.hidden = premiumHeld || product === null;
+    card.dataset.emphasis =
+      estimatedSeconds !== null && estimatedSeconds >= PREMIUM_HIGHLIGHT_ETA_SECONDS
+        ? "highlight"
+        : "compact";
+  }
+
+  const price = section.querySelector<HTMLElement>("[data-flow-ready-premium-price]");
+  if (price) {
+    const priceText = formatProductPrice(product);
+    price.hidden = priceText === null;
+    setText(price, priceText ?? "");
+  }
+
+  const badge = section.querySelector<HTMLElement>("[data-flow-ready-premium-test]");
+  if (badge) {
+    badge.hidden = snapshot.testCheckoutAvailable !== true;
+  }
+
+  const cta = section.querySelector<HTMLButtonElement>("[data-flow-ready-premium-cta]");
+  if (cta) {
+    cta.hidden =
+      snapshot.testCheckoutAvailable !== true || product === null || premiumHeld;
+    cta.disabled = snapshot.checkoutBusy === true || snapshot.busy;
+  }
+
+  const note = section.querySelector<HTMLElement>("[data-flow-ready-premium-note]");
+  if (note) {
+    const noteText = snapshot.upgradePending
+      ? "Переводим загрузку на Premium…"
+      : premiumDelivery
+        ? "Premium активен: скачивание без ограничения скорости."
+        : null;
+    note.hidden = noteText === null;
+    setText(note, noteText ?? "");
+  }
+
+  const error = section.querySelector<HTMLElement>("[data-flow-ready-premium-error]");
+  if (error) {
+    const show = snapshot.premiumError !== null && premiumHeld;
+    error.hidden = !show;
+    setText(error, show ? (snapshot.premiumError ?? "") : "");
+  }
+
+  const retry = section.querySelector<HTMLButtonElement>(
+    "[data-flow-premium-upgrade-retry]",
+  );
+  if (retry) {
+    retry.hidden =
+      snapshot.premiumState !== "active" ||
+      premiumDelivery ||
+      snapshot.upgradePending === true;
+    retry.disabled = snapshot.busy;
+  }
+}
+
 export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (root instanceof Element && !root.isConnected) {
     return;
@@ -254,12 +410,20 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       quota.textContent = "Без лимита загрузок";
     }
   }
+  // Premium status is silent unless it is genuinely active: loading, free and
+  // background failures all render as nothing so the page never narrates a
+  // check the visitor did not ask for.
   const premium = root.querySelector<HTMLElement>("[data-flow-premium-status]");
   if (premium) {
-    premium.hidden = snapshot.premiumState === "free";
+    const activePremium =
+      snapshot.premiumState === "active" && snapshot.premiumStatus?.active === true;
+    premium.hidden = !activePremium;
     premium.dataset.state = snapshot.premiumState;
-    if (snapshot.premiumState === "active" && snapshot.premiumStatus?.active) {
-      const expiry = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.premiumStatus.expiresAt));
+    if (activePremium && snapshot.premiumStatus?.active) {
+      const expiry = new Intl.DateTimeFormat("ru-RU", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(snapshot.premiumStatus.expiresAt));
       const icon = document.createElement("span");
       icon.className = "premium-status-icon";
       icon.setAttribute("aria-hidden", "true");
@@ -267,12 +431,24 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       const detail = document.createElement("span");
       detail.className = "premium-status-expiry";
       detail.textContent = `Доступ до ${expiry}`;
-      premium.replaceChildren(icon, document.createTextNode("Premium активен · "), detail);
-    } else if (snapshot.premiumState === "loading") {
-      premium.textContent = "Проверяем статус Premium…";
-    } else if (snapshot.premiumState === "error") {
-      premium.textContent = "Не удалось проверить статус Premium.";
+      premium.replaceChildren(
+        icon,
+        document.createTextNode("Premium активен · "),
+        detail,
+      );
+    } else {
+      premium.replaceChildren();
     }
+  }
+
+  // Premium failures only speak next to the action that caused them: the
+  // checkout button while Premium is not held, the upgrade otherwise.
+  const premiumErrorText = snapshot.premiumError ?? null;
+  const checkoutError = root.querySelector<HTMLElement>("[data-flow-premium-error]");
+  if (checkoutError) {
+    const show = premiumErrorText !== null && snapshot.premiumState !== "active";
+    checkoutError.hidden = !show;
+    setText(checkoutError, show ? premiumErrorText : "");
   }
   const quotaReset = root.querySelector<HTMLElement>("[data-flow-quota-reset]");
   if (quotaReset) {
@@ -285,8 +461,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
         }).format(new Date(resetAt))}.`
       : "";
   }
-  const hideProgressAfterHandoff =
-    isReady && snapshot.nativeDownloadHandoff;
+  const hideProgressAfterHandoff = isReady && snapshot.nativeDownloadHandoff;
   const progress = progressView(snapshot.phase, snapshot.progressStage, {
     progressPercent: snapshot.progressPercent,
     artifactBytes: snapshot.artifactBytes,
@@ -294,10 +469,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   });
   const progressVisible = progress.visible && !hideProgressAfterHandoff;
   const status = root.querySelector("[data-flow-status]");
-  setText(
-    status,
-    snapshot.errorText ?? (progressVisible ? "" : snapshot.statusText),
-  );
+  setText(status, snapshot.errorText ?? (progressVisible ? "" : snapshot.statusText));
   if (status instanceof HTMLElement) {
     status.dataset.tone = snapshot.errorText ? "error" : "info";
     status.setAttribute("role", snapshot.errorText ? "alert" : "status");
@@ -317,9 +489,8 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     paste.disabled = !snapshot.canSubmit || snapshot.busy;
   }
 
-  // Save as… is the lead action wherever the picker exists, so the anchor steps
-  // back to a secondary style there and stays primary everywhere else.
-  const canPickLocation = !snapshot.browserUnsupported;
+  // The browser download is the only delivery path, so it is always primary.
+  const premiumDelivery = snapshot.promoted === true;
   const nativeDownload = root.querySelector<HTMLAnchorElement>(
     "[data-flow-native-download]",
   );
@@ -328,11 +499,13 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       snapshot.canNativeDownload ||
       (snapshot.nativeDownloadHandoff && snapshot.downloadHref !== null);
     nativeDownload.hidden = !showPrimary;
-    nativeDownload.classList.toggle("btn-primary", !canPickLocation);
-    nativeDownload.classList.toggle("btn-ghost", canPickLocation);
+    nativeDownload.classList.add("btn-primary");
+    nativeDownload.classList.remove("btn-ghost");
     nativeDownload.textContent = snapshot.nativeDownloadHandoff
       ? "Скачать снова"
-      : "Скачать бесплатно";
+      : premiumDelivery
+        ? "Скачать"
+        : "Скачать бесплатно";
     if (snapshot.downloadHref) {
       nativeDownload.href = snapshot.downloadHref;
     } else {
@@ -362,14 +535,6 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     httpsRequired.hidden = !snapshot.httpsRequired;
   }
 
-  const saveAs = root.querySelector<HTMLButtonElement>("[data-flow-save-as]");
-  if (saveAs) {
-    saveAs.disabled = !snapshot.canSaveAs || snapshot.busy;
-    saveAs.hidden =
-      !canPickLocation ||
-      (snapshot.phase !== "ready" && snapshot.phase !== "saving");
-  }
-
   const enqueue = root.querySelector<HTMLButtonElement>("[data-flow-download]");
   if (enqueue) {
     enqueue.disabled =
@@ -382,7 +547,7 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   const startOver = root.querySelector<HTMLButtonElement>("[data-flow-reset]");
   if (startOver) {
     startOver.hidden = !snapshot.canStartOver;
-    startOver.disabled = snapshot.phase === "saving";
+    startOver.disabled = snapshot.upgradePending === true;
   }
   const cancel = root.querySelector<HTMLButtonElement>("[data-flow-cancel]");
   if (cancel) {
@@ -409,23 +574,35 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
       const readyDetails = readySection.querySelector("[data-flow-ready-details]");
       setText(readyDetails, formatReadyDetails(snapshot));
 
-      const speedEl = readySection.querySelector<HTMLElement>("[data-flow-ready-speed]");
+      const speedEl = readySection.querySelector<HTMLElement>(
+        "[data-flow-ready-speed]",
+      );
       if (speedEl) {
         const speedText = formatDeliverySpeed(snapshot.deliveryRateBytesPerSecond);
         speedEl.hidden = speedText === null;
         setText(speedEl, speedText ?? "");
       }
 
+      const estSeconds = estimateDownloadSeconds(
+        snapshot.artifactBytes,
+        snapshot.deliveryRateBytesPerSecond,
+      );
+
       const timeEl = readySection.querySelector<HTMLElement>("[data-flow-ready-time]");
       if (timeEl) {
-        const estSeconds = estimateDownloadSeconds(
-          snapshot.artifactBytes,
-          snapshot.deliveryRateBytesPerSecond,
-        );
         const timeText = formatEstimatedDownloadTime(estSeconds);
         timeEl.hidden = timeText === null;
         setText(timeEl, timeText ?? "");
       }
+
+      const freeTitle = readySection.querySelector<HTMLElement>(
+        "[data-flow-ready-free-title]",
+      );
+      if (freeTitle) {
+        setText(freeTitle, premiumDelivery ? "Premium" : "Бесплатно");
+      }
+
+      renderReadyPremium(readySection, snapshot, estSeconds, premiumDelivery);
     }
   }
 
@@ -485,7 +662,14 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     muxingBlocked: snapshot.muxingBlocked,
     selectedFormatId: snapshot.selectedFormatId,
   });
-  const options = [...normalOptions, ...groupStandaloneOptions(snapshot.formats, snapshot.premiumState === "active", snapshot.selectedFormatId)];
+  const options = [
+    ...normalOptions,
+    ...groupStandaloneOptions(
+      snapshot.formats,
+      snapshot.premiumState === "active",
+      snapshot.selectedFormatId,
+    ),
+  ];
   // Quality options only render during the inspected phase before preparation.
   const showQuality =
     snapshot.phase === "inspected" &&
@@ -507,9 +691,13 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   }
   const summary = root.querySelector<HTMLElement>("[data-flow-selection-summary]");
   if (summary) {
-    const selected = snapshot.formats.find((f) => f.formatOptionId === snapshot.selectedFormatId);
+    const selected = snapshot.formats.find(
+      (f) => f.formatOptionId === snapshot.selectedFormatId,
+    );
     summary.hidden = snapshot.phase !== "inspected" || !selected;
-    summary.textContent = selected ? `Выбрано: ${CATEGORIES.find((c) => c.kind === selected.mediaKind)?.title} · ${semanticLabel(selected)} · ${formatDetail(selected)}` : "";
+    summary.textContent = selected
+      ? `Выбрано: ${CATEGORIES.find((c) => c.kind === selected.mediaKind)?.title} · ${semanticLabel(selected)} · ${formatDetail(selected)}`
+      : "";
   }
 
   const mux = root.querySelector("[data-flow-mux]");
@@ -524,10 +712,12 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
     // The containing quality card already scopes this offer to inspected media.
     checkout.hidden = snapshot.premiumState !== "free";
   }
-  setText(root.querySelector("[data-flow-free-plan-quota]"), freeQuotaPlanCopy(snapshot));
+  setText(
+    root.querySelector("[data-flow-free-plan-quota]"),
+    freeQuotaPlanCopy(snapshot),
+  );
   const exhausted =
-    snapshot.freeQuota?.tier === "free" &&
-    snapshot.freeQuota.downloadsRemaining === 0;
+    snapshot.freeQuota?.tier === "free" && snapshot.freeQuota.downloadsRemaining === 0;
   setText(
     root.querySelector("[data-flow-premium-next-step]"),
     exhausted
@@ -540,7 +730,9 @@ export function renderFlow(root: ParentNode, snapshot: FlowSnapshot): void {
   if (testCheckout) {
     testCheckout.hidden = !snapshot.testCheckoutAvailable;
   }
-  const checkoutButton = root.querySelector<HTMLButtonElement>("[data-flow-premium-cta]");
+  const checkoutButton = root.querySelector<HTMLButtonElement>(
+    "[data-flow-premium-cta]",
+  );
   if (checkoutButton) {
     checkoutButton.disabled = snapshot.checkoutBusy === true;
     checkoutButton.setAttribute("aria-busy", snapshot.checkoutBusy ? "true" : "false");

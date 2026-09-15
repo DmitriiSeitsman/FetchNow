@@ -10,7 +10,7 @@ import { MediaFlowController } from "./controller";
 import { MediaApi } from "./api";
 import { FlowSession } from "./session";
 import { generateAccessToken } from "./credentials";
-import { fileSystemAccessSupported, isSecureDeliveryContext } from "./download";
+import { isSecureDeliveryContext } from "./download";
 import type { FlowSnapshot } from "./controller";
 import {
   BROWSER_GRANT_PATH,
@@ -21,7 +21,6 @@ import {
   OPTION_ID,
 } from "./fixtures";
 import { parseBrowserGrant, parseDownloadJob, parseInspectionJob } from "./contracts";
-import { saveArtifactStream } from "./download";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const astroSource = readFileSync(
@@ -43,10 +42,8 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: true,
     canStartOver: false,
@@ -73,7 +70,6 @@ function mountFlow(): void {
       <p data-flow-https hidden></p>
       <p data-flow-grant-pending hidden></p>
       <p data-flow-handoff hidden></p>
-      <button class="btn btn-primary" data-flow-save-as hidden>Save as…</button>
       <a class="btn btn-primary" data-flow-native-download hidden download>Download file</a>
     </section>
   `;
@@ -89,18 +85,13 @@ function el(selector: string): HTMLElement {
 
 describe("PR14 native browser download", () => {
   it("pins a real anchor for native download, not a button or blob URL", () => {
-    expect(astroSource).toContain('data-flow-native-download');
+    expect(astroSource).toContain("data-flow-native-download");
     expect(astroSource).toContain("Скачать бесплатно");
     expect(astroSource).toContain("download");
-    expect(astroSource).toContain("data-flow-save-as");
-    expect(astroSource).not.toContain("data-flow-save hidden");
-    expect(astroSource).toContain("Сохранить как…");
-    // Save as… leads the action row where it exists, so it is mounted first.
-    expect(astroSource.indexOf("data-flow-save-as")).toBeLessThan(
-      astroSource.indexOf("data-flow-native-download"),
-    );
-    // The "requires a Chromium desktop browser" note explained a control that is
-    // no longer rendered on those browsers.
+    // The browser download is the only delivery path: no File System Access
+    // picker, and no note explaining which browsers support one.
+    expect(astroSource).not.toContain("data-flow-save-as");
+    expect(astroSource).not.toContain("Сохранить как…");
     expect(astroSource).not.toContain("data-flow-browser");
   });
 
@@ -184,7 +175,7 @@ describe("PR14 native browser download", () => {
     expect(isSecureDeliveryContext("https://example.com")).toBe(true);
   });
 
-  it("offers only the native download when the browser has no save picker", () => {
+  it("keeps the browser download as the single primary action", () => {
     mountFlow();
     renderFlow(
       document,
@@ -192,53 +183,13 @@ describe("PR14 native browser download", () => {
         phase: "ready",
         canNativeDownload: true,
         downloadHref: BROWSER_GRANT_PATH,
-        browserUnsupported: true,
-        canSaveAs: false,
       }),
     );
     const link = el("[data-flow-native-download]");
     expect(link.hidden).toBe(false);
     expect(link.classList.contains("btn-primary")).toBe(true);
-    expect(el("[data-flow-save-as]").hidden).toBe(true);
-    expect(fileSystemAccessSupported({ hasSavePicker: () => false })).toBe(false);
-  });
-
-  it("leads with Save as… and demotes the anchor when a picker exists", () => {
-    mountFlow();
-    renderFlow(
-      document,
-      snapshot({
-        phase: "ready",
-        canNativeDownload: true,
-        downloadHref: BROWSER_GRANT_PATH,
-        browserUnsupported: false,
-        canSaveAs: true,
-      }),
-    );
-    const saveAs = document.querySelector<HTMLButtonElement>("[data-flow-save-as]");
-    expect(saveAs?.hidden).toBe(false);
-    expect(saveAs?.disabled).toBe(false);
-    expect(saveAs?.classList.contains("btn-primary")).toBe(true);
-    const link = el("[data-flow-native-download]");
-    expect(link.hidden).toBe(false);
-    expect(link.classList.contains("btn-ghost")).toBe(true);
-    expect(link.classList.contains("btn-primary")).toBe(false);
-  });
-
-  it("keeps Save as… mounted but disabled while the save runs", () => {
-    mountFlow();
-    renderFlow(
-      document,
-      snapshot({
-        phase: "saving",
-        busy: true,
-        canSaveAs: false,
-        browserUnsupported: false,
-      }),
-    );
-    const saveAs = document.querySelector<HTMLButtonElement>("[data-flow-save-as]");
-    expect(saveAs?.hidden).toBe(false);
-    expect(saveAs?.disabled).toBe(true);
+    expect(link.classList.contains("btn-ghost")).toBe(false);
+    expect(document.querySelector("[data-flow-save-as]")).toBeNull();
   });
 
   it("arms a grant when the job becomes ready and ignores stale responses", async () => {
@@ -271,10 +222,8 @@ describe("PR14 native browser download", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
     });
     await controller.submit("https://vk.com/video-1_2");
     controller.selectFormat(OPTION_ID);
@@ -333,10 +282,8 @@ describe("PR14 native browser download", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
     });
     await controller.submit("https://vk.com/video-1_2");
     controller.selectFormat(OPTION_ID);
@@ -404,10 +351,8 @@ describe("PR14 grant refresh / resume / retry hardening", () => {
       api: readyApi(createBrowserGrant) as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
       now: () => clock,
     });
     await reachReady(controller);
@@ -452,10 +397,8 @@ describe("PR14 grant refresh / resume / retry hardening", () => {
       api: readyApi(createBrowserGrant) as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
       now: () => clock,
     });
     await reachReady(controller);
@@ -500,10 +443,8 @@ describe("PR14 grant refresh / resume / retry hardening", () => {
       api: readyApi(createBrowserGrant) as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
       now: () => clock,
     });
     await reachReady(controller);
@@ -540,10 +481,8 @@ describe("PR14 grant refresh / resume / retry hardening", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save: vi.fn() as unknown as typeof saveArtifactStream,
     });
     await reachReady(controller);
     await vi.waitFor(() => expect(controller.snapshot().canRetryGrant).toBe(true));

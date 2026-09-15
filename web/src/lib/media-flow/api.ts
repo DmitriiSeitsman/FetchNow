@@ -41,38 +41,23 @@ function resolveOrigin(explicit?: string): string {
   if (typeof globalThis.location?.origin === "string") {
     return globalThis.location.origin;
   }
-  throw new FlowError(
-    "INTERNAL_ERROR",
-    GENERIC_USER_MESSAGE,
-  );
+  throw new FlowError("INTERNAL_ERROR", GENERIC_USER_MESSAGE);
 }
 
 export function sameOriginApiUrl(path: string, origin?: string): string {
   if (!path.startsWith("/api/")) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   if (path.includes("?") || path.includes("#")) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   const base = resolveOrigin(origin);
   const url = new URL(path, `${base}/`);
   if (url.origin !== base) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   if (url.search || url.hash) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   return url.href;
 }
@@ -100,10 +85,7 @@ export async function readBoundedUtf8(
         } catch {
           /* preserve contract error */
         }
-        throw new FlowError(
-          "CONTRACT",
-          GENERIC_USER_MESSAGE,
-        );
+        throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
       }
       chunks.push(value);
     }
@@ -141,10 +123,7 @@ async function readJson(response: Response): Promise<unknown> {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
 }
 
@@ -214,14 +193,11 @@ export class MediaApi {
   }
 
   async getFreeQuota(signal?: AbortSignal): Promise<FreeQuota | null> {
-    const { status, body, headers } = await this.requestJson(
-      "/api/v1/media/quota",
-      {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        signal,
-      },
-    );
+    const { status, body, headers } = await this.requestJson("/api/v1/media/quota", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    });
     if (status === 503) {
       try {
         if (parseApiError(body).error.code === "FREE_QUOTA_DISABLED") {
@@ -238,10 +214,11 @@ export class MediaApi {
   }
 
   async getPremiumStatus(signal?: AbortSignal): Promise<PremiumStatus> {
-    const { status, body, headers } = await this.requestJson(
-      "/api/v1/premium/status",
-      { method: "GET", headers: { Accept: "application/json" }, signal },
-    );
+    const { status, body, headers } = await this.requestJson("/api/v1/premium/status", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    });
     if (status !== 200) throwHttpError(status, body, headers);
     return parsePremiumStatus(body);
   }
@@ -351,6 +328,30 @@ export class MediaApi {
       `/api/v1/media/download-jobs/${downloadJobId}`,
       {
         method: "GET",
+        headers: bearerHeaders(token, { Accept: "application/json" }),
+        signal,
+      },
+    );
+    if (status !== 200) {
+      throwHttpError(status, body, headers);
+    }
+    return parseDownloadJob(body);
+  }
+
+  /**
+   * Ask the backend to re-issue this READY job under the Premium delivery
+   * policy. The server owns the decision; an already-Premium job answers 200.
+   */
+  async upgradeDownloadJobToPremium(
+    downloadJobId: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<DownloadJob> {
+    if (!UUID_RE.test(downloadJobId)) throw flowErrorFromCode("CONTRACT");
+    const { status, body, headers } = await this.requestJson(
+      `/api/v1/media/download-jobs/${downloadJobId}/premium-upgrade`,
+      {
+        method: "POST",
         headers: bearerHeaders(token, { Accept: "application/json" }),
         signal,
       },

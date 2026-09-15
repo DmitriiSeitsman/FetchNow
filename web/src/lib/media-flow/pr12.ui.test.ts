@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderFlow } from "./render";
 import { isStaleDownloadPoll, type FlowSnapshot } from "./controller";
 import { progressView, STAGE_COMPLETION } from "./progress";
@@ -12,15 +12,9 @@ import { UNKNOWN_SIZE_LABEL } from "./bytes";
 import {
   contentDispositionHeader,
   parseContentDispositionFilename,
-  saveArtifactStream,
   suggestedFilename,
 } from "./download";
-import {
-  DOWNLOAD_ID,
-  EXPIRES,
-  downloadPayload,
-  progressiveFormat,
-} from "./fixtures";
+import { DOWNLOAD_ID, EXPIRES, downloadPayload, progressiveFormat } from "./fixtures";
 import { parseDownloadJob, type MediaFormat } from "./contracts";
 import { FlowError } from "./errors";
 
@@ -63,10 +57,8 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: true,
     canStartOver: false,
@@ -113,7 +105,6 @@ function mountFlow(): void {
       <p class="hint" data-flow-mux hidden></p>
       <button data-flow-download hidden>Prepare download</button>
       <a data-flow-native-download hidden download>Download file</a>
-      <button data-flow-save-as hidden>Save as…</button>
     </section>
   `;
 }
@@ -174,11 +165,13 @@ describe("PR12 size, filename, percent, and placeholder", () => {
         formats: [progressiveFormat],
       }),
     );
-    expect(el("[data-flow-progress-label]").textContent).toBe("Готово к скачиванию · 11.4 МБ");
+    expect(el("[data-flow-progress-label]").textContent).toBe(
+      "Готово к скачиванию · 11.4 МБ",
+    );
     expect(el("[data-flow-progress-label]").textContent).not.toContain("≈");
   });
 
-    it("includes a real percentage only when the backend supplies one", () => {
+  it("includes a real percentage only when the backend supplies one", () => {
     const withPercent = progressView("downloading", "downloading_video", {
       progressPercent: 42,
     });
@@ -215,7 +208,8 @@ describe("PR12 size, filename, percent, and placeholder", () => {
   });
 
   it("does not claim that the percent is not a download percentage", () => {
-    expect(astroSource).toContain(
+    const normalizedAstro = astroSource.replace(/\s+/g, " ");
+    expect(normalizedAstro).toContain(
       "Прогресс следует этапам подготовки. Проценты скачивания появляются, когда известен примерный размер.",
     );
     expect(astroSource).not.toMatch(/not a download percentage/i);
@@ -223,7 +217,7 @@ describe("PR12 size, filename, percent, and placeholder", () => {
       astroSource,
     );
     expect(ui_claims_percent_is_not_download_percent).toBe(false);
-    const progress_copy_matches_backend_semantics = astroSource.includes(
+    const progress_copy_matches_backend_semantics = normalizedAstro.includes(
       "Проценты скачивания появляются, когда известен примерный размер",
     );
     expect(progress_copy_matches_backend_semantics).toBe(true);
@@ -280,40 +274,12 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     expect(el("[data-flow-progress]").hidden).toBe(true);
   });
 
-  it("passes a Unicode suggested filename to the picker", async () => {
+  it("keeps a Unicode filename intact through the delivery header", () => {
     const name = "Название видео.mp4";
     const ascii = suggestedFilename(DOWNLOAD_ID, "mp4");
-    let suggestedName = "";
-    const writable = {
-      write: async () => undefined,
-      close: vi.fn(async () => undefined),
-      abort: vi.fn(async () => undefined),
-    };
-    await saveArtifactStream({
-      downloadJobId: DOWNLOAD_ID,
-      token: "tokentokentokentokentokentokentoken12",
-      container: "mp4",
-      suggestedFilename: name,
-      signal: new AbortController().signal,
-      deps: {
-        origin: "http://localhost",
-        showSaveFilePicker: async (options) => {
-          suggestedName = options.suggestedName;
-          return { createWritable: async () => writable };
-        },
-        fetchImpl: (async () =>
-          new Response(new Uint8Array([1, 2, 3]), {
-            status: 200,
-            headers: {
-              "Content-Type": "video/mp4",
-              "Content-Length": "3",
-              "Content-Disposition": contentDispositionHeader(name, ascii),
-            },
-          })) as unknown as typeof fetch,
-      },
-    });
-    expect(suggestedName).toBe(name);
-    expect(writable.close).toHaveBeenCalledOnce();
+    const header = contentDispositionHeader(name, ascii);
+    expect(header).toContain(`filename="${ascii}"`);
+    expect(parseContentDispositionFilename(header, name)).toBe(name);
   });
 
   it("rejects malformed, duplicate, and mismatched Content-Disposition headers", () => {
@@ -341,49 +307,11 @@ describe("PR12 size, filename, percent, and placeholder", () => {
     ).toBeNull();
   });
 
-  it("cancels the body when filename* does not match the job name", async () => {
-    const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn(() => undefined);
-    const abort = vi.fn(async () => undefined);
+  it("refuses a header naming a different file than the prepared job", () => {
     const ascii = suggestedFilename(DOWNLOAD_ID, "mp4");
-    await expect(
-      saveArtifactStream({
-        downloadJobId: DOWNLOAD_ID,
-        token: "tokentokentokentokentokentokentoken12",
-        container: "mp4",
-        suggestedFilename: "Название видео.mp4",
-        signal: new AbortController().signal,
-        deps: {
-          origin: "http://localhost",
-          showSaveFilePicker: async () => ({
-            createWritable: async () => ({
-              write: async () => undefined,
-              close: async () => undefined,
-              abort,
-            }),
-          }),
-          fetchImpl: (async () =>
-            ({
-              status: 200,
-              headers: new Headers({
-                "Content-Type": "video/mp4",
-                "Content-Length": "3",
-                "Content-Disposition": contentDispositionHeader(ascii, ascii),
-              }),
-              body: {
-                getReader: () => ({
-                  read: async () => ({ done: true, value: undefined }),
-                  cancel,
-                  releaseLock,
-                }),
-              },
-            }) as unknown as Response) as unknown as typeof fetch,
-        },
-      }),
-    ).rejects.toBeInstanceOf(FlowError);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(releaseLock).toHaveBeenCalledOnce();
-    expect(abort).toHaveBeenCalledOnce();
+    const header = contentDispositionHeader(ascii, ascii);
+    expect(parseContentDispositionFilename(header, "Название видео.mp4")).toBeNull();
+    expect(() => contentDispositionHeader("bad\r\nname.mp4", ascii)).toThrow(FlowError);
   });
 
   it("ignores a stale poll with an older updatedAt", () => {

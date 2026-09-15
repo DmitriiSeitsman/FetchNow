@@ -152,6 +152,24 @@ The selected format and effective capability policy are frozen into the
 server-generated admission snapshot. A Premium standalone job admitted before
 entitlement expiry remains authorized for the same anonymous identity while it
 is prepared and delivered. New admissions after expiry use the Free matrix.
+
+## READY Premium upgrade (PRD2-A4.2.1)
+
+After a Free combined artifact reaches READY, the UI shows ordinary browser
+download («Скачать бесплатно» / «Скачать снова») plus a contextual Premium
+comparison. Background Premium status lookup is silent; only an active
+entitlement or a user-initiated action may show Premium chrome. Payment
+progress after an explicit checkout may still show «Проверяем статус оплаты…».
+
+Purchasing Premium does not recreate the job. `POST
+/api/v1/media/download-jobs/{id}/premium-upgrade` promotes the stored Free
+policy snapshot to Premium for the owning anonymous identity, releases an
+unconsumed reservation when coverage is incomplete, never refunds a completed
+Free delivery, rotates browser grants on the first successful transition, and
+leaves the artifact/fence unchanged. Delivery continues to read only the
+snapshot; mid-stream entitlement polling is not introduced. Price shown on the
+READY Premium card comes from the public payment-config product summary, never
+from frontend constants.
 Premium normal, video-only, and audio-only jobs create no Free quota entry and
 have no product delivery-rate cap; Free normal video retains the configured
 524288 bytes/second rate. Existing byte, duration, disk, timeout, lease,

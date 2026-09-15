@@ -89,7 +89,6 @@ function isCoherent(record: RecoveryRecord): boolean {
       );
     case "downloading":
     case "ready":
-    case "saving":
       return (
         record.mediaJobId !== null &&
         record.downloadJobId !== null &&

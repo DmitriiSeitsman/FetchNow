@@ -1,4 +1,5 @@
 import { MediaApi } from "../media-flow/api";
+import { FlowSession } from "../media-flow/session";
 import { clearPaymentOrder, readPaymentOrder } from "./payment";
 
 export type PaymentStatusView =
@@ -53,10 +54,21 @@ export async function resolvePaymentSuccess(
   }
 }
 
+/**
+ * A prepared Free download waiting in this tab's session is what the flow page
+ * promotes to Premium on return, so the success page can point straight at it.
+ */
+export function hasPreparedDownload(session: FlowSession = new FlowSession()): boolean {
+  const record = session.read();
+  return record !== null && record.phase === "ready" && record.downloadJobId !== null;
+}
+
 export function mountPaymentSuccess(root: ParentNode): AbortController {
   const abort = new AbortController();
   const status = root.querySelector<HTMLElement>("[data-payment-status]");
   const expiry = root.querySelector<HTMLElement>("[data-payment-expiry]");
+  const returnLink = root.querySelector<HTMLElement>("[data-payment-return]");
+  const prepared = hasPreparedDownload();
   void resolvePaymentSuccess(
     new MediaApi(),
     (state, expiresAt) => {
@@ -77,6 +89,9 @@ export function mountPaymentSuccess(root: ParentNode): AbortController {
         expiry.textContent = expiresAt
           ? `Premium активен до ${new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(expiresAt))}.`
           : "";
+      }
+      if (returnLink && state === "active" && prepared) {
+        returnLink.textContent = "Вернуться и скачать быстрее";
       }
     },
     { signal: abort.signal },

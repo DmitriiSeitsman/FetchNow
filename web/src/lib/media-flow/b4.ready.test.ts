@@ -32,10 +32,7 @@ import { FlowSession } from "./session";
 import { FLOW_PHASES } from "./state-machine";
 import type { MediaApi } from "./api";
 
-const ASTRO_PATH = resolve(
-  __dirname,
-  "../../components/MediaFlow.astro",
-);
+const ASTRO_PATH = resolve(__dirname, "../../components/MediaFlow.astro");
 const astroSource = readFileSync(ASTRO_PATH, "utf-8");
 
 const SAMPLE_FORMAT: MediaFormat = {
@@ -74,10 +71,8 @@ function baseSnapshot(overrides: Partial<FlowSnapshot> = {}): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: true,
     canStartOver: false,
@@ -125,17 +120,44 @@ function mountFlowMarkup(): void {
         </div>
         <div class="ready-choice-grid">
           <article class="ready-card ready-card--free" data-flow-ready-free>
-            <h3 class="ready-card-title">Бесплатно</h3>
+            <h3 class="ready-card-title" data-flow-ready-free-title>Бесплатно</h3>
             <div class="ready-card-body">
               <p class="ready-card-speed" data-flow-ready-speed hidden></p>
               <p class="ready-card-time" data-flow-ready-time hidden></p>
             </div>
             <div class="ready-card-actions">
-              <button class="btn btn-primary" type="button" data-flow-save-as hidden>Сохранить как…</button>
               <a class="btn btn-primary" data-flow-native-download hidden download>Скачать бесплатно</a>
               <button class="btn btn-primary" type="button" data-flow-grant-retry hidden>Обновить доступ</button>
             </div>
           </article>
+          <article
+            class="ready-card ready-card--premium"
+            data-flow-ready-premium
+            data-emphasis="compact"
+            hidden
+          >
+            <div class="ready-card-head">
+              <h3 class="ready-card-title">Premium · 24 часа</h3>
+              <span class="test-badge" data-flow-ready-premium-test hidden>ТЕСТ</span>
+            </div>
+            <p class="ready-card-price" data-flow-ready-premium-price hidden></p>
+            <ul class="ready-card-benefits">
+              <li>Доступ на 24 часа</li>
+              <li>Без ограничения скорости со стороны FetchNow</li>
+            </ul>
+            <div class="ready-card-actions">
+              <button class="btn btn-primary" type="button" data-flow-ready-premium-cta hidden>
+                Скачать быстрее с Premium
+              </button>
+            </div>
+            <p class="ready-card-note" data-flow-ready-premium-note hidden></p>
+          </article>
+        </div>
+        <div class="ready-premium-state">
+          <p class="premium-error" data-flow-ready-premium-error role="alert" hidden></p>
+          <button class="btn btn-ghost" type="button" data-flow-premium-upgrade-retry hidden>
+            Ускорить загрузку с Premium
+          </button>
         </div>
       </section>
       <div class="flow-actions">
@@ -248,11 +270,8 @@ describe("PRD1E-B4: Size semantics (Part A)", () => {
     );
     const api = {
       createInspectionJob: vi.fn(),
-      getInspectionJob: vi.fn(
-        async () =>
-          parseInspectionJob(
-            inspectedPayload({ formats: [SAMPLE_FORMAT] }),
-          ),
+      getInspectionJob: vi.fn(async () =>
+        parseInspectionJob(inspectedPayload({ formats: [SAMPLE_FORMAT] })),
       ),
       createDownloadJob: vi.fn(),
       getDownloadJob: vi.fn(async () => downloadJob),
@@ -281,7 +300,6 @@ describe("PRD1E-B4: Size semantics (Part A)", () => {
       api: api as unknown as MediaApi,
       session,
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => renderFlow(document, snap),
@@ -351,12 +369,8 @@ describe("PRD1E-B4: Duration estimation & formatting (Part C)", () => {
     expect(formatEstimatedDownloadTime(4200)).toBe(
       "Примерное время скачивания: ≈ 1 ч 10 мин",
     );
-    expect(formatEstimatedDownloadTime(3600)).toBe(
-      "Примерное время скачивания: ≈ 1 ч",
-    );
-    expect(formatEstimatedDownloadTime(7200)).toBe(
-      "Примерное время скачивания: ≈ 2 ч",
-    );
+    expect(formatEstimatedDownloadTime(3600)).toBe("Примерное время скачивания: ≈ 1 ч");
+    expect(formatEstimatedDownloadTime(7200)).toBe("Примерное время скачивания: ≈ 2 ч");
     expect(formatEstimatedDownloadTime(7260)).toBe(
       "Примерное время скачивания: ≈ 2 ч 1 мин",
     );
@@ -392,18 +406,9 @@ describe("PRD1E-B4: Duration estimation & formatting (Part C)", () => {
   });
 
   it("22. frontend source files do not contain a magic 524288 constant for policy", () => {
-    const renderSrc = readFileSync(
-      resolve(__dirname, "render.ts"),
-      "utf-8",
-    );
-    const controllerSrc = readFileSync(
-      resolve(__dirname, "controller.ts"),
-      "utf-8",
-    );
-    const estimateSrc = readFileSync(
-      resolve(__dirname, "estimate.ts"),
-      "utf-8",
-    );
+    const renderSrc = readFileSync(resolve(__dirname, "render.ts"), "utf-8");
+    const controllerSrc = readFileSync(resolve(__dirname, "controller.ts"), "utf-8");
+    const estimateSrc = readFileSync(resolve(__dirname, "estimate.ts"), "utf-8");
     expect(renderSrc).not.toContain("524288");
     expect(controllerSrc).not.toContain("524288");
     expect(estimateSrc).not.toContain("524288");
@@ -521,7 +526,7 @@ describe("PRD1E-B4: Ready UI & interaction (Part E)", () => {
     expect(el("[data-flow-native-download]").hidden).toBe(true);
   });
 
-  it("31. A3.3 Premium controls are present but hidden by default", () => {
+  it("31. READY Premium card stays out of the way until there is a product to sell", () => {
     mountFlowMarkup();
     renderFlow(
       document,
@@ -532,11 +537,10 @@ describe("PRD1E-B4: Ready UI & interaction (Part E)", () => {
         selectedFormat: SAMPLE_FORMAT,
       }),
     );
-    expect(document.querySelector(".ready-card--premium")).toBeNull();
-    expect(document.querySelector("[data-flow-premium]")).toBeNull();
-    expect(document.body.textContent).not.toContain("Premium");
-    expect(document.body.textContent).not.toContain("Премиум");
-    expect(astroSource).not.toContain("ready-card--premium");
+    expect(el("[data-flow-ready-premium]").hidden).toBe(true);
+    expect(el("[data-flow-ready-premium-cta]").hidden).toBe(true);
+    expect(el("[data-flow-ready-premium-price]").hidden).toBe(true);
+    expect(astroSource).toContain("ready-card--premium");
     expect(astroSource).toContain("data-flow-premium");
     expect(astroSource).toMatch(/data-flow-premium-checkout hidden/);
   });

@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { MediaApi, sameOriginApiUrl } from "./api";
 import { generateAccessToken } from "./credentials";
-import { inspectedPayload, inspectionPayload, JOB_ID } from "./fixtures";
+import { FlowError } from "./errors";
+import {
+  downloadPayload,
+  inspectedPayload,
+  inspectionPayload,
+  DOWNLOAD_ID,
+  JOB_ID,
+} from "./fixtures";
 
 describe("api client", () => {
   it("uses same-origin no-store contracts for Premium and TEST checkout", async () => {
@@ -12,36 +19,44 @@ describe("api client", () => {
         return new Response(JSON.stringify({ active: false }), { status: 200 });
       }
       if (path.endsWith("/payments/config")) {
-        return new Response(JSON.stringify({ testCheckoutAvailable: true }), { status: 200 });
+        return new Response(JSON.stringify({ testCheckoutAvailable: true }), {
+          status: 200,
+        });
       }
       if (path.endsWith(`/payments/orders/${orderId}`)) {
-        return new Response(JSON.stringify({
-          status: "PENDING",
-          productCode: "premium_24h",
-          amountMinor: 100,
-          currency: "RUB",
-          createdAt: "2026-09-07T12:00:00Z",
-          paidAt: null,
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            status: "PENDING",
+            productCode: "premium_24h",
+            amountMinor: 100,
+            currency: "RUB",
+            createdAt: "2026-09-07T12:00:00Z",
+            paidAt: null,
+          }),
+          { status: 200 },
+        );
       }
-      return new Response(JSON.stringify({
-        orderId,
-        status: "PENDING",
-        paymentForm: {
-          action: "https://auth.robokassa.ru/Merchant/Index.aspx",
-          method: "POST",
-          fields: {
-            MerchantLogin: "fetchnow",
-            OutSum: "1.00",
-            InvId: "42",
-            Description: "Доступ FetchNow на 24 часа",
-            SignatureValue: "a".repeat(64),
-            IsTest: "1",
-            Receipt: "%7B%7D",
-            Culture: "ru",
+      return new Response(
+        JSON.stringify({
+          orderId,
+          status: "PENDING",
+          paymentForm: {
+            action: "https://auth.robokassa.ru/Merchant/Index.aspx",
+            method: "POST",
+            fields: {
+              MerchantLogin: "fetchnow",
+              OutSum: "1.00",
+              InvId: "42",
+              Description: "Доступ FetchNow на 24 часа",
+              SignatureValue: "a".repeat(64),
+              IsTest: "1",
+              Receipt: "%7B%7D",
+              Culture: "ru",
+            },
           },
-        },
-      }), { status: 201 });
+        }),
+        { status: 201 },
+      );
     });
     const api = new MediaApi({
       origin: "https://fetchnow.online",
@@ -52,11 +67,13 @@ describe("api client", () => {
     await api.createPaymentOrder("A".repeat(32));
     await api.getPaymentOrder(orderId);
     const calls = fetchImpl.mock.calls as unknown as [string, RequestInit][];
-    expect(calls.map(([url]) => new URL(url).origin))
-      .toEqual(Array(4).fill("https://fetchnow.online"));
+    expect(calls.map(([url]) => new URL(url).origin)).toEqual(
+      Array(4).fill("https://fetchnow.online"),
+    );
     expect(calls[2]?.[1].body).toBe(JSON.stringify({ productCode: "premium_24h" }));
-    expect((calls[2]?.[1].headers as Record<string, string>)["Idempotency-Key"])
-      .toBe("A".repeat(32));
+    expect((calls[2]?.[1].headers as Record<string, string>)["Idempotency-Key"]).toBe(
+      "A".repeat(32),
+    );
     expect(calls[2]?.[1].body).not.toMatch(/amount|duration|signature|receipt/i);
     expect(calls.every(([, init]) => init.cache === "no-store")).toBe(true);
   });
@@ -133,6 +150,86 @@ describe("api client", () => {
     expect(() =>
       sameOriginApiUrl("/api/v1/media/jobs?x=1", "http://localhost"),
     ).toThrow();
+  });
+
+  it("reads the payment product summary published with the checkout config", async () => {
+    const api = new MediaApi({
+      origin: "https://fetchnow.online",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            testCheckoutAvailable: true,
+            product: {
+              productCode: "premium_24h",
+              amountMinor: 9900,
+              currency: "RUB",
+              entitlementDurationSeconds: 86_400,
+            },
+          }),
+          { status: 200 },
+        )) as unknown as typeof fetch,
+    });
+    await expect(api.getPaymentConfig()).resolves.toEqual({
+      testCheckoutAvailable: true,
+      product: {
+        productCode: "premium_24h",
+        amountMinor: 9900,
+        currency: "RUB",
+        entitlementDurationSeconds: 86_400,
+      },
+    });
+  });
+
+  it("promotes a prepared job with an empty Bearer POST and parses the new job", async () => {
+    const token = generateAccessToken();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify(
+            downloadPayload({
+              state: "ready",
+              artifactReady: true,
+              completedAt: "2026-08-13T04:22:27Z",
+            }),
+          ),
+          { status: 200 },
+        ),
+    );
+    const api = new MediaApi({
+      origin: "https://fetchnow.online",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const job = await api.upgradeDownloadJobToPremium(DOWNLOAD_ID, token);
+    expect(job.id).toBe(DOWNLOAD_ID);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      `https://fetchnow.online/api/v1/media/download-jobs/${DOWNLOAD_ID}/premium-upgrade`,
+    );
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect(init.credentials).toBe("same-origin");
+    expect(init.cache).toBe("no-store");
+    expect((init.headers as Headers).get("Authorization")).toBe(`Bearer ${token}`);
+  });
+
+  it("maps a busy delivery and a non-UUID job id to flow errors", async () => {
+    const token = generateAccessToken();
+    const api = new MediaApi({
+      origin: "https://fetchnow.online",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "DELIVERY_IN_PROGRESS", message: "busy" },
+          }),
+          { status: 409 },
+        )) as unknown as typeof fetch,
+    });
+    await expect(api.upgradeDownloadJobToPremium(DOWNLOAD_ID, token)).rejects.toThrow(
+      FlowError,
+    );
+    await expect(api.upgradeDownloadJobToPremium("not-a-uuid", token)).rejects.toThrow(
+      FlowError,
+    );
   });
 
   it("parses inspected status", async () => {

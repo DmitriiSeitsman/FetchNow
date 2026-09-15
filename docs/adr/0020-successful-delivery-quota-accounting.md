@@ -70,3 +70,28 @@ its reservation, while new requests after the original job TTL remain denied.
 A crashed stream delays cleanup only until its bounded lease expires. Concurrent
 completion serializes through the existing quota entry and consumes exactly
 once. Premium jobs and quota-disabled legacy jobs do not require Free evidence.
+
+## READY Free → Premium promotion (PRD2-A4.2.1)
+
+A READY Free `NORMAL_VIDEO` job may be promoted monotonically to Premium without
+re-fetching or reprocessing media. Promotion is a short PostgreSQL transaction
+in lock order anonymous client → download job → quota entry → ledger → grants.
+It rewrites only the effective policy snapshot, binds `authorizedIdentityId`,
+and revokes pre-promotion browser grants. Artifact id, fence, bytes, and format
+remain unchanged. Idempotent retries for the same identity do not revoke a
+fresh Premium grant and do not re-check live entitlement (frozen-policy model).
+
+Quota rules under coverage inspection:
+
+- `reserved` + incomplete coverage → release once; retain historical ranges;
+- `reserved` + complete `[0, artifact_bytes)` → consume (never refund), then
+  promote;
+- `consumed` → leave consumed; promote for future uncapped delivery;
+- Free snapshot + `released`/`expired` while READY → fail closed;
+- already-Premium + released after a successful promotion → coherent.
+
+An active Free delivery lease returns `DELIVERY_IN_PROGRESS` without waiting or
+mutating mid-stream rate. After commit, the client re-arms a grant through the
+existing browser-grant API. Public `/payments/config` exposes a safe product
+summary for READY pricing; TEST disclosure remains mandatory while checkout is
+test-only.

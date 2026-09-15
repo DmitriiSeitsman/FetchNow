@@ -6,8 +6,6 @@ export const FLOW_PHASES = [
   "enqueueing_download",
   "downloading",
   "ready",
-  "saving",
-  "completed",
   "inspection_failed",
   "download_failed",
   "expired",
@@ -20,7 +18,6 @@ export const FLOW_PHASES = [
 export type FlowPhase = (typeof FLOW_PHASES)[number];
 
 const TERMINAL: ReadonlySet<FlowPhase> = new Set([
-  "completed",
   "inspection_failed",
   "download_failed",
   "expired",
@@ -69,17 +66,7 @@ const ALLOWED: Record<FlowPhase, readonly FlowPhase[]> = {
     "internal_error",
     "cancelled",
   ],
-  ready: ["saving", "cancelled", "expired"],
-  saving: [
-    "completed",
-    "ready",
-    "download_failed",
-    "cancelled",
-    "internal_error",
-    "expired",
-    "unsupported",
-  ],
-  completed: [],
+  ready: ["cancelled", "expired"],
   inspection_failed: ["idle"],
   download_failed: ["idle"],
   expired: ["idle"],
@@ -109,7 +96,6 @@ const RESTORABLE: ReadonlySet<FlowPhase> = new Set([
   "enqueueing_download",
   "downloading",
   "ready",
-  "saving",
 ]);
 
 export function isRestorablePhase(phase: FlowPhase): boolean {

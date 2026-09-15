@@ -60,7 +60,6 @@ describe("browser flow integration", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -94,7 +93,6 @@ describe("browser flow integration", () => {
       createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
       cancelDownloadJob: vi.fn(),
     };
-    const save = vi.fn(async () => undefined);
     const store = new Map<string, string>();
     const controller = new MediaFlowController({
       api: api as unknown as MediaApi,
@@ -108,10 +106,8 @@ describe("browser flow integration", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
-      save,
     });
 
     await controller.submit("https://vk.com/video1");
@@ -128,58 +124,6 @@ describe("browser flow integration", () => {
     expect(controller.snapshot().nativeDownloadHandoff).toBe(true);
     expect(controller.snapshot().phase).toBe("ready");
     expect([...store.keys()]).toHaveLength(1);
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  it("still completes FSA save when the picker is supported", async () => {
-    const token = generateAccessToken();
-    const api = {
-      createInspectionJob: vi.fn(async () => parseInspectionJob(inspectionPayload())),
-      getInspectionJob: vi.fn(async () => parseInspectionJob(inspectedPayload())),
-      createDownloadJob: vi.fn(async () =>
-        parseDownloadJob(downloadPayload({ state: "queued", artifactReady: false })),
-      ),
-      getDownloadJob: vi.fn(async () =>
-        parseDownloadJob(
-          downloadPayload({
-            state: "ready",
-            artifactReady: true,
-            completedAt: "2026-08-13T04:22:27Z",
-          }),
-        ),
-      ),
-      createBrowserGrant: vi.fn(async () => parseBrowserGrant(browserGrantPayload())),
-      cancelDownloadJob: vi.fn(),
-    };
-    const save = vi.fn(async () => undefined);
-    const store = new Map<string, string>();
-    const controller = new MediaFlowController({
-      api: api as unknown as MediaApi,
-      session: new FlowSession({
-        getItem: (k) => store.get(k) ?? null,
-        setItem: (k, v) => {
-          store.set(k, v);
-        },
-        removeItem: (k) => {
-          store.delete(k);
-        },
-      }),
-      generateToken: () => token,
-      pickerSupported: () => true,
-      secureContext: () => true,
-      documentHidden: () => false,
-      save,
-    });
-    await controller.submit("https://vk.com/video1");
-    controller.selectFormat(OPTION_ID);
-    await controller.enqueueDownload();
-    await vi.waitFor(() => {
-      expect(controller.snapshot().canNativeDownload).toBe(true);
-    });
-    await controller.saveFile();
-    expect(save).toHaveBeenCalledTimes(1);
-    expect(controller.snapshot().phase).toBe("completed");
-    expect([...store.keys()]).toHaveLength(0);
   });
 
   it("reaches format selection when durationSeconds is null", async () => {
@@ -207,7 +151,6 @@ describe("browser flow integration", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -245,7 +188,6 @@ describe("browser flow integration", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -282,7 +224,6 @@ describe("browser flow integration", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -314,7 +255,6 @@ describe("browser flow integration", () => {
         api: api as unknown as MediaApi,
         session: new FlowSession(),
         generateToken: () => token,
-        pickerSupported: () => false,
         secureContext: () => true,
         documentHidden: () => false,
       });
@@ -368,7 +308,6 @@ describe("browser flow integration", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -415,7 +354,6 @@ describe("browser flow integration", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -460,7 +398,6 @@ describe("browser flow integration", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -488,7 +425,6 @@ describe("browser flow integration", () => {
       api: api as unknown as MediaApi,
       session: new FlowSession(),
       generateToken: () => token,
-      pickerSupported: () => false,
       secureContext: () => true,
       documentHidden: () => false,
     });

@@ -55,10 +55,10 @@ describe("soft dimensional UI", () => {
     expect(mediaFlowSource).toContain("data-flow-ready-free");
   });
 
-  it("F. no premium card or public payment CTA was introduced", () => {
+  it("F. the Premium upsell lives in the flow, never in static page chrome", () => {
     expect(indexSource).not.toContain("ready-card--premium");
     expect(indexSource).not.toContain("data-payment");
-    expect(mediaFlowSource).not.toContain("ready-card--premium");
+    expect(mediaFlowSource).toContain("ready-card--premium");
     expect(mediaFlowSource).not.toContain("data-payment");
     expect(mediaFlowSource).not.toContain("robokassa");
   });

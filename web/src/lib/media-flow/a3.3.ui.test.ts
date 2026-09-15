@@ -61,10 +61,8 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: false,
     canStartOver: true,
@@ -85,7 +83,7 @@ function mount(): void {
   document.body.innerHTML = `
     <p data-flow-quota hidden></p>
     <p data-flow-quota-reset hidden></p>
-    <p data-flow-premium-status role="status" aria-live="polite" hidden></p>
+    <p data-flow-premium-status hidden></p>
     <fieldset data-flow-quality hidden>
       <div data-flow-formats hidden></div>
       <div data-flow-premium-checkout hidden>
@@ -201,35 +199,35 @@ describe("PRD2-A3.3 Premium UI", () => {
     expect(document.body.textContent).not.toMatch(/null|NaN|999999/);
   });
 
-  it("keeps loading and lookup errors explicit instead of silently presenting Free", () => {
-    renderFlow(
-      document,
-      snapshot({
-        premiumState: "loading",
-        premiumStatus: null,
-        testCheckoutAvailable: true,
-      }),
-    );
-    expect(document.querySelector("[data-flow-premium-status]")?.textContent).toBe(
-      "Проверяем статус Premium…",
-    );
-    expect(
-      document.querySelector<HTMLElement>("[data-flow-premium-checkout]")?.hidden,
-    ).toBe(true);
-    renderFlow(
-      document,
-      snapshot({
-        premiumState: "error",
-        premiumStatus: null,
-        testCheckoutAvailable: true,
-      }),
-    );
-    expect(document.querySelector("[data-flow-premium-status]")?.textContent).toBe(
-      "Не удалось проверить статус Premium.",
-    );
-    expect(
-      document.querySelector<HTMLElement>("[data-flow-premium-checkout]")?.hidden,
-    ).toBe(true);
+  it("says nothing at all while a background Premium lookup runs or fails", () => {
+    for (const premiumState of ["loading", "error"] as const) {
+      renderFlow(
+        document,
+        snapshot({
+          premiumState,
+          premiumStatus: null,
+          testCheckoutAvailable: true,
+        }),
+      );
+      const status = document.querySelector<HTMLElement>("[data-flow-premium-status]");
+      expect(status?.hidden).toBe(true);
+      expect(status?.textContent).toBe("");
+      expect(document.body.textContent).not.toContain("Проверяем статус Premium");
+      expect(document.body.textContent).not.toContain(
+        "Не удалось проверить статус Premium",
+      );
+      expect(
+        document.querySelector<HTMLElement>("[data-flow-premium-checkout]")?.hidden,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the premium status banner out of the live region churn", () => {
+    const astro = readFileSync(join(here, "../../components/MediaFlow.astro"), "utf8");
+    expect(astro).toContain("data-flow-premium-status hidden");
+    const status = document.querySelector<HTMLElement>("[data-flow-premium-status]");
+    expect(status?.getAttribute("aria-live")).toBeNull();
+    expect(status?.getAttribute("role")).toBeNull();
   });
 
   it("keeps Premium visible without inventing standalone locks", () => {
@@ -274,9 +272,9 @@ describe("PRD2-A3.3 Premium UI", () => {
     expect(document.querySelector("[data-flow-free-plan-quota]")?.textContent).toBe(
       "3 загрузки за 24 ч",
     );
-    expect(document.querySelector("[data-flow-premium-next-step]")?.textContent).toContain(
-      "Оформите Premium на 24 часа",
-    );
+    expect(
+      document.querySelector("[data-flow-premium-next-step]")?.textContent,
+    ).toContain("Оформите Premium на 24 часа");
     expect(
       document.querySelector<HTMLElement>("[data-flow-premium-test-checkout]")?.hidden,
     ).toBe(false);

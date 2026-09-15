@@ -55,11 +55,9 @@ SEO/indexing is out of scope until payments exist.
    was clicked, and the UI does not fake byte progress after browser handoff.
    Grants are reissued near expiry; stale grant responses are ignored when a
    newer generation is active.
-11. Optional **Save as…** (Chromium desktop with File System Access API) still
-    streams `GET …/download-jobs/{id}/content` with the same Bearer token into
-    `showSaveFilePicker`. Credentials are cleared only after a clean FSA close.
-    Where that API exists the UI leads with Save as… and keeps the anchor as a
-    secondary action; where it does not, the anchor is the only action shown.
+11. A4.2.1 removes File System Access «Сохранить как…». READY uses only the
+    ordinary grant-backed browser download; Chromium, Firefox, and Safari share
+    the same control.
 
 The parent token is never placed in the URL, filename, DOM, or logs.
 
@@ -88,24 +86,19 @@ The parent token is never placed in the URL, filename, DOM, or logs.
   Verifying, muxing, and publishing are not byte percentages. `ready`
   shows the exact prepared `artifactBytes` without an approximate sign.
   Pre-download quality rows show `≈` size or “Size available after
-  preparation”. `ready` reaches 100 when server-side preparation is complete;
-  `saving` remains at 100 with an active spinner while the browser writes via
-  File System Access. A retry starts a new preparation attempt and may reset the
-  stage completion value. Idle, error, cancelled, and expired states never render
-  as active progress, and a direct progressive job may go from
-  `downloading_video` straight to `publishing`.
+  preparation”. `ready` reaches 100 when server-side preparation is complete.
+  A retry starts a new preparation attempt and may reset the stage completion
+  value. Idle, error, cancelled, and expired states never render as active
+  progress, and a direct progressive job may go from `downloading_video`
+  straight to `publishing`.
 - Native download uses the grant `downloadPath` exactly as returned (no query,
   fragment, or extra path). The gateway and delivery reject non-empty query
   strings on the grant content route. Browser fragments are not sent on the
-  wire. Save as…
-  uses `suggestedFilename` (sanitized title + validated container). The FSA path
-  parses `Content-Disposition` `filename*` (RFC 8187) and fail-closes on
-  mismatch. This is not a trusted original provider filename.
-- The ready actions follow browser capability rather than showing every path at
-  once. With `showSaveFilePicker`, `Save as…` is the primary button and
-  `Download file` stays mounted as a secondary one; without it, `Save as…` is
-  not rendered and `Download file` is the only action. `Save as…` stays mounted
-  and disabled while a save is in flight.
+  wire. Suggested filenames use sanitized title + validated container
+  (`Content-Disposition` `filename*` / RFC 8187). This is not a trusted
+  original provider filename.
+- READY exposes a single ordinary download control (A4.2.1). There is no File
+  System Access action and no browser-capability branching for save.
 - The spinner lives inside the progress card and is only rendered while an
   operation is in flight. `prefers-reduced-motion` disables its animation.
 - On insecure remote origins (HTTP that is not `localhost` / `127.0.0.1`), the
