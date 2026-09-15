@@ -35,6 +35,8 @@ class DownloadErrorCode(StrEnum):
     MUXING_FAILED = "MUXING_FAILED"
     MUXING_TIMEOUT = "MUXING_TIMEOUT"
     MUXED_OUTPUT_INVALID = "MUXED_OUTPUT_INVALID"
+    DELIVERY_IN_PROGRESS = "DELIVERY_IN_PROGRESS"
+    QUOTA_STATE_INCOHERENT = "QUOTA_STATE_INCOHERENT"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -76,6 +78,12 @@ _PUBLIC_MESSAGES: dict[DownloadErrorCode, str] = {
     DownloadErrorCode.MUXED_OUTPUT_INVALID: (
         "The combined file could not be validated."
     ),
+    DownloadErrorCode.DELIVERY_IN_PROGRESS: (
+        "A download is already in progress. Wait for it to finish, then try again."
+    ),
+    DownloadErrorCode.QUOTA_STATE_INCOHERENT: (
+        "This download cannot be upgraded right now."
+    ),
     DownloadErrorCode.INTERNAL_ERROR: "An unexpected error occurred.",
 }
 
@@ -101,6 +109,8 @@ _HTTP_STATUS: dict[DownloadErrorCode, int] = {
     DownloadErrorCode.MUXING_FAILED: 422,
     DownloadErrorCode.MUXING_TIMEOUT: 504,
     DownloadErrorCode.MUXED_OUTPUT_INVALID: 422,
+    DownloadErrorCode.DELIVERY_IN_PROGRESS: 409,
+    DownloadErrorCode.QUOTA_STATE_INCOHERENT: 409,
     DownloadErrorCode.INTERNAL_ERROR: 500,
 }
 

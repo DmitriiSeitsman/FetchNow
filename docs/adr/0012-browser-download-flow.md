@@ -26,14 +26,11 @@ buffer the whole file in JavaScript memory.
 3. **PR14 primary path:** when the job is ready, the UI requests a short-lived
    browser delivery grant and renders a real same-origin `<a href>` so the
    browser download manager fetches bytes with an HttpOnly cookie (see
-   [ADR 0016](0016-browser-native-delivery-grants.md)). Absence of File System
-   Access is not an error for this path.
-4. **Optional Save as…:** Chromium may still use `showSaveFilePicker` and stream
-   `response.body` with the parent Bearer. Chunks are written and dropped. The
-   ready screen picks the actions by capability: with a save picker, “Save as…”
-   is the lead button and the grant anchor remains as a secondary action;
-   without one, only the grant anchor is rendered (no disabled button, no
-   browser-support note).
+   [ADR 0016](0016-browser-native-delivery-grants.md)).
+4. **A4.2.1 single CTA:** File System Access «Сохранить как…» is removed. READY
+   exposes one ordinary browser-download control for all evergreen browsers
+   (Chromium, Firefox, Safari). The browser decides save location; the UI does
+   not call `showSaveFilePicker`.
 5. A tab-scoped `sessionStorage` recovery record may hold only bounded fields
    (token, job ids, selected option, phase, `expiresAt`) under
    `fetchnow.media-flow.v2`. Schema v1 keys are discarded. Submitted URLs,
@@ -42,9 +39,8 @@ buffer the whole file in JavaScript memory.
 
 ## Consequences
 
-- Chromium desktop is the current save path. Safari/Firefox users can inspect
-  media but cannot finish the save until those browsers ship the API or a later
-  PR adds a separately reviewed alternative.
+- Native download works wherever same-origin cookie navigation works; there is
+  no Chromium-only save path and no FSA feature detection in the web UI.
 - `sessionStorage` is visible to same-origin XSS. CSP on the gateway HTML
   location allows only `'self'` scripts/connect and no `unsafe-eval`.
 - There is no download progress percentage (backend exposes job state, not

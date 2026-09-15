@@ -243,3 +243,61 @@ async def cancel_download_job(
 
     body = service.to_public_dict(view)
     return JSONResponse(status_code=200, content=body, headers=_NO_STORE)
+
+
+@router.post("/download-jobs/{download_job_id}/premium-upgrade", response_model=None)
+async def premium_upgrade_download_job(
+    download_job_id: uuid.UUID,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Promote a READY Free NORMAL_VIDEO artifact to Premium delivery policy."""
+    request_id = _request_id(request)
+    token = _bearer_token(authorization)
+    if token is None:
+        return _download_error_response(
+            DownloadError(DownloadErrorCode.DOWNLOAD_JOB_NOT_FOUND),
+            request_id,
+        )
+
+    service = _get_download_service(request)
+    session_factory = _get_session_factory(request)
+    try:
+        async with session_factory() as session:
+            identity = await QuotaService(request.app.state.settings).require_identity(
+                cookie_header=request.headers.get("cookie"),
+                session=session,
+            )
+            view = await service.upgrade_to_premium(
+                download_job_id=download_job_id,
+                access_token=token,
+                anonymous_client_id=identity.id,
+                session=session,
+            )
+            await session.commit()
+    except AnonymousIdentityRequiredError as exc:
+        return JSONResponse(
+            status_code=exc.http_status,
+            headers=_NO_STORE,
+            content=error_envelope(
+                code=exc.code,
+                message=exc.message,
+                request_id=request_id,
+            ),
+        )
+    except DownloadError as exc:
+        return _download_error_response(exc, request_id)
+    except Exception:
+        logger.exception("media_download_premium_upgrade_failed")
+        return JSONResponse(
+            status_code=500,
+            headers=_NO_STORE,
+            content=error_envelope(
+                code="INTERNAL_ERROR",
+                message="An unexpected error occurred.",
+                request_id=request_id,
+            ),
+        )
+
+    body = service.to_public_dict(view)
+    return JSONResponse(status_code=200, content=body, headers=_NO_STORE)

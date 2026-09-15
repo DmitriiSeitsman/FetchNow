@@ -17,11 +17,7 @@ import {
   inspectionPayload,
   progressiveFormat,
 } from "./fixtures";
-import {
-  parseDownloadJob,
-  parseInspectionJob,
-  type MediaFormat,
-} from "./contracts";
+import { parseDownloadJob, parseInspectionJob, type MediaFormat } from "./contracts";
 
 function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
   return {
@@ -37,10 +33,8 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: true,
     canSubmit: false,
     canStartOver: true,
@@ -112,7 +106,8 @@ describe("PR10 loader, format, and contrast UX", () => {
 
   it("makes every combined quality selectable and defaults visually to 1080p", () => {
     const formats = postPr9Formats();
-    const selected = formats.find((item) => item.height === 1080)?.formatOptionId ?? null;
+    const selected =
+      formats.find((item) => item.height === 1080)?.formatOptionId ?? null;
     document.body.innerHTML = `
       <div data-flow-formats></div>
       <p data-flow-mux>Combined video+audio files are required; muxing is not offered yet</p>
@@ -147,9 +142,9 @@ describe("PR10 loader, format, and contrast UX", () => {
     expect(enabled).toHaveLength(6);
     const mux = document.querySelector<HTMLElement>("[data-flow-mux]");
     expect(mux?.hidden).toBe(true);
-    expect(document.querySelector("[data-flow-formats]")?.textContent ?? "").not.toMatch(
-      /muxing is not offered/i,
-    );
+    expect(
+      document.querySelector("[data-flow-formats]")?.textContent ?? "",
+    ).not.toMatch(/muxing is not offered/i);
     const selectedLabel = document.querySelector(".format-selected .format-label");
     expect(selectedLabel?.textContent).toBe("1080p");
   });
@@ -201,7 +196,6 @@ describe("PR10 loader, format, and contrast UX", () => {
         },
       }),
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
     });
@@ -259,7 +253,6 @@ describe("PR10 loader, format, and contrast UX", () => {
         removeItem: () => undefined,
       }),
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
     });

@@ -19,7 +19,12 @@ import {
   progressiveFormat,
   OPTION_ID,
 } from "./fixtures";
-import { parseBrowserGrant, parseDownloadJob, parseInspectionJob, type MediaFormat } from "./contracts";
+import {
+  parseBrowserGrant,
+  parseDownloadJob,
+  parseInspectionJob,
+  type MediaFormat,
+} from "./contracts";
 import { flowErrorFromCode } from "./errors";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,10 +67,8 @@ function snapshot(partial: Partial<FlowSnapshot> = {}): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: true,
     canStartOver: false,
@@ -122,7 +125,6 @@ function mountFlow(): void {
       <p class="hint" data-flow-mux hidden></p>
       <button data-flow-download hidden>Prepare download</button>
       <a data-flow-native-download hidden download>Download file</a>
-      <button data-flow-save-as hidden>Save as…</button>
       <button data-flow-reset hidden>Start over</button>
     </section>
   `;
@@ -168,7 +170,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
   });
 
   it("keeps Cancel task inside the progress card footer", () => {
-    const progressIdx = astroSource.indexOf('data-flow-progress');
+    const progressIdx = astroSource.indexOf("data-flow-progress");
     const cancelIdx = astroSource.indexOf("data-flow-cancel");
     const progressEnd = astroSource.indexOf("</section>", progressIdx);
     expect(progressIdx).toBeGreaterThan(-1);
@@ -201,8 +203,11 @@ describe("PR11 loader, quality and stage progress UI", () => {
   it("declares the loader hidden in markup and lets [hidden] win over the layout CSS", () => {
     expect(astroSource).toMatch(/<span class="loader" data-flow-loader hidden>/);
     expect(astroSource).toMatch(/<section class="progress-card"[^>]*hidden>/);
+    expect(astroSource).toMatch(/class="quality-card"/);
+    expect(astroSource).toMatch(/data-flow-quality/);
+    expect(astroSource).toMatch(/aria-labelledby="flow-quality-title"/);
     expect(astroSource).toMatch(
-      /<fieldset class="quality-card" data-flow-quality aria-labelledby="flow-quality-title" hidden>/,
+      /<fieldset[\s\S]*?class="quality-card"[\s\S]*?hidden[\s\S]*?>/,
     );
     expect(astroSource.indexOf("data-flow-progress")).toBeLessThan(
       astroSource.indexOf("data-flow-loader"),
@@ -241,7 +246,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(el("[data-flow-loader]").hidden).toBe(true);
     expect(el("[data-flow-progress]").hidden).toBe(true);
     expect(el("[data-flow-quality]").hidden).toBe(false);
-    expect(el("[data-flow-status]").textContent).toBe("Выберите качество для скачивания.");
+    expect(el("[data-flow-status]").textContent).toBe(
+      "Выберите качество для скачивания.",
+    );
   });
 
   it("shows the selected quality even when only one grouped option exists", () => {
@@ -267,17 +274,12 @@ describe("PR11 loader, quality and stage progress UI", () => {
 
   it("shows the spinner only while an operation is running", () => {
     mountFlow();
-    for (const phase of [
-      "submitting",
-      "inspecting",
-      "downloading",
-      "saving",
-    ] as const) {
+    for (const phase of ["submitting", "inspecting", "downloading"] as const) {
       renderFlow(document, snapshot({ phase, progressStage: null }));
       expect(el("[data-flow-loader]").hidden).toBe(false);
       expect(el("[data-flow-progress]").hidden).toBe(false);
     }
-    for (const phase of ["idle", "inspected", "ready", "completed"] as const) {
+    for (const phase of ["idle", "inspected", "ready"] as const) {
       renderFlow(document, snapshot({ phase }));
       expect(el("[data-flow-loader]").hidden).toBe(true);
     }
@@ -306,10 +308,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
     const labels = [...document.querySelectorAll(".format-label")].map(
       (node) => node.textContent,
     );
-    expect(labels).toEqual([
-      "720p",
-      "480p",
-    ]);
+    expect(labels).toEqual(["720p", "480p"]);
     expect(el("[data-flow-formats]").textContent).toContain("MP4");
     expect(el("[data-flow-formats]").textContent).toContain("30 fps");
   });
@@ -357,9 +356,7 @@ describe("PR11 loader, quality and stage progress UI", () => {
         downloadEligible: true,
       }),
     );
-    expect(el(".format-detail").textContent).toBe(
-      "MP4",
-    );
+    expect(el(".format-detail").textContent).toBe("MP4");
   });
 
   it("disables an unavailable quality with a short reason", () => {
@@ -425,7 +422,9 @@ describe("PR11 loader, quality and stage progress UI", () => {
     expect(el(".progress-note").textContent).toMatch(
       /Download percentages appear when an estimated size is available/i,
     );
-    expect(el(".progress-note").textContent ?? "").not.toMatch(/not a download percentage/i);
+    expect(el(".progress-note").textContent ?? "").not.toMatch(
+      /not a download percentage/i,
+    );
   });
 
   it("lets a direct progressive job skip the audio and muxing stages", () => {
@@ -449,29 +448,22 @@ describe("PR11 loader, quality and stage progress UI", () => {
     );
   });
 
-  it("shows retrying, ready, saving and completed states honestly", () => {
+  it("shows retrying and ready states honestly", () => {
     mountFlow();
     renderFlow(document, snapshot({ phase: "downloading", progressStage: "retrying" }));
     expect(el("[data-flow-progress-label]").textContent).toBe("Повторяем подготовку…");
 
     renderFlow(
       document,
-      snapshot({ phase: "ready", progressStage: "ready", statusText: "Готово к скачиванию" }),
+      snapshot({
+        phase: "ready",
+        progressStage: "ready",
+        statusText: "Готово к скачиванию",
+      }),
     );
     expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
     expect(el("[data-flow-progress-label]").textContent).toBe("Готово к скачиванию");
     expect(el("[data-flow-progress]").dataset.tone).toBe("done");
-    expect(el("[data-flow-loader]").hidden).toBe(true);
-
-    renderFlow(document, snapshot({ phase: "saving" }));
-    expect(el("[data-flow-progress-label]").textContent).toBe(
-      "Сохраняем на ваш компьютер…",
-    );
-    expect(el("[data-flow-loader]").hidden).toBe(false);
-
-    renderFlow(document, snapshot({ phase: "completed" }));
-    expect(el("[data-flow-progress-label]").textContent).toBe("Сохранено на ваш компьютер");
-    expect(el("[data-flow-progress-bar]").getAttribute("aria-valuenow")).toBe("100");
     expect(el("[data-flow-loader]").hidden).toBe(true);
   });
 
@@ -564,7 +556,6 @@ describe("PR11 loader, quality and stage progress UI", () => {
         removeItem: () => undefined,
       }),
       generateToken: () => generateAccessToken(),
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => {
@@ -622,7 +613,6 @@ describe("PR11 loader, quality and stage progress UI", () => {
         removeItem: () => undefined,
       }),
       generateToken: () => generateAccessToken(),
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => {
@@ -683,7 +673,6 @@ describe("PR11 loader, quality and stage progress UI", () => {
       api: api as unknown as MediaApi,
       session,
       generateToken: () => token,
-      pickerSupported: () => true,
       secureContext: () => true,
       documentHidden: () => false,
       onChange: (snap) => renderFlow(document, snap),

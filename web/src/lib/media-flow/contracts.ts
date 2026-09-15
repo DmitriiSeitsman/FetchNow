@@ -353,7 +353,18 @@ export type PremiumStatus =
       remainingSeconds: number;
     };
 
-export type PaymentConfig = { testCheckoutAvailable: boolean };
+/** Non-secret catalog projection used to price the Premium offer in the UI. */
+export type PaymentProductSummary = {
+  productCode: "premium_24h";
+  amountMinor: number;
+  currency: "RUB";
+  entitlementDurationSeconds: number;
+};
+
+export type PaymentConfig = {
+  testCheckoutAvailable: boolean;
+  product: PaymentProductSummary | null;
+};
 
 export type PaymentOrderStatus = {
   status: "CREATED" | "PENDING" | "PAID" | "EXPIRED";
@@ -385,10 +396,12 @@ export function parsePremiumStatus(value: unknown): PremiumStatus {
   if (
     value.active !== true ||
     Object.keys(value).some(
-      (key) => !["active", "expiresAt", "productCode", "remainingSeconds"].includes(key),
+      (key) =>
+        !["active", "expiresAt", "productCode", "remainingSeconds"].includes(key),
     ) ||
     value.productCode !== "premium_24h"
-  ) fail();
+  )
+    fail();
   return {
     active: true,
     expiresAt: requireIso(value.expiresAt),
@@ -397,22 +410,64 @@ export function parsePremiumStatus(value: unknown): PremiumStatus {
   };
 }
 
+const PAYMENT_CONFIG_KEYS = new Set(["testCheckoutAvailable", "product"]);
+const PAYMENT_PRODUCT_KEYS = new Set([
+  "productCode",
+  "amountMinor",
+  "currency",
+  "entitlementDurationSeconds",
+]);
+
 export function parsePaymentConfig(value: unknown): PaymentConfig {
-  if (!isRecord(value) || Object.keys(value).length !== 1) fail();
-  return { testCheckoutAvailable: requireBoolean(value.testCheckoutAvailable) };
+  if (!isRecord(value)) fail();
+  rejectForbidden(value);
+  rejectUnknown(value, PAYMENT_CONFIG_KEYS);
+  return {
+    testCheckoutAvailable: requireBoolean(value.testCheckoutAvailable),
+    product: parsePaymentProductSummary(value.product),
+  };
+}
+
+/** Older deployments omit `product` entirely; that is a priceless offer, not an error. */
+function parsePaymentProductSummary(value: unknown): PaymentProductSummary | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!isRecord(value)) fail();
+  rejectForbidden(value);
+  rejectUnknown(value, PAYMENT_PRODUCT_KEYS);
+  if (value.productCode !== "premium_24h" || value.currency !== "RUB") fail();
+  return {
+    productCode: "premium_24h",
+    amountMinor: requireIntegerInRange(value.amountMinor, 1, 100_000_000),
+    currency: "RUB",
+    entitlementDurationSeconds: requireIntegerInRange(
+      value.entitlementDurationSeconds,
+      1,
+      31_536_000,
+    ),
+  };
 }
 
 export function parsePaymentOrderStatus(value: unknown): PaymentOrderStatus {
   if (!isRecord(value)) fail();
   rejectForbidden(value);
-  const keys = ["status", "productCode", "amountMinor", "currency", "createdAt", "paidAt"];
+  const keys = [
+    "status",
+    "productCode",
+    "amountMinor",
+    "currency",
+    "createdAt",
+    "paidAt",
+  ];
   if (Object.keys(value).some((key) => !keys.includes(key))) fail();
   if (
     typeof value.status !== "string" ||
     !["CREATED", "PENDING", "PAID", "EXPIRED"].includes(value.status) ||
     value.productCode !== "premium_24h" ||
     value.currency !== "RUB"
-  ) fail();
+  )
+    fail();
   return {
     status: value.status as PaymentOrderStatus["status"],
     productCode: "premium_24h",
@@ -426,7 +481,12 @@ export function parsePaymentOrderStatus(value: unknown): PaymentOrderStatus {
 export function parseCreatedPaymentOrder(value: unknown): CreatedPaymentOrder {
   if (!isRecord(value) || !isRecord(value.paymentForm)) fail();
   rejectForbidden(value);
-  if (Object.keys(value).some((key) => !["orderId", "status", "paymentForm"].includes(key))) fail();
+  if (
+    Object.keys(value).some(
+      (key) => !["orderId", "status", "paymentForm"].includes(key),
+    )
+  )
+    fail();
   const form = value.paymentForm;
   if (
     !isUuid(value.orderId) ||
@@ -434,7 +494,8 @@ export function parseCreatedPaymentOrder(value: unknown): CreatedPaymentOrder {
     form.action !== "https://auth.robokassa.ru/Merchant/Index.aspx" ||
     form.method !== "POST" ||
     !isRecord(form.fields)
-  ) fail();
+  )
+    fail();
   const fields: Record<string, string> = {};
   const fieldNames = new Set([
     "MerchantLogin",
@@ -447,14 +508,16 @@ export function parseCreatedPaymentOrder(value: unknown): CreatedPaymentOrder {
     "Culture",
   ]);
   for (const [key, field] of Object.entries(form.fields)) {
-    if (!fieldNames.has(key) || typeof field !== "string" || field.length > 8192) fail();
+    if (!fieldNames.has(key) || typeof field !== "string" || field.length > 8192)
+      fail();
     fields[key] = field;
   }
   if (
     Object.keys(fields).length !== fieldNames.size ||
     fields.IsTest !== "1" ||
     !/^[0-9a-f]{64}$/i.test(fields.SignatureValue ?? "")
-  ) fail();
+  )
+    fail();
   return {
     orderId: value.orderId,
     status: "PENDING",
@@ -629,58 +692,57 @@ export type ProviderCanonicalRule = {
 };
 
 /** Exact public hosts + path grammar from the backend provider registry. */
-export const PROVIDER_CANONICAL_RULES: Readonly<
-  Record<string, ProviderCanonicalRule>
-> = Object.freeze({
-  vk: Object.freeze({
-    displayName: "VK",
-    hosts: Object.freeze([
-      "vk.com",
-      "www.vk.com",
-      "m.vk.com",
-      "vk.ru",
-      "www.vk.ru",
-      "m.vk.ru",
-      "vkvideo.ru",
-      "www.vkvideo.ru",
-      "m.vkvideo.ru",
-    ]),
-    pathRe: VK_PATH_RE,
-    mediaIdFromMatch: (match: RegExpExecArray) => `${match[1]}_${match[2]}`,
-  }),
-  rutube: Object.freeze({
-    displayName: "Rutube",
-    hosts: Object.freeze(["rutube.ru", "www.rutube.ru"]),
-    pathRe: RUTUBE_PATH_RE,
-    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
-  }),
-  ok: Object.freeze({
-    displayName: "OK",
-    hosts: Object.freeze([
-      "ok.ru",
-      "www.ok.ru",
-      "m.ok.ru",
-      "mobile.ok.ru",
-      "odnoklassniki.ru",
-      "www.odnoklassniki.ru",
-      "m.odnoklassniki.ru",
-      "mobile.odnoklassniki.ru",
-    ]),
-    pathRe: OK_PATH_RE,
-    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
-  }),
-  dzen: Object.freeze({
-    displayName: "Дзен",
-    hosts: Object.freeze([
-      "dzen.ru",
-      "www.dzen.ru",
-      "zen.yandex.ru",
-      "www.zen.yandex.ru",
-    ]),
-    pathRe: DZEN_PATH_RE,
-    mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
-  }),
-});
+export const PROVIDER_CANONICAL_RULES: Readonly<Record<string, ProviderCanonicalRule>> =
+  Object.freeze({
+    vk: Object.freeze({
+      displayName: "VK",
+      hosts: Object.freeze([
+        "vk.com",
+        "www.vk.com",
+        "m.vk.com",
+        "vk.ru",
+        "www.vk.ru",
+        "m.vk.ru",
+        "vkvideo.ru",
+        "www.vkvideo.ru",
+        "m.vkvideo.ru",
+      ]),
+      pathRe: VK_PATH_RE,
+      mediaIdFromMatch: (match: RegExpExecArray) => `${match[1]}_${match[2]}`,
+    }),
+    rutube: Object.freeze({
+      displayName: "Rutube",
+      hosts: Object.freeze(["rutube.ru", "www.rutube.ru"]),
+      pathRe: RUTUBE_PATH_RE,
+      mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+    }),
+    ok: Object.freeze({
+      displayName: "OK",
+      hosts: Object.freeze([
+        "ok.ru",
+        "www.ok.ru",
+        "m.ok.ru",
+        "mobile.ok.ru",
+        "odnoklassniki.ru",
+        "www.odnoklassniki.ru",
+        "m.odnoklassniki.ru",
+        "mobile.odnoklassniki.ru",
+      ]),
+      pathRe: OK_PATH_RE,
+      mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+    }),
+    dzen: Object.freeze({
+      displayName: "Дзен",
+      hosts: Object.freeze([
+        "dzen.ru",
+        "www.dzen.ru",
+        "zen.yandex.ru",
+        "www.zen.yandex.ru",
+      ]),
+      pathRe: DZEN_PATH_RE,
+      mediaIdFromMatch: (match: RegExpExecArray) => match[1]!,
+    }),
+  });
 
 /** Exact public hosts mirrored from the backend provider registry. */
 export const VK_CANONICAL_HOSTS = PROVIDER_CANONICAL_RULES.vk!.hosts;
@@ -800,7 +862,12 @@ function explicitPortInAuthority(authority: string): boolean {
 }
 
 function requireIntegerInRange(value: unknown, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  ) {
     fail();
   }
   return value;
@@ -858,7 +925,10 @@ function parseProviderCapabilities(
     value.contentKinds,
     PROVIDER_CAPABILITY_CONTENT_KINDS_KEYS,
   );
-  const metadata = parseCapabilityMap(value.metadata, PROVIDER_CAPABILITY_METADATA_KEYS);
+  const metadata = parseCapabilityMap(
+    value.metadata,
+    PROVIDER_CAPABILITY_METADATA_KEYS,
+  );
   return {
     providerId: requireSafeToken(value.providerId),
     operations: {
@@ -881,7 +951,10 @@ function parseProviderCapabilities(
   };
 }
 
-export function isSafeSuggestedFilename(name: unknown, container: string): name is string {
+export function isSafeSuggestedFilename(
+  name: unknown,
+  container: string,
+): name is string {
   if (typeof name !== "string" || !ALLOWED_CONTAINERS.has(container)) {
     return false;
   }
@@ -933,7 +1006,10 @@ export function sanitizeFilenameStem(raw: string | null | undefined): string | n
     }
     cleaned.push(char);
   }
-  let collapsed = cleaned.join("").replace(/\s+/g, " ").replace(/^[ .]+|[ .]+$/g, "");
+  let collapsed = cleaned
+    .join("")
+    .replace(/\s+/g, " ")
+    .replace(/^[ .]+|[ .]+$/g, "");
   if (!collapsed || collapsed === "." || collapsed === "..") {
     return null;
   }
@@ -1053,9 +1129,7 @@ export function parseMediaFormat(value: unknown): MediaFormat {
     mediaKind,
     requiresPremium,
     bitrateKbps:
-      value.bitrateKbps === undefined
-        ? null
-        : optionalFiniteNumber(value.bitrateKbps),
+      value.bitrateKbps === undefined ? null : optionalFiniteNumber(value.bitrateKbps),
   };
 }
 
@@ -1144,16 +1218,9 @@ export function parseInspectionJob(value: unknown): InspectionJob {
   const createdAt = requireIso(value.createdAt);
   const updatedAt = requireIso(value.updatedAt);
   const expiresAt = requireIso(value.expiresAt);
-  const completedAt =
-    value.completedAt === null ? null : requireIso(value.completedAt);
+  const completedAt = value.completedAt === null ? null : requireIso(value.completedAt);
   const providerCapabilities = parseProviderCapabilities(value.providerCapabilities);
-  assertInspectionTimestamps(
-    typedState,
-    createdAt,
-    updatedAt,
-    expiresAt,
-    completedAt,
-  );
+  assertInspectionTimestamps(typedState, createdAt, updatedAt, expiresAt, completedAt);
   return {
     id,
     state: typedState,
@@ -1375,8 +1442,7 @@ export function parseDownloadJob(value: unknown): DownloadJob {
   }
   const nextAttemptAt =
     value.nextAttemptAt === null ? null : requireIso(value.nextAttemptAt);
-  const retrying =
-    typedDownloadState === "queued" && typedProgress === "retrying";
+  const retrying = typedDownloadState === "queued" && typedProgress === "retrying";
   if (retrying) {
     if (nextAttemptAt === null) {
       fail();
@@ -1402,7 +1468,9 @@ export function parseDownloadJob(value: unknown): DownloadJob {
     typedDownloadState,
     artifactReady,
   );
-  const deliveryRateBytesPerSecond = parseDeliveryRate(value.deliveryRateBytesPerSecond);
+  const deliveryRateBytesPerSecond = parseDeliveryRate(
+    value.deliveryRateBytesPerSecond,
+  );
   const suggestedFilename = value.suggestedFilename;
   if (!isSafeSuggestedFilename(suggestedFilename, selectedFormat.container)) {
     fail();
@@ -1410,8 +1478,7 @@ export function parseDownloadJob(value: unknown): DownloadJob {
   const createdAt = requireIso(value.createdAt);
   const updatedAt = requireIso(value.updatedAt);
   const expiresAt = requireIso(value.expiresAt);
-  const completedAt =
-    value.completedAt === null ? null : requireIso(value.completedAt);
+  const completedAt = value.completedAt === null ? null : requireIso(value.completedAt);
   const providerCapabilities = parseProviderCapabilities(value.providerCapabilities);
   assertDownloadTimestamps(
     typedDownloadState,
@@ -1485,17 +1552,11 @@ function parseArtifactBytes(
 
 export function parseApiError(value: unknown): ApiErrorBody {
   if (!isRecord(value) || !isRecord(value.error)) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   const code = value.error.code;
   if (typeof code !== "string" || code.length === 0 || code.length > 64) {
-    throw new FlowError(
-      "CONTRACT",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("CONTRACT", GENERIC_USER_MESSAGE);
   }
   return {
     error: {
@@ -1507,9 +1568,6 @@ export function parseApiError(value: unknown): ApiErrorBody {
 
 export function assertCanonicalToken(token: string): void {
   if (!isCanonicalAccessToken(token)) {
-    throw new FlowError(
-      "INVALID_ACCESS_TOKEN",
-      GENERIC_USER_MESSAGE,
-    );
+    throw new FlowError("INVALID_ACCESS_TOKEN", GENERIC_USER_MESSAGE);
   }
 }

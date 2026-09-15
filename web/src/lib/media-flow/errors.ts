@@ -192,6 +192,14 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "Файл ещё не готов. Подождите немного.",
     retryable: true,
   },
+  DELIVERY_IN_PROGRESS: {
+    text: "Скачивание уже идёт. Дождитесь его завершения и попробуйте снова.",
+    retryable: true,
+  },
+  QUOTA_STATE_INCOHERENT: {
+    text: "Эту загрузку сейчас нельзя перевести на Premium. Подготовьте её заново.",
+    retryable: false,
+  },
   FILE_TOO_LARGE: {
     text: "Файл превышает допустимый размер для подготовки.",
     retryable: false,
@@ -214,16 +222,8 @@ const MESSAGES: Record<string, { text: string; retryable: boolean }> = {
     text: "Сетевой запрос не удался. Проверьте соединение и попробуйте снова.",
     retryable: true,
   },
-  BROWSER_UNSUPPORTED: {
-    text: "«Сохранить как…» доступно в браузерах с File System Access API (актуальный Chromium на компьютере). Используйте «Скачать файл» или откройте страницу в поддерживаемом браузере.",
-    retryable: false,
-  },
   HTTPS_REQUIRED: {
     text: "Откройте эту страницу по HTTPS, чтобы скачать подготовленный файл.",
-    retryable: false,
-  },
-  SAVE_FAILED: {
-    text: "Не удалось сохранить файл. Можно повторить попытку или скачать его обычным способом.",
     retryable: false,
   },
   CONTRACT: { text: GENERIC, retryable: false },

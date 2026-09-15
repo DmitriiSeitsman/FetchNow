@@ -111,9 +111,18 @@ export function mountMediaFlow(
   root.querySelector("[data-flow-download]")?.addEventListener("click", () => {
     void controller.enqueueDownload();
   });
-  root.querySelector("[data-flow-premium-cta]")?.addEventListener("click", () => {
-    void controller.startTestCheckout();
-  });
+  for (const cta of root.querySelectorAll(
+    "[data-flow-premium-cta], [data-flow-ready-premium-cta]",
+  )) {
+    cta.addEventListener("click", () => {
+      void controller.startTestCheckout();
+    });
+  }
+  root
+    .querySelector("[data-flow-premium-upgrade-retry]")
+    ?.addEventListener("click", () => {
+      void controller.upgradeToPremium({ userInitiated: true });
+    });
 
   const onNativeClick = (event: Event) => {
     const allow = controller.onNativeDownloadClick();
@@ -127,9 +136,6 @@ export function mountMediaFlow(
 
   root.querySelector("[data-flow-grant-retry]")?.addEventListener("click", () => {
     controller.retryGrantAccess();
-  });
-  root.querySelector("[data-flow-save-as]")?.addEventListener("click", () => {
-    void controller.saveFile();
   });
   root.querySelector("[data-flow-reset]")?.addEventListener("click", () => {
     const urlInput = root.querySelector<HTMLInputElement>("[data-flow-url]");

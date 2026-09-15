@@ -4,6 +4,12 @@
 
 const MB = 1024 * 1024;
 
+/**
+ * Estimated Free delivery duration from which the Premium offer earns visual
+ * emphasis instead of the compact treatment (15 minutes).
+ */
+export const PREMIUM_HIGHLIGHT_ETA_SECONDS = 900;
+
 export function pluralizeRussian(
   value: number,
   one: string,

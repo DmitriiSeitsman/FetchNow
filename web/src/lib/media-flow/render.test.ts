@@ -36,10 +36,8 @@ function snapshot(partial: Partial<FlowSnapshot>): FlowSnapshot {
     grantArming: false,
     canNativeDownload: false,
     canRetryGrant: false,
-    canSaveAs: false,
     downloadHref: null,
     nativeDownloadHandoff: false,
-    browserUnsupported: false,
     busy: false,
     canSubmit: false,
     canStartOver: true,
@@ -89,7 +87,6 @@ describe("render", () => {
       <button data-flow-submit></button>
       <button data-flow-download></button>
       <a data-flow-native-download hidden download></a>
-      <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
       <p data-flow-https hidden></p>
@@ -113,7 +110,6 @@ describe("render", () => {
       <button data-flow-submit></button>
       <button data-flow-download></button>
       <a data-flow-native-download hidden download></a>
-      <button data-flow-save-as></button>
       <button data-flow-reset></button>
       <p data-flow-mux></p>
       <p data-flow-https hidden></p>
@@ -175,18 +171,26 @@ describe("render", () => {
         downloadEligible: true,
       }),
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
-    expect(document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled).toBe(
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(
       false,
     );
-    expect(document.querySelector<HTMLInputElement>("input[type=radio]")?.checked).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>("[data-flow-download]")?.disabled,
+    ).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("input[type=radio]")?.checked).toBe(
+      true,
+    );
 
     renderFlow(document, snapshot({ canSelectQuality: true }));
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(
+      false,
+    );
     expect(document.querySelectorAll("input[type=radio]")).toHaveLength(2);
 
     renderFlow(document, snapshot({ canSelectQuality: false }));
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(
+      true,
+    );
 
     renderFlow(
       document,
@@ -206,15 +210,21 @@ describe("render", () => {
         downloadEligible: false,
       }),
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(
+      false,
+    );
     expect(document.querySelectorAll("input[type=radio]")).toHaveLength(0);
-    expect(document.querySelector("[data-category-panel='audio_only']")?.textContent).toContain("нет доступных вариантов аудио");
+    expect(
+      document.querySelector("[data-category-panel='audio_only']")?.textContent,
+    ).toContain("нет доступных вариантов аудио");
 
     // Legacy snapshots omit canSelectQuality; treat as allowed when 2+ options exist.
     const legacySnapshot = snapshot({});
     delete legacySnapshot.canSelectQuality;
     renderFlow(document, legacySnapshot);
-    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("[data-flow-quality]")?.hidden).toBe(
+      false,
+    );
   });
 
   it("shows the unavailable hint only when no executable option exists", () => {
@@ -244,10 +254,13 @@ describe("render", () => {
       snapshot({
         phase: "ready",
         canNativeDownload: true,
-        downloadHref: "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
+        downloadHref:
+          "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
       }),
     );
-    const link = document.querySelector<HTMLAnchorElement>("[data-flow-native-download]");
+    const link = document.querySelector<HTMLAnchorElement>(
+      "[data-flow-native-download]",
+    );
     expect(link?.tagName).toBe("A");
     expect(link?.getAttribute("href")).toBe(
       "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
@@ -255,14 +268,13 @@ describe("render", () => {
     expect(link?.hidden).toBe(false);
   });
 
-  it("keeps READY save and ordinary-download actions visible with a local save error", () => {
+  it("keeps the READY download action visible alongside a flow error", () => {
     document.body.innerHTML = `
       <p data-flow-status></p>
       <section data-flow-ready hidden>
         <span data-flow-ready-details></span>
         <span data-flow-ready-speed hidden></span>
         <span data-flow-ready-time hidden></span>
-        <button data-flow-save-as hidden></button>
         <a data-flow-native-download hidden download></a>
       </section>
       <p data-flow-grant-pending hidden></p>
@@ -273,20 +285,21 @@ describe("render", () => {
       document,
       snapshot({
         phase: "ready",
-        errorText:
-          "Не удалось сохранить файл. Можно повторить попытку или скачать его обычным способом.",
-        canSaveAs: true,
+        errorText: "Не удалось обновить доступ к скачиванию.",
         canNativeDownload: true,
         downloadHref:
           "/api/v1/media/browser-grants/bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee/content",
       }),
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-status]")?.textContent).toContain(
-      "скачать его обычным способом",
+    expect(
+      document.querySelector<HTMLElement>("[data-flow-status]")?.textContent,
+    ).toContain("Не удалось обновить доступ");
+    expect(document.querySelector<HTMLElement>("[data-flow-ready]")?.hidden).toBe(
+      false,
     );
-    expect(document.querySelector<HTMLElement>("[data-flow-ready]")?.hidden).toBe(false);
-    expect(document.querySelector<HTMLElement>("[data-flow-save-as]")?.hidden).toBe(false);
-    expect(document.querySelector<HTMLElement>("[data-flow-native-download]")?.hidden).toBe(false);
+    const link = document.querySelector<HTMLElement>("[data-flow-native-download]");
+    expect(link?.hidden).toBe(false);
+    expect(link?.classList.contains("btn-primary")).toBe(true);
   });
 
   it("does not write into a detached flow root", () => {

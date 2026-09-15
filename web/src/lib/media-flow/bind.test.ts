@@ -96,9 +96,9 @@ describe("bind", () => {
     const readText = vi.fn().mockResolvedValue("https://from-pending.test");
     const pending = Promise.resolve("  https://prestarted.test/v  ");
 
-    await expect(
-      pasteClipboardIntoInput(input, { readText }, pending),
-    ).resolves.toBe(true);
+    await expect(pasteClipboardIntoInput(input, { readText }, pending)).resolves.toBe(
+      true,
+    );
 
     expect(readText).not.toHaveBeenCalled();
     expect(input.value).toBe("https://prestarted.test/v");
@@ -128,9 +128,9 @@ describe("bind", () => {
       expect(input?.value).toBe("https://click-paste.test/video");
     });
     expect(readText).toHaveBeenCalledOnce();
-    expect(
-      document.querySelector<HTMLElement>("[data-flow-paste-hint]")?.hidden,
-    ).toBe(true);
+    expect(document.querySelector<HTMLElement>("[data-flow-paste-hint]")?.hidden).toBe(
+      true,
+    );
     await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });
@@ -201,9 +201,7 @@ describe("bind", () => {
     const hint = document.querySelector<HTMLElement>("[data-flow-paste-hint]");
     document.querySelector<HTMLButtonElement>("[data-flow-paste]")?.click();
     expect(hint?.hidden).toBe(false);
-    expect(document.activeElement).toBe(
-      document.querySelector("[data-flow-url]"),
-    );
+    expect(document.activeElement).toBe(document.querySelector("[data-flow-url]"));
     await drainQuotaAndDisconnect(controller);
     vi.unstubAllGlobals();
   });

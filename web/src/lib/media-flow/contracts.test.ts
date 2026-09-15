@@ -54,30 +54,97 @@ const providerCapabilities = {
 describe("contracts", () => {
   it("accepts only explicit Premium and derived checkout config contracts", () => {
     expect(parsePremiumStatus({ active: false })).toEqual({ active: false });
-    expect(parsePremiumStatus({
-      active: true,
-      expiresAt: "2026-09-08T12:00:00Z",
-      productCode: "premium_24h",
-      remainingSeconds: 86_400,
-    })).toMatchObject({ active: true, productCode: "premium_24h" });
-    expect(parsePaymentConfig({ testCheckoutAvailable: true }))
-      .toEqual({ testCheckoutAvailable: true });
-    expect(() => parsePaymentConfig({
+    expect(
+      parsePremiumStatus({
+        active: true,
+        expiresAt: "2026-09-08T12:00:00Z",
+        productCode: "premium_24h",
+        remainingSeconds: 86_400,
+      }),
+    ).toMatchObject({ active: true, productCode: "premium_24h" });
+    expect(parsePaymentConfig({ testCheckoutAvailable: true })).toEqual({
       testCheckoutAvailable: true,
-      ROBOKASSA_TEST_PASSWORD1: "secret",
-    })).toThrow(FlowError);
-    expect(() => parsePremiumStatus({ active: true, premium: true })).toThrow(FlowError);
+      product: null,
+    });
+    expect(parsePaymentConfig({ testCheckoutAvailable: false, product: null })).toEqual(
+      { testCheckoutAvailable: false, product: null },
+    );
+    expect(
+      parsePaymentConfig({
+        testCheckoutAvailable: true,
+        product: {
+          productCode: "premium_24h",
+          amountMinor: 9900,
+          currency: "RUB",
+          entitlementDurationSeconds: 86_400,
+        },
+      }),
+    ).toEqual({
+      testCheckoutAvailable: true,
+      product: {
+        productCode: "premium_24h",
+        amountMinor: 9900,
+        currency: "RUB",
+        entitlementDurationSeconds: 86_400,
+      },
+    });
+    expect(() =>
+      parsePaymentConfig({
+        testCheckoutAvailable: true,
+        ROBOKASSA_TEST_PASSWORD1: "secret",
+      }),
+    ).toThrow(FlowError);
+    // No secrets, no unknown currencies, no client-side price arithmetic inputs.
+    expect(() =>
+      parsePaymentConfig({
+        testCheckoutAvailable: true,
+        product: {
+          productCode: "premium_24h",
+          amountMinor: 9900,
+          currency: "RUB",
+          entitlementDurationSeconds: 86_400,
+          ROBOKASSA_TEST_PASSWORD1: "secret",
+        },
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parsePaymentConfig({
+        testCheckoutAvailable: true,
+        product: {
+          productCode: "premium_24h",
+          amountMinor: 9900,
+          currency: "USD",
+          entitlementDurationSeconds: 86_400,
+        },
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parsePaymentConfig({
+        testCheckoutAvailable: true,
+        product: {
+          productCode: "premium_24h",
+          amountMinor: 0,
+          currency: "RUB",
+          entitlementDurationSeconds: 86_400,
+        },
+      }),
+    ).toThrow(FlowError);
+    expect(() => parsePremiumStatus({ active: true, premium: true })).toThrow(
+      FlowError,
+    );
   });
 
   it("accepts safe public payment status and exact server TEST form only", () => {
-    expect(parsePaymentOrderStatus({
-      status: "PAID",
-      productCode: "premium_24h",
-      amountMinor: 100,
-      currency: "RUB",
-      createdAt: "2026-09-07T12:00:00Z",
-      paidAt: "2026-09-07T12:01:00Z",
-    }).status).toBe("PAID");
+    expect(
+      parsePaymentOrderStatus({
+        status: "PAID",
+        productCode: "premium_24h",
+        amountMinor: 100,
+        currency: "RUB",
+        createdAt: "2026-09-07T12:00:00Z",
+        paidAt: "2026-09-07T12:01:00Z",
+      }).status,
+    ).toBe("PAID");
     const response = {
       orderId: "11111111-2222-4333-8444-555555555555",
       status: "PENDING",
@@ -96,29 +163,36 @@ describe("contracts", () => {
         },
       },
     };
-    expect(parseCreatedPaymentOrder(response).paymentForm.fields)
-      .toEqual(response.paymentForm.fields);
-    expect(() => parseCreatedPaymentOrder({
-      ...response,
-      paymentForm: {
-        ...response.paymentForm,
-        action: "https://evil.example/collect",
-      },
-    })).toThrow(FlowError);
-    expect(() => parseCreatedPaymentOrder({
-      ...response,
-      paymentForm: {
-        ...response.paymentForm,
-        fields: { ...response.paymentForm.fields, IsTest: "0" },
-      },
-    })).toThrow(FlowError);
-    expect(() => parseCreatedPaymentOrder({
-      ...response,
-      paymentForm: {
-        ...response.paymentForm,
-        fields: { ...response.paymentForm.fields, Password1: "secret" },
-      },
-    })).toThrow(FlowError);
+    expect(parseCreatedPaymentOrder(response).paymentForm.fields).toEqual(
+      response.paymentForm.fields,
+    );
+    expect(() =>
+      parseCreatedPaymentOrder({
+        ...response,
+        paymentForm: {
+          ...response.paymentForm,
+          action: "https://evil.example/collect",
+        },
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseCreatedPaymentOrder({
+        ...response,
+        paymentForm: {
+          ...response.paymentForm,
+          fields: { ...response.paymentForm.fields, IsTest: "0" },
+        },
+      }),
+    ).toThrow(FlowError);
+    expect(() =>
+      parseCreatedPaymentOrder({
+        ...response,
+        paymentForm: {
+          ...response.paymentForm,
+          fields: { ...response.paymentForm.fields, Password1: "secret" },
+        },
+      }),
+    ).toThrow(FlowError);
   });
 
   it("accepts coherent Free quota status and rejects false remaining math", () => {
@@ -183,12 +257,16 @@ describe("contracts", () => {
   });
 
   it("accepts absent, null, and valid provider capabilities", () => {
-    expect(parseInspectionJob(inspectionPayload()).providerCapabilities).toBeUndefined();
     expect(
-      parseDownloadJob(downloadPayload({ providerCapabilities: null })).providerCapabilities,
+      parseInspectionJob(inspectionPayload()).providerCapabilities,
+    ).toBeUndefined();
+    expect(
+      parseDownloadJob(downloadPayload({ providerCapabilities: null }))
+        .providerCapabilities,
     ).toBeNull();
     expect(
-      parseInspectionJob(inspectionPayload({ providerCapabilities })).providerCapabilities,
+      parseInspectionJob(inspectionPayload({ providerCapabilities }))
+        .providerCapabilities,
     ).toEqual(providerCapabilities);
   });
 
@@ -198,7 +276,10 @@ describe("contracts", () => {
         inspectionPayload({
           providerCapabilities: {
             ...providerCapabilities,
-            operations: { ...providerCapabilities.operations, downloadVideo: "unknown" },
+            operations: {
+              ...providerCapabilities.operations,
+              downloadVideo: "unknown",
+            },
           },
         }),
       ),
@@ -418,7 +499,9 @@ describe("contracts", () => {
       const providerId = canonicalProviderUrl.includes("rutube") ? "rutube" : "vk";
       const mediaId = providerId === "rutube" ? "abc_1-2" : "-1_2";
       expect(() =>
-        parseInspectionJob(inspectedPayload({ canonicalProviderUrl, providerId, mediaId })),
+        parseInspectionJob(
+          inspectedPayload({ canonicalProviderUrl, providerId, mediaId }),
+        ),
       ).toThrow(FlowError);
     }
   });
@@ -440,9 +523,9 @@ describe("contracts", () => {
       "https://vk.com@[::1]/video-1_2",
     ];
     for (const canonicalProviderUrl of rejected) {
-      expect(() => parseInspectionJob(inspectedPayload({ canonicalProviderUrl }))).toThrow(
-        FlowError,
-      );
+      expect(() =>
+        parseInspectionJob(inspectedPayload({ canonicalProviderUrl })),
+      ).toThrow(FlowError);
     }
   });
 
@@ -649,18 +732,39 @@ describe("contracts", () => {
 
   it("rejects incoherent public state and progressStage pairs", () => {
     const mismatches: Array<Record<string, unknown>> = [
-      { state: "ready", progressStage: "downloading_video", artifactReady: true, completedAt: STAMP },
+      {
+        state: "ready",
+        progressStage: "downloading_video",
+        artifactReady: true,
+        completedAt: STAMP,
+      },
       { state: "cancelled", progressStage: "publishing", completedAt: STAMP },
       { state: "queued", progressStage: "failed" },
       { state: "downloading", progressStage: "ready" },
-      { state: "failed", progressStage: "inspecting", errorCode: "DOWNLOAD_TOOL_FAILED", completedAt: STAMP },
-      { state: "expired", progressStage: "inspecting", completedAt: STAMP, updatedAt: STAMP },
-      { state: "ready", progressStage: "retrying", artifactReady: true, completedAt: STAMP },
+      {
+        state: "failed",
+        progressStage: "inspecting",
+        errorCode: "DOWNLOAD_TOOL_FAILED",
+        completedAt: STAMP,
+      },
+      {
+        state: "expired",
+        progressStage: "inspecting",
+        completedAt: STAMP,
+        updatedAt: STAMP,
+      },
+      {
+        state: "ready",
+        progressStage: "retrying",
+        artifactReady: true,
+        completedAt: STAMP,
+      },
     ];
     for (const extra of mismatches) {
-      expect(() => parseDownloadJob(downloadPayload(extra)), JSON.stringify(extra)).toThrow(
-        FlowError,
-      );
+      expect(
+        () => parseDownloadJob(downloadPayload(extra)),
+        JSON.stringify(extra),
+      ).toThrow(FlowError);
     }
   });
 
@@ -868,9 +972,9 @@ describe("contracts", () => {
   });
 
   it("rejects browser grant payloads with extra fields or bad paths", () => {
-    expect(() => parseBrowserGrant({ ...browserGrantPayload(), token: "nope" })).toThrow(
-      FlowError,
-    );
+    expect(() =>
+      parseBrowserGrant({ ...browserGrantPayload(), token: "nope" }),
+    ).toThrow(FlowError);
     expect(() =>
       parseBrowserGrant({
         ...browserGrantPayload(),

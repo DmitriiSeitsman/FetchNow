@@ -16,6 +16,7 @@ from fetchnow.payments.errors import (
     PaymentInvariantError,
     PaymentOrderNotFoundError,
     PaymentsDisabledError,
+    UnknownProductError,
 )
 from fetchnow.payments.idempotency import hash_idempotency_key
 from fetchnow.payments.models import PaymentOrder
@@ -66,6 +67,21 @@ class PaymentService:
             self._settings.robokassa_mode == "test"
             and self._settings.premium_test_checkout_visible
         )
+
+    def public_product_summary(self) -> dict[str, object] | None:
+        """Safe catalog projection for READY checkout UI. Secrets never included."""
+        if not self.test_checkout_available:
+            return None
+        try:
+            product = get_product(self._settings, PRODUCT_CODE)
+        except UnknownProductError:
+            return None
+        return {
+            "productCode": product.code,
+            "amountMinor": product.amount_minor,
+            "currency": product.currency,
+            "entitlementDurationSeconds": product.entitlement_duration_seconds,
+        }
 
     def ensure_checkout_available(self) -> None:
         if not self.test_checkout_available:

@@ -188,14 +188,14 @@ async def create_payment_order(
 
 @router.get("/config", response_model=None)
 async def get_payment_config(request: Request) -> JSONResponse:
-    """Expose only the derived, non-secret temporary checkout availability."""
+    """Expose checkout availability and a minimal safe product summary."""
+    service = _payment_service(request)
     return JSONResponse(
         status_code=200,
         headers=_NO_STORE,
         content={
-            "testCheckoutAvailable": _payment_service(
-                request
-            ).test_checkout_available
+            "testCheckoutAvailable": service.test_checkout_available,
+            "product": service.public_product_summary(),
         },
     )
 

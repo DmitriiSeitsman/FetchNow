@@ -11,13 +11,12 @@ describe("state machine", () => {
     m.transition("enqueueing_download", gen);
     m.transition("downloading", gen);
     m.transition("ready", gen);
-    m.transition("saving", gen);
-    m.transition("completed", gen);
-    expect(m.current).toBe("completed");
+    expect(m.current).toBe("ready");
   });
 
-  it("allows saving to return to ready after picker cancel", () => {
-    expect(canTransition("saving", "ready")).toBe(true);
+  it("keeps ready as the terminal delivery phase", () => {
+    expect(canTransition("ready", "cancelled")).toBe(true);
+    expect(canTransition("ready", "downloading")).toBe(false);
   });
 
   it("maps inspection and download failures", () => {
@@ -57,7 +56,7 @@ describe("state machine", () => {
   it("rejects illegal transitions", () => {
     const m = new FlowMachine();
     expect(() => m.transition("ready")).toThrow(IllegalTransitionError);
-    expect(canTransition("idle", "completed")).toBe(false);
+    expect(canTransition("idle", "ready")).toBe(false);
   });
 
   it("suppresses duplicate actions while busy", () => {

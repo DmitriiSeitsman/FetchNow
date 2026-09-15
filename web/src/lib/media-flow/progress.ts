@@ -4,7 +4,8 @@ import type { FlowPhase } from "./state-machine";
 
 /**
  * Stage-based preparation progress, with real byte percent only inside
- * download stages when the backend supplies a bounded denominator.
+ * download stages when the backend supplies a bounded denominator. Delivery
+ * itself is the browser's own download, so the flow never tracks it.
  */
 export type ProgressTone = "active" | "done";
 
@@ -44,8 +45,6 @@ export const PHASE_LABEL: Readonly<Partial<Record<FlowPhase, string>>> = Object.
   enqueueing_download: "Ожидание начала…",
   downloading: "Ожидание начала…",
   ready: "Готово к скачиванию",
-  saving: "Сохраняем на ваш компьютер…",
-  completed: "Сохранено на ваш компьютер",
   cancelled: "Скачивание отменено",
 });
 
@@ -69,17 +68,18 @@ export const STAGE_COMPLETION: Readonly<Record<ProgressStage, number>> = Object.
   expired: 0,
 });
 
-const STAGE_RANGE_START: Readonly<Partial<Record<ProgressStage, number>>> = Object.freeze({
-  queued: 0,
-  retrying: STAGE_COMPLETION.queued,
-  inspecting: STAGE_COMPLETION.queued,
-  downloading_video: STAGE_COMPLETION.inspecting,
-  downloading_audio: STAGE_COMPLETION.downloading_video,
-  muxing: STAGE_COMPLETION.downloading_audio,
-  verifying: STAGE_COMPLETION.muxing,
-  publishing: STAGE_COMPLETION.verifying,
-  ready: STAGE_COMPLETION.publishing,
-});
+const STAGE_RANGE_START: Readonly<Partial<Record<ProgressStage, number>>> =
+  Object.freeze({
+    queued: 0,
+    retrying: STAGE_COMPLETION.queued,
+    inspecting: STAGE_COMPLETION.queued,
+    downloading_video: STAGE_COMPLETION.inspecting,
+    downloading_audio: STAGE_COMPLETION.downloading_video,
+    muxing: STAGE_COMPLETION.downloading_audio,
+    verifying: STAGE_COMPLETION.muxing,
+    publishing: STAGE_COMPLETION.verifying,
+    ready: STAGE_COMPLETION.publishing,
+  });
 
 const PHASE_COMPLETION: Readonly<Partial<Record<FlowPhase, number>>> = Object.freeze({
   submitting: 4,
@@ -87,8 +87,6 @@ const PHASE_COMPLETION: Readonly<Partial<Record<FlowPhase, number>>> = Object.fr
   enqueueing_download: 8,
   downloading: 8,
   ready: 100,
-  saving: 100,
-  completed: 100,
 });
 
 export const PROGRESS_NOTE =
@@ -105,11 +103,9 @@ const PROGRESS_PHASES: ReadonlySet<FlowPhase> = new Set([
   "enqueueing_download",
   "downloading",
   "ready",
-  "saving",
-  "completed",
 ]);
 
-const DONE_PHASES: ReadonlySet<FlowPhase> = new Set(["ready", "completed"]);
+const DONE_PHASES: ReadonlySet<FlowPhase> = new Set(["ready"]);
 
 const HALTED_STAGES: ReadonlySet<ProgressStage> = new Set([
   "failed",
@@ -152,7 +148,9 @@ export function progressView(
   const visible = PROGRESS_PHASES.has(phase) && !halted;
   const done = DONE_PHASES.has(phase);
   const label = visible ? flowStatusText(phase, stage, options) : "";
-  const percent = visible ? completion(phase, stage, options.progressPercent ?? null) : 0;
+  const percent = visible
+    ? completion(phase, stage, options.progressPercent ?? null)
+    : 0;
   return {
     visible,
     label,
@@ -187,7 +185,7 @@ function completion(
   stage: ProgressStage | null,
   progressPercent: number | null,
 ): number {
-  if (DONE_PHASES.has(phase) || phase === "saving") {
+  if (DONE_PHASES.has(phase)) {
     return PHASE_COMPLETION[phase] ?? 100;
   }
   if (STAGE_DRIVEN_PHASES.has(phase) && stage) {
