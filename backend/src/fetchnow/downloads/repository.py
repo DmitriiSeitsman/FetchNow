@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.downloads.errors import DownloadErrorCode, raise_download_error
 from fetchnow.downloads.models import MediaDownloadJob
+from fetchnow.downloads.premium_coherence import is_coherent_promoted_premium_job
 from fetchnow.downloads.progress import (
     DownloadProgressStage,
     assert_progress_transition,
@@ -23,7 +25,10 @@ from fetchnow.downloads.states import (
     is_stored_cancelled,
 )
 from fetchnow.quota.errors import QuotaInvariantError
+from fetchnow.quota.models import FreeDownloadQuotaEntry
 from fetchnow.quota.repository import QuotaRepository
+
+logger = logging.getLogger("fetchnow.downloads.repository")
 
 
 class MediaDownloadJobRepository:
@@ -647,10 +652,103 @@ class MediaDownloadJobRepository:
             await self._session.flush()
         return changed
 
+    async def _revoke_active_grants_locked(
+        self, *, job_id: uuid.UUID, now: datetime
+    ) -> None:
+        """Revoke active browser grants for a job (ledger/grant lock suffix)."""
+        from fetchnow.downloads.grant_repository import BrowserGrantRepository
+
+        grants = BrowserGrantRepository(self._session)
+        active = await grants.list_active_for_job(download_job_id=job_id, now=now)
+        await grants.revoke_grants(active, now=now)
+
+    async def _has_live_delivery_lease_locked(
+        self,
+        *,
+        entry: FreeDownloadQuotaEntry,
+        now: datetime,
+    ) -> bool:
+        from fetchnow.quota.delivery import DeliveryQuotaAccounting
+
+        accounting = DeliveryQuotaAccounting(compatibility_mode=False)
+        return await accounting.has_live_attempt_locked(
+            session=self._session,
+            entry=entry,
+            now=now,
+        )
+
+    def _apply_expired_job_fields(
+        self,
+        job: MediaDownloadJob,
+        *,
+        now: datetime,
+        artifact_ids: list[uuid.UUID],
+    ) -> None:
+        """Apply the canonical READY/terminal → expired field transitions."""
+        if is_stored_cancelled(
+            job.public_state, job.progress_stage, job.cancel_requested_at
+        ):
+            assert_transition(
+                MediaDownloadJobState.CANCELLED, MediaDownloadJobState.EXPIRED
+            )
+        else:
+            assert_transition(job.public_state, MediaDownloadJobState.EXPIRED)
+        if job.artifact_id is not None:
+            artifact_ids.append(job.artifact_id)
+        job.public_state = MediaDownloadJobState.EXPIRED.value
+        job.progress_stage = DownloadProgressStage.EXPIRED.value
+        job.progress_percent = None
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.cancel_requested_at = None
+        job.artifact_id = None
+        job.artifact_bytes = None
+        job.artifact_content_type = None
+        job.artifact_container = None
+        job.public_error_code = None
+        job.updated_at = now
+        job.fence_token = int(job.fence_token) + 1
+        if job.completed_at is None:
+            job.completed_at = now
+
+    async def quarantine_ready_terminal_quota_locked(
+        self,
+        *,
+        job: MediaDownloadJob,
+        entry: FreeDownloadQuotaEntry,
+        now: datetime,
+        reason: str,
+        artifact_ids: list[uuid.UUID],
+    ) -> bool:
+        """Fail-closed quarantine for READY + terminal Free quota.
+
+        Assumes anonymous client, download job, and quota entry are already
+        locked. Returns False when a live delivery lease defers cleanup.
+        Does not mutate quota history.
+        """
+        if await self._has_live_delivery_lease_locked(entry=entry, now=now):
+            logger.error(
+                "download_expiry outcome=deferred reason=%s "
+                "detail=live_delivery_lease",
+                reason,
+            )
+            return False
+        await self._revoke_active_grants_locked(job_id=job.id, now=now)
+        self._apply_expired_job_fields(job, now=now, artifact_ids=artifact_ids)
+        logger.error(
+            "download_expiry outcome=quarantined reason=%s",
+            reason,
+        )
+        return True
+
     async def expire_due_jobs(self, now: datetime) -> list[uuid.UUID]:
         """Mark past-TTL jobs expired; return artifact ids that need filesystem delete.
 
         Ready jobs clear artifact pointer fields so the result CHECK holds.
+
+        Promoted Premium jobs with a released former Free reservation expire
+        normally. True Free READY+terminal incoherence is quarantined per job
+        without aborting the batch. Live delivery leases defer that job only.
         """
         ids_stmt = (
             select(MediaDownloadJob.id)
@@ -674,112 +772,135 @@ class MediaDownloadJobRepository:
                     ),
                 ),
             )
+            .order_by(MediaDownloadJob.expires_at.asc(), MediaDownloadJob.id.asc())
         )
         ids = list((await self._session.scalars(ids_stmt)).all())
         artifact_ids: list[uuid.UUID] = []
         changed = 0
         for job_id in ids:
-            quota = await self._lock_quota_identity_for_job(job_id)
-            job = await self._session.scalar(
-                select(MediaDownloadJob)
-                .where(
-                    MediaDownloadJob.id == job_id,
-                    MediaDownloadJob.expires_at <= func.clock_timestamp(),
-                    or_(
-                        MediaDownloadJob.public_state.in_(
-                            (
-                                MediaDownloadJobState.QUEUED.value,
-                                MediaDownloadJobState.DOWNLOADING.value,
-                                MediaDownloadJobState.READY.value,
-                                MediaDownloadJobState.FAILED.value,
-                            )
-                        ),
-                        and_(
-                            MediaDownloadJob.public_state
-                            == MediaDownloadJobState.EXPIRED.value,
-                            MediaDownloadJob.progress_stage
-                            == DownloadProgressStage.CANCELLED.value,
-                            MediaDownloadJob.cancel_requested_at.is_not(None),
-                        ),
-                    ),
-                )
-                .with_for_update(skip_locked=True)
-            )
-            if job is None:
-                continue
-            entry = None
-            if quota is not None:
-                entry = await quota.lock_entry_for_download(job.id)
-                if entry is None:
-                    raise QuotaInvariantError(
-                        "quota entry disappeared during job expiry"
-                    )
-                if (
-                    job.public_state == MediaDownloadJobState.READY.value
-                    and entry.state in {"released", "expired"}
-                ):
-                    raise QuotaInvariantError(
-                        "downloadable Free artifact has terminal unconsumed quota"
-                    )
-                if (
-                    entry.state == "reserved"
-                    and job.public_state == MediaDownloadJobState.READY.value
-                ):
-                    # Local import avoids the downloads package's public
-                    # re-export cycle while keeping this lifecycle path shared.
-                    from fetchnow.quota.delivery import DeliveryQuotaAccounting
-
-                    accounting = DeliveryQuotaAccounting(compatibility_mode=False)
-                    await accounting.reconcile_locked(
-                        session=self._session,
-                        quota=quota,
-                        job=job,
-                        entry=entry,
-                        now=now,
-                    )
-                    if (
-                        entry.state == "reserved"
-                        and await accounting.has_live_attempt_locked(
-                            session=self._session,
-                            entry=entry,
-                            now=now,
+            # Per-job savepoint: one unexpected fault must not poison siblings.
+            try:
+                async with self._session.begin_nested():
+                    quota = await self._lock_quota_identity_for_job(job_id)
+                    job = await self._session.scalar(
+                        select(MediaDownloadJob)
+                        .where(
+                            MediaDownloadJob.id == job_id,
+                            MediaDownloadJob.expires_at <= func.clock_timestamp(),
+                            or_(
+                                MediaDownloadJob.public_state.in_(
+                                    (
+                                        MediaDownloadJobState.QUEUED.value,
+                                        MediaDownloadJobState.DOWNLOADING.value,
+                                        MediaDownloadJobState.READY.value,
+                                        MediaDownloadJobState.FAILED.value,
+                                    )
+                                ),
+                                and_(
+                                    MediaDownloadJob.public_state
+                                    == MediaDownloadJobState.EXPIRED.value,
+                                    MediaDownloadJob.progress_stage
+                                    == DownloadProgressStage.CANCELLED.value,
+                                    MediaDownloadJob.cancel_requested_at.is_not(None),
+                                ),
+                            ),
                         )
-                    ):
+                        .with_for_update(skip_locked=True)
+                    )
+                    if job is None:
                         continue
-            if is_stored_cancelled(
-                job.public_state, job.progress_stage, job.cancel_requested_at
-            ):
-                assert_transition(
-                    MediaDownloadJobState.CANCELLED, MediaDownloadJobState.EXPIRED
+                    entry = None
+                    if quota is not None:
+                        entry = await quota.lock_entry_for_download(job.id)
+                        if entry is None:
+                            logger.error(
+                                "download_expiry outcome=skipped "
+                                "reason=quota_entry_missing"
+                            )
+                            continue
+                        if (
+                            job.public_state == MediaDownloadJobState.READY.value
+                            and entry.state == "released"
+                            and is_coherent_promoted_premium_job(
+                                job,
+                                expected_identity_id=entry.anonymous_client_id,
+                            )
+                        ):
+                            # A4.2.1: released Free reservation after Premium
+                            # promotion is coherent. Expire artifact lifecycle only.
+                            if await self._has_live_delivery_lease_locked(
+                                entry=entry, now=now
+                            ):
+                                continue
+                        elif (
+                            job.public_state == MediaDownloadJobState.READY.value
+                            and entry.state in {"released", "expired"}
+                        ):
+                            quarantined = (
+                                await self.quarantine_ready_terminal_quota_locked(
+                                    job=job,
+                                    entry=entry,
+                                    now=now,
+                                    reason="ready_terminal_free_quota",
+                                    artifact_ids=artifact_ids,
+                                )
+                            )
+                            if quarantined:
+                                changed += 1
+                            continue
+                        elif (
+                            entry.state == "reserved"
+                            and job.public_state == MediaDownloadJobState.READY.value
+                        ):
+                            # Local import avoids the downloads package's public
+                            # re-export cycle while keeping this lifecycle path shared.
+                            from fetchnow.quota.delivery import DeliveryQuotaAccounting
+
+                            accounting = DeliveryQuotaAccounting(
+                                compatibility_mode=False
+                            )
+                            await accounting.reconcile_locked(
+                                session=self._session,
+                                quota=quota,
+                                job=job,
+                                entry=entry,
+                                now=now,
+                            )
+                            if (
+                                entry.state == "reserved"
+                                and await accounting.has_live_attempt_locked(
+                                    session=self._session,
+                                    entry=entry,
+                                    now=now,
+                                )
+                            ):
+                                continue
+                    if job.public_state == MediaDownloadJobState.READY.value:
+                        await self._revoke_active_grants_locked(
+                            job_id=job.id, now=now
+                        )
+                    self._apply_expired_job_fields(
+                        job, now=now, artifact_ids=artifact_ids
+                    )
+                    # A consumed ready entry remains consumed; expiry is artifact
+                    # lifecycle only. Reserved reservations are released with
+                    # expired=True. Already-terminal quota is left untouched.
+                    if (
+                        quota is not None
+                        and entry is not None
+                        and entry.state == "reserved"
+                    ):
+                        quota.release_locked(
+                            entry,
+                            now=await quota.database_now(),
+                            expired=True,
+                        )
+                    changed += 1
+            except QuotaInvariantError:
+                logger.exception(
+                    "download_expiry outcome=isolated reason=quota_invariant"
                 )
-            else:
-                assert_transition(job.public_state, MediaDownloadJobState.EXPIRED)
-            if job.artifact_id is not None:
-                artifact_ids.append(job.artifact_id)
-            job.public_state = MediaDownloadJobState.EXPIRED.value
-            job.progress_stage = DownloadProgressStage.EXPIRED.value
-            job.progress_percent = None
-            job.lease_owner = None
-            job.lease_expires_at = None
-            job.cancel_requested_at = None
-            job.artifact_id = None
-            job.artifact_bytes = None
-            job.artifact_content_type = None
-            job.artifact_container = None
-            job.public_error_code = None
-            job.updated_at = now
-            job.fence_token = int(job.fence_token) + 1
-            if job.completed_at is None:
-                job.completed_at = now
-            # A consumed ready entry remains consumed; expiry is artifact
-            # lifecycle only. Every other live reservation is released.
-            if quota is not None and entry is not None and entry.state == "reserved":
-                quota.release_locked(
-                    entry,
-                    now=await quota.database_now(),
-                    expired=True,
-                )
-            changed += 1
+                continue
         if changed:
             await self._session.flush()
         return artifact_ids

@@ -816,7 +816,7 @@ public HTTPS.
 | Loopback `GET /api/v1/health/ready` | 200 (DB reachable) |
 | Public HTTPS live/ready | Same, with TLS validation on |
 | `X-Robots-Tag` on public HTML | `noindex, nofollow` while indexing is off |
-| Compose `ps` | gateway/api/web/delivery/postgres healthy; worker running; restarts=0 since rollout |
+| Compose `ps` | gateway/api/web/delivery/postgres healthy; worker running; restarts=0 since rollout. Note (A4.2.2): `RestartCount=0` alone does not prove the worker is draining the queue — check claim progress / hygiene logs |
 | Image revision labels | `org.opencontainers.image.revision` equals expected SHA |
 | Gateway publish | still `127.0.0.1:8091` (not `0.0.0.0`) |
 | Capability contract | Job/API responses that expose capabilities match the SHA under test (no staging env bleed) |

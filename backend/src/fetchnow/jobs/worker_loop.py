@@ -234,9 +234,20 @@ class MediaJobWorkerRunner:
                 await session.commit()
 
         if self._settings.media_downloads_enabled:
-            await self._hygiene_download_jobs()
-            await self._hygiene_free_quota()
-            await self._hygiene_browser_grants()
+            # Each hygiene step uses its own session/transaction. A fault must
+            # roll back that step only and must not skip later claim phases.
+            await self._run_hygiene_step(
+                "download_hygiene",
+                self._hygiene_download_jobs,
+            )
+            await self._run_hygiene_step(
+                "free_quota_hygiene",
+                self._hygiene_free_quota,
+            )
+            await self._run_hygiene_step(
+                "browser_grant_hygiene",
+                self._hygiene_browser_grants,
+            )
 
         if (
             self._settings.media_jobs_enabled
@@ -249,6 +260,22 @@ class MediaJobWorkerRunner:
             and self._settings.media_inspection_enabled
         ):
             await self._claim_download_jobs()
+
+    async def _run_hygiene_step(self, name: str, step: Any) -> None:
+        """Run one hygiene coroutine; isolate faults from claim phases.
+
+        Cancellation propagates. Other exceptions are logged after the step's
+        session boundary has rolled back (no commit). Claims still proceed.
+        """
+        try:
+            await step()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "worker_hygiene_failed step=%s continuing_with_claims=true",
+                name,
+            )
 
     async def _hygiene_download_jobs(self) -> None:
         executor = self._ensure_download_executor()
