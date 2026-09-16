@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fetchnow.core.config import Settings
 from fetchnow.downloads.models import MediaDownloadJob
+from fetchnow.downloads.premium_coherence import is_coherent_promoted_premium_job
 from fetchnow.downloads.progress import DownloadProgressStage
-from fetchnow.downloads.snapshot_codec import decode_effective_policy_snapshot
+from fetchnow.downloads.repository import MediaDownloadJobRepository
 from fetchnow.downloads.states import MediaDownloadJobState
 from fetchnow.quota.delivery import DeliveryQuotaAccounting
 from fetchnow.quota.errors import QuotaInvariantError
@@ -31,14 +32,6 @@ class ReconcileResult:
     clients_deleted: int = 0
 
 
-def _is_promoted_premium_job(job: MediaDownloadJob) -> bool:
-    try:
-        policy = decode_effective_policy_snapshot(job.selected_format_snapshot)
-    except Exception:
-        return False
-    return policy is not None and policy.tier == "premium"
-
-
 class QuotaReconciler:
     """Repair reserved entries from authoritative job state, then prune."""
 
@@ -49,6 +42,7 @@ class QuotaReconciler:
 
     async def run(self, *, session: AsyncSession, limit: int = 64) -> ReconcileResult:
         quota = QuotaRepository(session)
+        downloads = MediaDownloadJobRepository(session)
         accounting = DeliveryQuotaAccounting(
             compatibility_mode=(
                 self._settings.free_download_quota_ready_compatibility_mode
@@ -69,35 +63,55 @@ class QuotaReconciler:
                     FreeDownloadQuotaEntry.state.in_(("released", "expired")),
                     MediaDownloadJob.public_state == MediaDownloadJobState.READY.value,
                 )
-                .limit(16)
+                .order_by(
+                    MediaDownloadJob.expires_at.asc(),
+                    MediaDownloadJob.id.asc(),
+                )
+                .limit(limit)
             )
         ).all()
         for invalid_client_id, invalid_job_id in invalid:
-            client = await quota.lock_client(invalid_client_id)
-            job = await session.scalar(
-                select(MediaDownloadJob)
-                .where(MediaDownloadJob.id == invalid_job_id)
-                .with_for_update()
-            )
-            entry = await quota.lock_entry_for_download(invalid_job_id)
-            if (
-                client is None
-                or job is None
-                or entry is None
-                or job.public_state != MediaDownloadJobState.READY.value
-                or entry.state not in {"released", "expired"}
-            ):
+            try:
+                async with session.begin_nested():
+                    client = await quota.lock_client(invalid_client_id)
+                    job = await session.scalar(
+                        select(MediaDownloadJob)
+                        .where(MediaDownloadJob.id == invalid_job_id)
+                        .with_for_update()
+                    )
+                    entry = await quota.lock_entry_for_download(invalid_job_id)
+                    if (
+                        client is None
+                        or job is None
+                        or entry is None
+                        or job.public_state != MediaDownloadJobState.READY.value
+                        or entry.state not in {"released", "expired"}
+                    ):
+                        continue
+                    if (
+                        entry.state == "released"
+                        and is_coherent_promoted_premium_job(
+                            job,
+                            expected_identity_id=entry.anonymous_client_id,
+                        )
+                    ):
+                        # A4.2.1 / A4.2.2: released reservation after Premium
+                        # promotion is coherent until storage TTL expiry.
+                        continue
+                    # True Free READY+terminal incoherence: quarantine this job
+                    # without aborting reconcile for siblings.
+                    await downloads.quarantine_ready_terminal_quota_locked(
+                        job=job,
+                        entry=entry,
+                        now=now,
+                        reason="ready_terminal_free_quota",
+                        artifact_ids=[],
+                    )
+            except QuotaInvariantError:
+                logger.exception(
+                    "free_quota_reconcile outcome=isolated reason=quota_invariant"
+                )
                 continue
-            if _is_promoted_premium_job(job):
-                # A4.2.1: released reservation after Premium promotion is coherent.
-                continue
-            logger.error(
-                "free_quota_reconcile outcome=invariant_failed "
-                "reason=downloadable_terminal_reservation"
-            )
-            raise QuotaInvariantError(
-                "downloadable Free artifact has terminal unconsumed quota"
-            )
         candidates = list(
             (
                 await session.execute(

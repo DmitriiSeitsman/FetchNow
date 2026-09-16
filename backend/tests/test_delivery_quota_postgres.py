@@ -22,6 +22,7 @@ from fetchnow.db.session import create_engine, create_session_factory
 from fetchnow.downloads.errors import DownloadError
 from fetchnow.downloads.models import MediaDownloadJob
 from fetchnow.downloads.repository import MediaDownloadJobRepository
+from fetchnow.downloads.states import MediaDownloadJobState
 from fetchnow.jobs.credentials import (
     generate_access_token,
     hash_access_token,
@@ -921,18 +922,27 @@ async def test_reconciler_consumes_complete_durable_coverage(
 
 
 @pytest.mark.asyncio
-async def test_reconciler_fails_closed_for_downloadable_terminal_reservation(
+async def test_reconciler_quarantines_downloadable_terminal_reservation(
     session_factory: async_sessionmaker[AsyncSession], database_url: str
 ) -> None:
     async with session_factory() as session:
         await _cleanup(session)
-        _, entry = await _ready_reserved(session, database_url=database_url)
+        job, entry = await _ready_reserved(session, database_url=database_url)
         now = await QuotaRepository(session).database_now()
         entry.state = "released"
         entry.released_at = now
-        with pytest.raises(QuotaInvariantError):
-            await QuotaReconciler(_settings(database_url)).run(session=session)
-        await session.rollback()
+        artifact = job.artifact_id
+        fence = int(job.fence_token)
+        await QuotaReconciler(_settings(database_url)).run(session=session)
+        await session.commit()
+        loaded = await session.get(MediaDownloadJob, job.id)
+        assert loaded is not None
+        assert loaded.public_state == MediaDownloadJobState.EXPIRED.value
+        assert loaded.artifact_id is None
+        assert int(loaded.fence_token) == fence + 1
+        assert artifact is not None
+        refreshed = await session.get(FreeDownloadQuotaEntry, entry.id)
+        assert refreshed is not None and refreshed.state == "released"
 
 
 @pytest.mark.asyncio

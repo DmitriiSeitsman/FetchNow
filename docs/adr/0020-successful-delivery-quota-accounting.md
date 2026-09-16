@@ -87,7 +87,8 @@ Quota rules under coverage inspection:
 - `reserved` + complete `[0, artifact_bytes)` → consume (never refund), then
   promote;
 - `consumed` → leave consumed; promote for future uncapped delivery;
-- Free snapshot + `released`/`expired` while READY → fail closed;
+- Free snapshot + `released`/`expired` while READY → fail closed
+  (per-job quarantine via terminal expire; does not abort the batch);
 - already-Premium + released after a successful promotion → coherent.
 
 An active Free delivery lease returns `DELIVERY_IN_PROGRESS` without waiting or
@@ -95,3 +96,23 @@ mutating mid-stream rate. After commit, the client re-arms a grant through the
 existing browser-grant API. Public `/payments/config` exposes a safe product
 summary for READY pricing; TEST disclosure remains mandatory while checkout is
 test-only.
+
+## Storage TTL expiry after Premium promotion (PRD2-A4.2.2)
+
+`expire_due_jobs` and `QuotaReconciler` share
+`is_coherent_promoted_premium_job()` (valid Premium policy decode + bound
+identity). A released former Free reservation after a valid promotion is
+expected and must not raise `QuotaInvariantError`. Expiry uses the frozen
+snapshot only — it does not re-poll live entitlement. Artifact/grant/fence
+cleanup follows the normal READY→EXPIRED path; quota history is untouched.
+Malformed Premium markers do not receive the exception.
+
+True Free READY + terminal (`released`/`expired`) quota is quarantined
+per-job (revoke grants, bump fence, clear artifact pointers, leave quota
+history). A live delivery lease defers that job only. Worker download hygiene
+faults are isolated per step so claim inspection/download still runs after
+rollback. A running worker with `RestartCount=0` does not prove the queue is
+draining.
+
+TODO (alerting follow-up, not in this change): alert on repeated
+`worker_hygiene_failed` / poll failures and on rising age of queued jobs.
