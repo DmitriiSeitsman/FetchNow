@@ -1,0 +1,14 @@
+# PostgreSQL role observations (sanitized / functionally labeled)
+# Captured UTC 2026-09-19.
+
+- postgres host publish: none (container port only; not bound on host interfaces)
+- network: project Compose bridge only (internal container IP omitted)
+- login roles (non-system): 1
+- role label in report: runtime_app_role
+- capabilities: superuser=true; createdb=true; createrole=true; replication=true; bypassrls=true; canlogin=true
+- database owner: runtime_app_role
+- public table ownership: all application tables owned by runtime_app_role (9 tables)
+- grants: runtime_app_role has full DML+TRUNCATE/TRIGGER/REFERENCES on those tables
+- API/worker/delivery/migration/backup role separation: absent
+- alembic head: 0010_successful_delivery_quota
+- credentials/DSN: not collected

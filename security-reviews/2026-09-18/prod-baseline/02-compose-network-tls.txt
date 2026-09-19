@@ -1,0 +1,27 @@
+# Compose / network / TLS observations (sanitized)
+# Captured UTC 2026-09-19.
+
+## Host edge
+- public domain: fetchnow.online
+- host TLS terminator: nginx/1.28.3 (Ubuntu)
+- listens: 0.0.0.0:80, 0.0.0.0:443 (and IPv6 equivalents)
+- gateway loopback publish: 127.0.0.1:8091 -> container 8080
+- HTTP :80 returns 301 to https://fetchnow.online/
+- HTTPS response: no Strict-Transport-Security header
+- security headers observed: X-Robots-Tag noindex,nofollow; CSP present (includes Robokassa form-action allowlist)
+- FetchNow host vhost extract: no limit_req / limit_conn / real_ip directives
+- external firewall/WAF rate limiting: unknown (not inspected)
+- co-tenancy: host Nginx enables additional non-FetchNow site configs (names omitted)
+
+## Payments/public config
+- /api/v1/payments/config: testCheckoutAvailable=true; product premium_24h; amountMinor=100; currency=RUB; entitlementDurationSeconds=86400
+
+## Compose provenance
+- project label: fetchnow-production
+- app services (api/worker/delivery/web/gateway) working_dir: release source for revision 14aa485…
+- compose files: compose.yaml + compose.production.yaml + deployment images override
+- postgres service still references older release source tree 21df45d0… (DB not recreated on app-only rollout)
+- only host-published FetchNow port: gateway 127.0.0.1:8091
+- api/worker/delivery/web/postgres: no host port publish
+- Compose network: project bridge, not internal-only; container count 6
+- image digests: omitted here; prefixes cross-checked against current.json in matrix

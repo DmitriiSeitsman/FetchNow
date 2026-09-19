@@ -1,0 +1,16 @@
+# Release authority observations (sanitized)
+# Captured UTC 2026-09-19. No secrets/env values.
+
+- production checkout HEAD equals origin/main: 14aa485e180f8da64c061fb47a250bc4cf6297a5
+- checkout dirty file count: 0
+- current.json schema_version: 2
+- application.revision: 14aa485e180f8da64c061fb47a250bc4cf6297a5
+- application.deployment_id prefix: be9acd6c…
+- application.release_manifest_sha256 matches on-disk release.json
+- image services recorded: api, gateway, web, worker (delivery shares api image digest)
+- image digests recorded as prefixes only in matrix; prefixes match current.json
+- database.heads: 0010_successful_delivery_quota
+- database.schema_release_revision: b6114796517fdc5758ee710a0d3b4886ff1baf13
+- compatible_application_revisions includes live app revision (count 23)
+- unresolved deployment/migration/config journals: none non-terminal
+- lock files present and idle (zero-length)
