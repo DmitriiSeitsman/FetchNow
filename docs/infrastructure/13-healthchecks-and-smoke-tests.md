@@ -4,6 +4,8 @@
 
 **PRD1C1 operator gate:** перед/после staging операций используйте read-only `make release-health EXPECTED_REVISION=<sha>` (Compose JSON state + loopback live/ready). Подробности: [глава 24](24-release-preflight-health.md). Ниже — ручные curl/smoke уровни.
 
+**Reliability A (gateway routing + public HTTPS):** source/config rollout и rollback после activation вызывают общий `stabilize_full_health`: (1) bounded gateway routing convergence до 30s после смены IP api/web, (2) consecutive loopback Compose+HTTP health, (3) обязательный public HTTPS gate на approved origin (`/` с web marker `class="brand">FetchNow</p>`, `/api/v1/health/live`, `/api/v1/health/ready`) с проверкой TLS. Public DNS/TLS failure блокирует journal commit даже при зелёном loopback. Локальная integration использует disposable TLS fixture (test-only injection), не production site.
+
 ## Уровень 1: liveness
 
 ```bash

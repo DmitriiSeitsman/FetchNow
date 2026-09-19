@@ -556,10 +556,27 @@ def test_cli_has_no_unsafe_bypass() -> None:
         "skip-db-check",
         "test-mode",
         "allow_test_project",
+        "allow-test-origin",
+        "allow_test_origin",
+        "public-https-test",
+        "test-origin",
     ):
         assert banned not in help_text
     assert "rollout" in help_text
     assert "recover" in help_text
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            [
+                "health",
+                "--project-name",
+                "fetchnow-staging",
+                "--env-file",
+                "/tmp/env",
+                "--expected-revision",
+                "a" * 40,
+                "--allow-test-origin",
+            ]
+        )
 
 
 def test_secret_redaction_in_rollout_context() -> None:

@@ -33,6 +33,7 @@ from .override import (
 )
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
+from .routing_health import PublicHttpsGateConfig
 
 
 class HealthError(ValueError):
@@ -54,6 +55,11 @@ class HealthInput:
     # api/worker/delivery/web/gateway instead of tag-string matching alone. This internal
     # field is used by rollout/recovery; managed standalone health must not set it.
     expected_image_ids: dict[str, str] | None = None
+    # Public HTTPS gate config. Real staging/production paths resolve the fixed
+    # approved origin automatically when this is None. Isolated integration must
+    # inject a disposable TLS fixture via this field (test-only); production CLI
+    # never accepts an arbitrary public URL.
+    public_https: PublicHttpsGateConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -137,7 +143,9 @@ def _managed_image_ids(inp: HealthInput, revision: str) -> dict[str, str]:
 
     application = parsed.application
     if application.revision != revision:
-        raise HealthError("current application revision does not match expected revision")
+        raise HealthError(
+            "current application revision does not match expected revision"
+        )
 
     release = release_dir(deploy_root, revision)
     if release.is_symlink() or not release.is_dir():
@@ -295,9 +303,8 @@ def run_health(inp: HealthInput) -> HealthResult:
                         )
                 else:
                     if svc_name in {"api", "worker", "delivery"}:
-                        if (
-                            f":{rev}" not in image_ref
-                            and not image_ref.endswith(f":{rev}")
+                        if f":{rev}" not in image_ref and not image_ref.endswith(
+                            f":{rev}"
                         ):
                             if (
                                 not image_ref.endswith(rev)

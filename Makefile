@@ -3,6 +3,7 @@
 	release-test release-preflight release-health release-health-integration release-ancestry-integration \
 	release-build-test release-prepare release-verify release-build-integration \
 	release-rollout-test release-rollout release-recover release-rollout-integration \
+	release-gateway-routing-integration \
 	release-deploy-plan-test release-deploy-plan-integration \
 	release-migration-test release-migrate release-migration-recover release-migration-integration \
 	release-bootstrap-db-integration \
@@ -143,6 +144,9 @@ release-health:
 
 release-health-integration:
 	$(PYTHON) scripts/release_health_integration_test.py
+
+release-gateway-routing-integration:
+	$(PYTHON) scripts/release_gateway_routing_integration_test.py
 
 release-build-test:
 	$(BACKEND)/.venv/bin/pytest -q tests/release/test_release_build_unit.py tests/release/test_source_contract_unit.py
