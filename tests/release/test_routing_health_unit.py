@@ -559,3 +559,430 @@ def test_public_https_permanent_error_not_retried_as_churn(
     assert not result.ok
     assert calls["n"] == 1
     assert now["t"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Homepage vs JSON body-limit classification (Reliability A.1 hotfix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def disposable_tls_origin(tmp_path: Path):
+    """Local HTTPS server with a disposable self-signed cert (test-only)."""
+    import http.server
+    import socket
+    import ssl
+    import subprocess
+    import threading
+    from fetchnow_release.routing_health import (
+        PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES,
+        PUBLIC_HTTPS_JSON_MAX_BODY_BYTES,
+    )
+
+    host = "localhost"
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    proc = subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-subj",
+            f"/CN={host}",
+            "-addext",
+            f"subjectAltName=DNS:{host}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    state: dict[str, object] = {
+        "home_body": f"<html><p {HOMEPAGE_MARKER}</html>".encode(),
+        "home_content_length": None,  # None => use len(body)
+        "live_body": b'{"status":"ok"}',
+        "ready_body": b'{"status":"ok"}',
+        "live_content_length": None,
+        "bytes_written": 0,
+        "requests": [],
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args) -> None:  # noqa: ANN002
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0]
+            state["requests"].append(path)
+            if path == "/":
+                body = state["home_body"]
+                assert isinstance(body, bytes)
+                declared = state["home_content_length"]
+                cl = len(body) if declared is None else int(declared)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(cl))
+                self.end_headers()
+                # Only write what was asked via bounded client reads; track writes.
+                # If declared CL is huge, still only write the real body (or nothing
+                # extra) so a buggy unbounded client would hang waiting — we assert
+                # early rejection via bytes_written staying at real body size.
+                self.wfile.write(body)
+                state["bytes_written"] = int(state["bytes_written"]) + len(body)
+                return
+            if path == "/api/v1/health/live":
+                body = state["live_body"]
+                assert isinstance(body, bytes)
+                declared = state["live_content_length"]
+                cl = len(body) if declared is None else int(declared)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(cl))
+                self.end_headers()
+                self.wfile.write(body)
+                state["bytes_written"] = int(state["bytes_written"]) + len(body)
+                return
+            if path == "/api/v1/health/ready":
+                body = state["ready_body"]
+                assert isinstance(body, bytes)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    # Wait until the port accepts TCP.
+    end = __import__("time").monotonic() + 5.0
+    while __import__("time").monotonic() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            __import__("time").sleep(0.05)
+    else:
+        httpd.shutdown()
+        raise RuntimeError("disposable TLS fixture failed to listen")
+
+    client_ctx = ssl.create_default_context()
+    client_ctx.check_hostname = False
+    client_ctx.verify_mode = ssl.CERT_NONE
+    # Prefer loading the disposable CA for stricter verification path.
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_ctx.check_hostname = True
+    client_ctx.verify_mode = ssl.CERT_REQUIRED
+    client_ctx.load_verify_locations(cafile=str(cert))
+
+    config = PublicHttpsGateConfig(
+        origin=f"https://{host}:{port}",
+        ssl_context=client_ctx,
+        allow_test_origin=True,
+    )
+    yield config, state, {
+        "homepage_limit": PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES,
+        "json_limit": PUBLIC_HTTPS_JSON_MAX_BODY_BYTES,
+    }
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_homepage_body_between_4kib_and_64kib_passes(disposable_tls_origin) -> None:
+    config, state, limits = disposable_tls_origin
+    # ~14 KiB style payload: larger than JSON cap, under homepage cap.
+    filler = "x" * (limits["json_limit"] + 1024)
+    state["home_body"] = f"<html><p {HOMEPAGE_MARKER}{filler}</html>".encode()
+    assert limits["json_limit"] < len(state["home_body"]) <= limits["homepage_limit"]
+    clock, sleeper = _advancing_clock()
+    result = check_public_https_path(
+        config,
+        "/",
+        expect_json=False,
+        require_homepage_marker=True,
+        deadline_seconds=5.0,
+        retry_delay=0.0,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert result.ok
+    assert result.detail == "ok"
+
+
+def test_homepage_body_over_64kib_fails(disposable_tls_origin) -> None:
+    config, state, limits = disposable_tls_origin
+    over = limits["homepage_limit"] + 1
+    state["home_body"] = (f"<html><p {HOMEPAGE_MARKER}" + ("y" * over)).encode()[
+        : over + 50
+    ]
+    # Ensure actual body exceeds homepage limit.
+    state["home_body"] = (
+        f"<html><p {HOMEPAGE_MARKER}".encode() + b"z" * (limits["homepage_limit"])
+    )
+    assert len(state["home_body"]) > limits["homepage_limit"]
+    state["home_content_length"] = None  # force bounded-read path
+    clock, sleeper = _advancing_clock()
+    result = check_public_https_path(
+        config,
+        "/",
+        expect_json=False,
+        require_homepage_marker=True,
+        deadline_seconds=5.0,
+        retry_delay=0.0,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert not result.ok
+    assert "too large" in result.detail
+    assert HOMEPAGE_MARKER not in result.detail  # sanitized / no body dump
+
+
+def test_homepage_declared_content_length_over_64kib_fails_early(
+    disposable_tls_origin,
+) -> None:
+    config, state, limits = disposable_tls_origin
+    # Real body is small/valid; declared CL exceeds homepage cap → early reject.
+    state["home_body"] = f"<html><p {HOMEPAGE_MARKER}</html>".encode()
+    state["home_content_length"] = limits["homepage_limit"] + 1
+    before = int(state["bytes_written"])
+    clock, sleeper = _advancing_clock()
+    result = check_public_https_path(
+        config,
+        "/",
+        expect_json=False,
+        require_homepage_marker=True,
+        deadline_seconds=5.0,
+        retry_delay=0.0,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert not result.ok
+    assert "too large" in result.detail
+    # Server only wrote the small real body (or nothing more). Early reject must
+    # not require reading an unbounded payload from the client side.
+    assert int(state["bytes_written"]) - before <= len(state["home_body"])
+
+
+def test_missing_content_length_cannot_bypass_bounded_read(
+    tmp_path: Path,
+) -> None:
+    """Oversized homepage without Content-Length still fails via bounded read."""
+    import http.server
+    import socket
+    import ssl
+    import subprocess
+    import threading
+
+    from fetchnow_release.routing_health import PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES
+
+    host = "localhost"
+    cert = tmp_path / "nocl-cert.pem"
+    key = tmp_path / "nocl-key.pem"
+    proc = subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-subj",
+            f"/CN={host}",
+            "-addext",
+            f"subjectAltName=DNS:{host}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    big = f"<html><p {HOMEPAGE_MARKER}".encode() + b"q" * (
+        PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES + 100
+    )
+
+    class NoCLHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args) -> None:  # noqa: ANN002
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(big)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NoCLHandler)
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    httpd.socket = server_ctx.wrap_socket(httpd.socket, server_side=True)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    end = __import__("time").monotonic() + 5.0
+    while __import__("time").monotonic() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            __import__("time").sleep(0.05)
+    else:
+        httpd.shutdown()
+        raise RuntimeError("NoCL TLS fixture failed to listen")
+
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_ctx.check_hostname = True
+    client_ctx.verify_mode = ssl.CERT_REQUIRED
+    client_ctx.load_verify_locations(cafile=str(cert))
+    config = PublicHttpsGateConfig(
+        origin=f"https://{host}:{port}",
+        ssl_context=client_ctx,
+        allow_test_origin=True,
+    )
+    try:
+        clock, sleeper = _advancing_clock()
+        result = check_public_https_path(
+            config,
+            "/",
+            expect_json=False,
+            require_homepage_marker=True,
+            deadline_seconds=5.0,
+            retry_delay=0.0,
+            clock=clock,
+            sleeper=sleeper,
+        )
+        assert not result.ok
+        assert "too large" in result.detail
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_json_live_ready_still_capped_at_4kib(disposable_tls_origin) -> None:
+    config, state, limits = disposable_tls_origin
+    state["live_body"] = b'{"status":"ok","pad":"' + (
+        b"p" * (limits["json_limit"] + 64)
+    ) + b'"}'
+    assert len(state["live_body"]) > limits["json_limit"]
+    clock, sleeper = _advancing_clock()
+    live = check_public_https_path(
+        config,
+        "/api/v1/health/live",
+        expect_json=True,
+        deadline_seconds=5.0,
+        retry_delay=0.0,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert not live.ok
+    assert "too large" in live.detail
+
+    # Ready path with oversized JSON.
+    state["ready_body"] = state["live_body"]
+    clock, sleeper = _advancing_clock()
+    ready = check_public_https_path(
+        config,
+        "/api/v1/health/ready",
+        expect_json=True,
+        deadline_seconds=5.0,
+        retry_delay=0.0,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert not ready.ok
+    assert "too large" in ready.detail
+
+
+def test_homepage_limit_constants_are_distinct() -> None:
+    from fetchnow_release import HEALTH_MAX_BODY_BYTES
+    from fetchnow_release.routing_health import (
+        PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES,
+        PUBLIC_HTTPS_JSON_MAX_BODY_BYTES,
+        PUBLIC_HTTPS_MAX_BODY_BYTES,
+    )
+
+    assert PUBLIC_HTTPS_JSON_MAX_BODY_BYTES == HEALTH_MAX_BODY_BYTES == 4096
+    assert PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES == 64 * 1024
+    assert PUBLIC_HTTPS_MAX_BODY_BYTES == PUBLIC_HTTPS_JSON_MAX_BODY_BYTES
+    assert PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES > PUBLIC_HTTPS_JSON_MAX_BODY_BYTES
+
+
+def test_production_cli_cannot_override_body_limits() -> None:
+    from fetchnow_release.cli import build_parser
+
+    help_text = build_parser().format_help()
+    for banned in (
+        "allow-test-origin",
+        "allow_test_origin",
+        "public-https-test",
+        "test-origin",
+        "max-body",
+        "homepage-max-body",
+        "PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES",
+        "body-limit",
+    ):
+        assert banned not in help_text
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            [
+                "health",
+                "--project-name",
+                "fetchnow-staging",
+                "--env-file",
+                "/tmp/env",
+                "--expected-revision",
+                "a" * 40,
+                "--homepage-max-body",
+                "999999",
+            ]
+        )
+
+
+def test_public_https_shared_deadline_remains_bounded(
+    disposable_tls_origin,
+) -> None:
+    config, state, _limits = disposable_tls_origin
+    # Force permanent failure so retries would otherwise spin.
+    state["home_body"] = b"<html>no marker</html>"
+    now = {"t": 0.0}
+    result = check_public_https_path(
+        config,
+        "/",
+        expect_json=False,
+        require_homepage_marker=True,
+        deadline_seconds=30.0,
+        retry_delay=1.0,
+        clock=lambda: now["t"],
+        sleeper=lambda s: now.__setitem__("t", now["t"] + s),
+    )
+    assert not result.ok
+    assert "marker" in result.detail
+    assert now["t"] == 0.0  # permanent → no retry churn
