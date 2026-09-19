@@ -35,7 +35,12 @@ PUBLIC_HTTPS_CONNECT_TIMEOUT_SECONDS = 5.0
 PUBLIC_HTTPS_READ_TIMEOUT_SECONDS = 10.0
 PUBLIC_HTTPS_OVERALL_DEADLINE_SECONDS = 30.0
 PUBLIC_HTTPS_RETRY_DELAY_SECONDS = 1.0
-PUBLIC_HTTPS_MAX_BODY_BYTES = HEALTH_MAX_BODY_BYTES
+# JSON live/ready stay on the shared health body cap. HTML `/` needs a larger
+# but still bounded limit — production homepage is ~14 KiB today.
+PUBLIC_HTTPS_JSON_MAX_BODY_BYTES = HEALTH_MAX_BODY_BYTES
+PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES = 64 * 1024
+# Back-compat alias for callers that still expect the JSON-sized constant name.
+PUBLIC_HTTPS_MAX_BODY_BYTES = PUBLIC_HTTPS_JSON_MAX_BODY_BYTES
 
 # Stable homepage marker from web/src/pages/index.astro (brand lockup).
 HOMEPAGE_MARKER = 'class="brand">FetchNow</p>'
@@ -185,6 +190,25 @@ def _public_opener(ssl_context: ssl.SSLContext | None) -> urllib.request.OpenerD
     return urllib.request.build_opener(_NoRedirect, https_handler)
 
 
+def _content_length_exceeds(headers: object, max_body: int) -> bool:
+    """Early-reject when a declared Content-Length already exceeds the cap.
+
+    Missing or non-integer Content-Length is ignored; the bounded read below
+    remains authoritative for the actual payload size.
+    """
+    get = getattr(headers, "get", None)
+    if get is None:
+        return False
+    raw_cl = get("Content-Length")
+    if raw_cl is None:
+        return False
+    try:
+        declared = int(str(raw_cl).strip())
+    except (TypeError, ValueError):
+        return False
+    return declared > max_body
+
+
 def _fetch_public(
     url: str,
     *,
@@ -198,6 +222,9 @@ def _fetch_public(
     try:
         with opener.open(req, timeout=timeout) as resp:  # noqa: S310
             status = int(getattr(resp, "status", 200))
+            if _content_length_exceeds(resp.headers, max_body):
+                raise RoutingHealthError("response body too large")
+            # Always bound the read; Content-Length is advisory only.
             raw = resp.read(max_body + 1)
             if len(raw) > max_body:
                 raise RoutingHealthError("response body too large")
@@ -265,6 +292,11 @@ def check_public_https_path(
     # urllib.urlopen accepts a single overall timeout (seconds), not a
     # (connect, read) tuple — passing a tuple raises TypeError on settimeout.
     timeout = float(connect_timeout) + float(read_timeout)
+    max_body = (
+        PUBLIC_HTTPS_HOMEPAGE_MAX_BODY_BYTES
+        if path == PUBLIC_HOME_PATH
+        else PUBLIC_HTTPS_JSON_MAX_BODY_BYTES
+    )
     while clock() < deadline:
         attempts += 1
         try:
@@ -272,7 +304,7 @@ def check_public_https_path(
                 url,
                 timeout=timeout,
                 ssl_context=config.ssl_context,
-                max_body=PUBLIC_HTTPS_MAX_BODY_BYTES,
+                max_body=max_body,
                 expect_json=expect_json,
             )
             if status != 200:
