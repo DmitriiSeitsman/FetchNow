@@ -1,0 +1,10 @@
+# Capacity / disk observations (sanitized)
+# Captured UTC 2026-09-19. Point-in-time idle snapshot.
+
+- root filesystem: 150G total, ~26% used, ~107G free; inodes ~3% used
+- volumes: project pgdata ~64M; project tmp ~16K
+- worker tmp tree nearly empty (downloads + media_inspection placeholders)
+- worker env (names/values non-secret): APP_ENV=production; WORKER_CONCURRENCY=2; MEDIA_DOWNLOAD_CONCURRENCY=1; MEDIA_JOBS_ENABLED=true; MEDIA_DOWNLOADS_ENABLED=true; MEDIA_INSPECTION_ENABLED=true
+- api env (non-secret): API_CONCURRENCY_LIMIT=32; ROBOKASSA_MODE=test; PREMIUM_TEST_CHECKOUT_VISIBLE=true; FREE_DOWNLOAD_QUOTA_ENABLED=true; FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=false
+- public tables present: alembic_version, anonymous_clients, free_download_*, media_*, payment_orders, premium_entitlements
+- this snapshot is idle and MUST NOT be treated as a capacity budget

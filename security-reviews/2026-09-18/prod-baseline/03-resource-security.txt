@@ -1,0 +1,23 @@
+# Container resource/security observations (sanitized)
+# Captured UTC 2026-09-19 from applied Docker metadata (not YAML-only).
+
+Common:
+- Privileged=false
+- Docker socket mounts=false
+- PublishAllPorts=false
+- RestartPolicy=unless-stopped
+- LogDriver=local; max-size=20m; max-file=5
+- CapAdd/CapDrop unset
+- SecurityOpt unset (no no-new-privileges observed)
+- ReadonlyRootfs=false
+- PidsLimit unset
+
+Per service (CPU NanoCpus / Memory bytes / User / Health):
+- api: 0.50 CPU / 384MiB / fetchnow(uid 10001) / healthy / ~6 procs
+- worker: 0.50 CPU / 384MiB / uid 10001 / no healthcheck / tmp volume RW
+- delivery: 0.50 CPU / 384MiB / uid 10001 / healthy / tmp volume RO
+- web: 0.25 CPU / 64MiB / uid 10001 / healthy
+- gateway: 0.25 CPU / 64MiB / uid 10001 / healthy
+- postgres: 0.50 CPU / 512MiB / image-default uid 0 / healthy / pgdata RW
+
+Process tools: some app images lack ps; counts via /proc where needed.

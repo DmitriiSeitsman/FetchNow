@@ -1,0 +1,16 @@
+# Runtime-config drift observations (sanitized)
+# Captured UTC 2026-09-19.
+
+- application.revision (current.json): 14aa485e180f8da64c061fb47a250bc4cf6297a5
+- application.deployment_id prefix: be9acd6c…
+- runtime-config.revision: b6114796517fdc5758ee710a0d3b4886ff1baf13
+- runtime-config.deployment_id prefix: 1cffd714…
+- revision_match: false
+- deployment_match: false
+- database.schema_release_revision equals runtime-config.revision: true
+- database.schema_release_revision equals application.revision: false
+- runtime_values keys (names only): FREE_DELIVERY_RATE_BYTES_PER_SECOND, FREE_DELIVERY_RATE_LIMIT_ENABLED, FREE_DOWNLOAD_QUOTA_ENABLED, FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE, PREMIUM_TEST_CHECKOUT_VISIBLE
+- build_values keys (names only): PUBLIC_MEDIA_FLOW_ENABLED, PUBLIC_SEARCH_INDEXING_ENABLED, PUBLIC_SITE_URL
+- observed boolean flags: PUBLIC_MEDIA_FLOW_ENABLED=true; PUBLIC_SEARCH_INDEXING_ENABLED=false; FREE_DELIVERY_RATE_LIMIT_ENABLED=true; FREE_DOWNLOAD_QUOTA_ENABLED=true; FREE_DOWNLOAD_QUOTA_READY_COMPATIBILITY_MODE=false; PREMIUM_TEST_CHECKOUT_VISIBLE=true
+- fingerprints present (sha256 length 64); values not reproduced here
+- note: flags above are the stored runtime-config document; they are not claimed to be re-derived from live process memory in this capture

@@ -1,0 +1,25 @@
+# Queue / lease aggregates (sanitized)
+# Captured UTC 2026-09-19. No IDs, URLs, or row contents.
+
+media_jobs:
+- public_state=expired: n=118; oldest_age_h≈519; newest_age_h≈41
+- active leases: 0; expired lease rows: 0; exhausted retries: 5
+
+media_download_jobs:
+- public_state=expired: n=67; oldest_age_h≈519; newest_age_h≈41
+- active leases: 0; expired lease rows: 0; exhausted retries: 4
+
+media_delivery_grants:
+- total=0; active=0
+
+anonymous_clients:
+- total=62; created_last_24h=0
+
+payment_orders (aggregates only):
+- paid=13 (all is_test=true)
+- pending=5 (all is_test=true)
+
+premium_entitlements:
+- total=13; active(expires_at>=now)=0
+
+Note: idle snapshot; SEC-04/05/06 numeric budgets require calibration under load.

@@ -1,0 +1,22 @@
+# Backup / restore evidence observations (sanitized)
+# Captured UTC 2026-09-19. No dump contents, no credentials.
+
+- backup root present under production deploy tree
+- filesystem free space shared with root FS (~107G free at capture)
+- backup directories counted: 7 (+ holds/)
+- incomplete/temp backup ops: none observed beyond normal lock file
+- host filesystem owner identity omitted from this committed note
+
+Selected verification outcomes (id / result / attested heads / time):
+- 20260830T095700Z_… : failed (heads 0007_…)
+- 20260830T101031Z_… : passed (heads 0006_…)
+- 20260901T152224Z_… : passed (heads 0007_…)
+- 20260902T050423Z_… : passed (heads 0008_…)
+- 20260913T210741Z_… : failed attempt expecting 0010_…; later related passed verify on 0009_…
+- 20260914T170609Z_… : passed (heads 0009_premium_entitlements) @ 2026-09-14T17:06:12Z  << latest passed
+
+Live DB head at capture: 0010_successful_delivery_quota
+Latest passed restore-verify matches live head: NO
+
+Canonical restore procedure: documented in repository docs/Makefile production-pg-backup-verify targets.
+Recoverability for current live head: UNKNOWN until a successful isolated verify at head 0010.
