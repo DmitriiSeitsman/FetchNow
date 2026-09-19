@@ -17,8 +17,16 @@ from .c3_constants import (
     STABILIZE_INTERVAL_SECONDS,
     STABILIZE_WINDOW_SECONDS,
 )
+from .environment import real_identity
 from .health import HealthInput, HealthResult, run_health
 from .redact import redact
+from .routing_health import (
+    PublicHttpsGateConfig,
+    RoutingHealthError,
+    check_public_https_gate,
+    public_https_config_for_real_project,
+    wait_gateway_routing_ready,
+)
 
 
 class StabilizeError(RuntimeError):
@@ -152,6 +160,17 @@ def collect_restart_counts(
     return out
 
 
+def resolve_public_https_config(
+    health_input: HealthInput,
+) -> PublicHttpsGateConfig | None:
+    """Prefer explicit injection; otherwise require approved origin for real envs."""
+    if health_input.public_https is not None:
+        return health_input.public_https
+    if real_identity(health_input.project_name) is not None:
+        return public_https_config_for_real_project(health_input.project_name)
+    return None
+
+
 def stabilize_full_health(
     health_input: HealthInput,
     *,
@@ -159,8 +178,27 @@ def stabilize_full_health(
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> HealthResult:
-    """Require consecutive successful PRD1C1 health gates with stable restarts."""
+    """Canonical post-activation gates before journal commit.
+
+    Order (callers activate services and wait readiness first):
+    1. Gateway routing readiness (bounded DNS/upstream convergence).
+    2. Consecutive loopback Compose+HTTP health (existing PRD1C1 gate).
+    3. Public HTTPS smoke when configured or when targeting a real environment.
+
+    Public DNS/TLS failure blocks commit even when loopback health is green.
+    Rollback/recovery must call this same helper so failed public/routing
+    health cannot be reported as a successful rollback.
+    """
     pol = policy or StabilizationPolicy()
+
+    routing = wait_gateway_routing_ready(
+        health_input.gateway_base_url,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    if not routing.ok:
+        raise StabilizeError(routing.messages[0])
+
     baseline = collect_restart_counts(
         project_name=health_input.project_name,
         env_file=health_input.env_file,
@@ -191,7 +229,20 @@ def stabilize_full_health(
                 )
         successes += 1
         if successes >= pol.consecutive_successes:
-            return last
+            public_cfg = resolve_public_https_config(health_input)
+            if public_cfg is not None:
+                try:
+                    public = check_public_https_gate(
+                        public_cfg, clock=clock, sleeper=sleeper
+                    )
+                except RoutingHealthError as exc:
+                    raise StabilizeError(f"public HTTPS gate failed: {exc}") from exc
+                if not public.ok:
+                    raise StabilizeError(public.messages[0])
+                messages = tuple(last.messages) + routing.messages + public.messages
+                return HealthResult(True, messages, http=last.http)
+            messages = tuple(last.messages) + routing.messages
+            return HealthResult(True, messages, http=last.http)
         sleeper(pol.interval_seconds)
     detail = last.messages[0] if last and last.messages else "health gate failed"
     raise StabilizeError(

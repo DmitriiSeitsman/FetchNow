@@ -331,7 +331,17 @@ host prerequisites
     postgres and exact DB heads. Publishes the first `current.json`
     only after stabilized success.
 12. **Health.** Managed health gate (Compose state + loopback live/ready
-    + image ID binding).
+    through gateway) plus Reliability A canonical post-activation gates:
+    bounded gateway routing convergence (≤30s after api/web IP change;
+    brief 502s possible), then consecutive loopback stabilize, then
+    **mandatory public HTTPS** on the fixed approved origin
+    (`https://fetchnow.online` / staging equivalent) for `/`,
+    `/api/v1/health/live`, and `/api/v1/health/ready` with TLS verification
+    and the homepage brand marker. Public DNS/TLS failure **blocks**
+    `current.json` commit even when loopback is healthy. Delivery readiness
+    remains a strict service gate (no degraded rollout without delivery).
+    Rolling back to an older gateway image that lacks `zone`+`resolve`
+    restores the static upstream DNS-at-load risk.
 13. **Smoke.** §8.
 14. **Backup.** Create + restore-verify a logical dump under
     `/srv/fetchnow-production/backups`.

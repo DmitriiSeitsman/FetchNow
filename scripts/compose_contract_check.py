@@ -1176,6 +1176,41 @@ def check_gateway_nginx_config() -> None:
     assert base is not None
     image = base.group(1)
     conf = ROOT / "deploy" / "nginx" / "nginx.conf"
+    text = conf.read_text(encoding="utf-8")
+
+    _assert(
+        re.search(
+            r"upstream\s+fetchnow_api\s*\{[^}]*zone\s+fetchnow_api\s+\d+k\s*;"
+            r"[^}]*server\s+api:8000\s+resolve\s*;",
+            text,
+            re.S,
+        )
+        is not None,
+        "gateway: fetchnow_api upstream must use shared zone + resolve",
+    )
+    _assert(
+        re.search(
+            r"upstream\s+fetchnow_web\s*\{[^}]*zone\s+fetchnow_web\s+\d+k\s*;"
+            r"[^}]*server\s+web:8080\s+resolve\s*;",
+            text,
+            re.S,
+        )
+        is not None,
+        "gateway: fetchnow_web upstream must use shared zone + resolve",
+    )
+    _assert(
+        "set $fetchnow_delivery" in text
+        and "proxy_pass http://$fetchnow_delivery" in text,
+        "gateway: delivery must remain variable-based runtime DNS",
+    )
+    _assert(
+        re.search(r"upstream\s+fetchnow_delivery\b", text) is None,
+        "gateway: delivery must not use an upstream block",
+    )
+    _assert(
+        re.search(r"resolver\s+127\.0\.0\.11\b", text) is not None,
+        "gateway: Docker DNS resolver is required for resolve + delivery lookups",
+    )
 
     full = _nginx_config_test(image, conf, ("api", "web", "delivery"))
     _assert(
@@ -1186,6 +1221,7 @@ def check_gateway_nginx_config() -> None:
 
     # Delivery must stay a per-request lookup. A static upstream is resolved when
     # the config loads, so an absent delivery would stop the whole gateway.
+    # api/web use zone+resolve and must still start when delivery DNS is absent.
     degraded = _nginx_config_test(image, conf, ("api", "web"))
     _assert(
         degraded.returncode == 0,
@@ -1193,7 +1229,6 @@ def check_gateway_nginx_config() -> None:
         f"{degraded.stderr or degraded.stdout}",
     )
     print("OK: gateway nginx config loads while delivery is unresolvable")
-
 
 def _web_build_args(service: dict[str, Any]) -> dict[str, str]:
     build = service.get("build") or {}

@@ -56,6 +56,9 @@ def _fetch_json(url: str, *, timeout: float) -> tuple[int, dict[str, Any]]:
         raise HttpHealthError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise HttpHealthError(f"connection error: {exc.reason}") from exc
+    except (ConnectionError, TimeoutError, OSError) as exc:
+        # Includes http.client.RemoteDisconnected during DNS/upstream churn.
+        raise HttpHealthError(f"connection error: {exc}") from exc
 
 
 def check_endpoint(

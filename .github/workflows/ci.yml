@@ -237,6 +237,33 @@ jobs:
             --project-file "${RUNNER_TEMP}/fetchnow-rollout-project.txt" \
             --repo-root "${GITHUB_WORKSPACE}"
 
+  release-gateway-routing-integration:
+    name: Release gateway routing integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Verify Docker Compose v2
+        run: docker compose version
+      - name: Gateway routing integration
+        id: release_gateway_routing_integration
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_gateway_routing_integration_test.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-routing-project.txt"
+      - name: Cleanup gateway routing integration project
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/release_gateway_routing_ci_cleanup.py \
+            --project-file "${RUNNER_TEMP}/fetchnow-routing-project.txt" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
   release-deploy-plan-unit:
     name: Migration contract and deploy-plan unit tests
     runs-on: ubuntu-latest

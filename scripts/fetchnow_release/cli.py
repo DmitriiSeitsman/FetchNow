@@ -264,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         "skip-preflight",
         "skip-db-check",
         "test-mode",
+        "allow-test-origin",
+        "allow_test_origin",
+        "public-https-test",
+        "test-origin",
     ):
         if banned in help_text:
             print(f"ERROR: forbidden flag leaked into CLI: {banned}", file=sys.stderr)

@@ -119,8 +119,19 @@ For quota activation the affected set is exactly `api`. The existing activation
 helper runs Compose with `--no-build --no-deps --pull never` and the current
 immutable image-ID override. Worker, delivery, web, gateway, and PostgreSQL
 container IDs must remain unchanged. After replacement, scoped health and the
-global official health gate run, followed by revision and DB-head revalidation.
-Only then is `runtime-config.json` committed.
+canonical `stabilize_full_health` gate run (gateway routing convergence ≤30s,
+consecutive loopback health, then mandatory public HTTPS on the approved
+origin). Public DNS/TLS failure blocks config commit even when loopback is
+healthy. Rollback repeats the same gates against the restored runtime; a
+failed rollback health check must not be reported as successful
+`rolled_back`. Revision and DB-head revalidation still apply. Only then is
+`runtime-config.json` committed.
+
+Before editing the host runtime env for a config rollout, ensure
+`state/runtime-config.json` is already canonically initialized for the
+**current** deployment (same revision/deployment ID). Do not change the
+runtime-state schema in this path; do not try to “repair” production
+authority ad hoc.
 
 Changing `PREMIUM_TEST_CHECKOUT_VISIBLE` also affects exactly `api`. It never
 recreates worker, delivery, web, gateway, or PostgreSQL and never changes the
