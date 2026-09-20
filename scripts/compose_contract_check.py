@@ -51,6 +51,118 @@ def _assert(cond: bool, message: str) -> None:
         raise SystemExit(f"FAIL: {message}")
 
 
+# Canonical Compose deploy.resources.limits.memory for application tier.
+# Values are per-container hard limits (not a global replica sum).
+_API_MEMORY_LIMIT_BYTES = 402653184  # 384MiB
+_DELIVERY_MEMORY_LIMIT_BYTES = 402653184  # 384MiB
+_WORKER_MEMORY_LIMIT_BYTES = 1073741824  # 1024MiB temporary capacity hotfix
+_WORKER_DOWNLOAD_CONCURRENCY = "1"
+_WORKER_INSPECTION_CONCURRENCY = "2"  # WORKER_CONCURRENCY default; unchanged by hotfix
+
+
+def _parse_memory_bytes(value: Any) -> int:
+    """Normalize Compose memory forms to integer bytes.
+
+    Accepts rendered integer/string bytes (``1073741824``), binary SI
+    suffixes (``1024M`` / ``1G`` / ``384MiB``), and rejects unknown forms.
+    """
+    if isinstance(value, bool):
+        raise SystemExit(f"FAIL: memory limit must not be bool, got {value!r}")
+    if isinstance(value, int):
+        _assert(value > 0, f"memory limit must be positive, got {value!r}")
+        return value
+    if isinstance(value, float):
+        _assert(
+            value.is_integer() and value > 0, f"memory limit invalid float {value!r}"
+        )
+        return int(value)
+    text = str(value).strip()
+    _assert(bool(text), "memory limit must not be empty")
+    if re.fullmatch(r"[0-9]+", text):
+        return int(text)
+    match = re.fullmatch(
+        r"(?i)([0-9]+(?:\.[0-9]+)?)\s*([kmgt])(i)?b?",
+        text,
+    )
+    _assert(match is not None, f"unrecognized memory limit form {value!r}")
+    assert match is not None  # for type checkers
+    amount = float(match.group(1))
+    unit = match.group(2).lower()
+    # Compose / Docker treat bare K/M/G and KiB/MiB/GiB as binary (1024^n).
+    power = {"k": 1, "m": 2, "g": 3, "t": 4}[unit]
+    raw = amount * (1024**power)
+    _assert(
+        raw.is_integer() or abs(raw - round(raw)) < 1e-9,
+        f"non-integral memory {value!r}",
+    )
+    parsed = int(round(raw))
+    _assert(parsed > 0, f"memory limit must be positive, got {value!r}")
+    return parsed
+
+
+def _service_memory_limit_bytes(service: dict[str, Any]) -> int | None:
+    deploy = service.get("deploy") or {}
+    resources = deploy.get("resources") or {}
+    limits = resources.get("limits") or {}
+    memory = limits.get("memory")
+    if memory is None:
+        return None
+    return _parse_memory_bytes(memory)
+
+
+def _check_app_tier_memory_limits(cfg: dict[str, Any], label: str) -> None:
+    """Assert per-container hard limits for api/worker/delivery.
+
+    The worker value is a temporary capacity setting (1024MiB), not a proven
+    peak ceiling. Limits apply to each container independently; scaling
+    worker replicas multiplies the worker budget and must be recalculated.
+    """
+    services = _services(cfg)
+    expected = {
+        "api": _API_MEMORY_LIMIT_BYTES,
+        "delivery": _DELIVERY_MEMORY_LIMIT_BYTES,
+        "worker": _WORKER_MEMORY_LIMIT_BYTES,
+    }
+    for name, want in expected.items():
+        _assert(name in services, f"{label}: missing service {name}")
+        got = _service_memory_limit_bytes(services[name])
+        _assert(
+            got == want,
+            f"{label}: {name} memory hard limit must be {want} bytes "
+            f"(per container), got {got!r}",
+        )
+
+
+def _check_worker_capacity_concurrency(cfg: dict[str, Any], label: str) -> None:
+    """Download concurrency stays 1; inspection concurrency unchanged."""
+    worker_env = _service_environment(_services(cfg)["worker"])
+    _assert(
+        str(worker_env.get("MEDIA_DOWNLOAD_CONCURRENCY", ""))
+        == _WORKER_DOWNLOAD_CONCURRENCY,
+        f"{label}: MEDIA_DOWNLOAD_CONCURRENCY must remain "
+        f"{_WORKER_DOWNLOAD_CONCURRENCY}, got "
+        f"{worker_env.get('MEDIA_DOWNLOAD_CONCURRENCY')!r}",
+    )
+    _assert(
+        str(worker_env.get("WORKER_CONCURRENCY", "")) == _WORKER_INSPECTION_CONCURRENCY,
+        f"{label}: WORKER_CONCURRENCY (inspection) must remain "
+        f"{_WORKER_INSPECTION_CONCURRENCY}, got "
+        f"{worker_env.get('WORKER_CONCURRENCY')!r}",
+    )
+    banned_memory_knobs = (
+        "WORKER_MEMORY_LIMIT",
+        "WORKER_MEMORY_LIMIT_BYTES",
+        "WORKER_MEMORY_MAX",
+        "FETCHNOW_WORKER_MEMORY_LIMIT",
+        "MEDIA_WORKER_MEMORY_LIMIT",
+    )
+    for key in banned_memory_knobs:
+        _assert(
+            key not in worker_env,
+            f"{label}: unexpected worker memory runtime knob {key}",
+        )
+
+
 def _published_ports(service: dict[str, Any]) -> list[dict[str, Any]]:
     return list(service.get("ports") or [])
 
@@ -213,6 +325,8 @@ def check_dev_config() -> None:
         services["gateway"].get("image") == "fetchnow-gateway:local",
         "dev: gateway image must default to fetchnow-gateway:local",
     )
+    _check_app_tier_memory_limits(cfg, "dev")
+    _check_worker_capacity_concurrency(cfg, "dev")
     print("OK: development compose contract")
 
 
@@ -230,6 +344,8 @@ def check_base_only_config() -> None:
             f"base: service {name} must not publish host ports",
         )
     _assert_storage_init_least_privilege(_services(cfg)["storage-init"], "base")
+    _check_app_tier_memory_limits(cfg, "base")
+    _check_worker_capacity_concurrency(cfg, "base")
     print("OK: base compose contract (no host ports)")
 
 
@@ -332,6 +448,8 @@ def check_staging_config() -> None:
 
     networks = cfg.get("networks") or {}
     _assert("fetchnow" in networks, "staging: missing fetchnow network")
+    _check_app_tier_memory_limits(cfg, "staging")
+    _check_worker_capacity_concurrency(cfg, "staging")
     print("OK: staging compose contract")
 
 
@@ -589,6 +707,8 @@ def check_production_config() -> None:
 
     networks = cfg.get("networks") or {}
     _assert("fetchnow" in networks, "production: missing fetchnow network")
+    _check_app_tier_memory_limits(cfg, "production")
+    _check_worker_capacity_concurrency(cfg, "production")
     print("OK: production compose contract")
 
 
@@ -1437,6 +1557,8 @@ def check_production_media_activation_interpolation() -> None:
         and "FREE_DELIVERY_RATE_BYTES_PER_SECOND" not in worker_env,
         "activation: worker must not receive Free delivery shaping config",
     )
+    _check_app_tier_memory_limits(production, "activation")
+    _check_worker_capacity_concurrency(production, "activation")
     print("OK: production media activation interpolates UI on, indexing/muxing off")
 
 
