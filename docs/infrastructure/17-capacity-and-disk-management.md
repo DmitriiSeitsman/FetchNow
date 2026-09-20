@@ -65,6 +65,54 @@ free -h
 
 `du` — потенциально тяжёлая read-only операция. Сравнивайте тренд и filesystem, где расположен Docker data root (`docker info`). CPU/RAM pressure проявляется throttling/OOM/restarts; увеличивать concurrency при этом нельзя.
 
+## Worker memory hard limit (temporary capacity)
+
+Compose `deploy.resources.limits.memory` for the **worker** service is a
+**per-container** cgroup hard limit. It is shared by the managing Python
+process, one download subprocess, and up to two inspection subprocesses
+inside that container.
+
+| Service | Hard limit | Notes |
+|---|---|---|
+| worker | `1024M` (`1073741824` bytes) | temporary capacity after confirmed OOM at `384M` |
+| api | `384M` (`402653184` bytes) | unchanged |
+| delivery | `384M` (`402653184` bytes) | unchanged |
+
+Facts:
+
+- `384M` was confirmed insufficient: progressive video-stage downloads of
+  large artifacts (~600+ MiB) hit cgroup OOM (exit 137) before ffmpeg/mux.
+- `1024M` is a temporary capacity limit, **not** a proven maximum safe peak.
+- With one worker container, the FetchNow application hard-limit budget is
+  approximately `2432 MiB` (`1792 - 384 + 1024`). That is about 15% of a
+  16 GiB host.
+- Memory budget **multiplies by the number of worker containers**. Two
+  worker replicas imply up to `2048 MiB` of worker budget alone; recalculate
+  the host/FetchNow sum before scaling replicas.
+- `MEDIA_DOWNLOAD_CONCURRENCY=1` remains required. Do not raise download
+  concurrency to compensate for OOM.
+- Raising retry count or lease TTL is **not** a treatment for cgroup OOM.
+- After an organic successful download with artifact size ≥500 MiB, inspect
+  worker `memory.peak` and `memory.events`. If peak exceeds ~80% of the
+  limit (~820 MiB), investigate the memory source and recalculate
+  replica/host budget before automatically raising the limit again.
+- Do **not** run an artificial large-provider smoke solely to measure memory.
+- Long-term: SEC-08 process isolation should ensure a media-subprocess OOM
+  does not kill the managing worker.
+
+Production acceptance after a source rollout that changes this limit:
+
+```bash
+# Expect memory.max=1073741824 on the new worker container (per container).
+docker inspect --format '{{.HostConfig.Memory}}' "$(
+  docker compose --project-name fetchnow-production \
+    -f compose.yaml -f compose.production.yaml ps -q worker
+)"
+```
+
+**ROLLBACK** of this capacity hotfix restores the previous release and the
+`384M` worker limit — including the confirmed OOM risk for large downloads.
+
 ## Media artifact GC (worker)
 
 Physical cleanup of private download artifacts under `MEDIA_DOWNLOAD_TEMP_ROOT`

@@ -294,7 +294,9 @@ services:
       resources:
         limits:
           cpus: "0.50"
-          memory: 384M
+          # Temporary capacity hard limit (per worker container). 384M caused
+          # confirmed cgroup OOM during large progressive video downloads.
+          memory: 1024M
 
   web:
     build:
