@@ -28,7 +28,7 @@ export type HomePage = {
 
 /** Legal / policy pages — always noindex; never SEO landings. */
 export type LegalPage = {
-  id: "privacy" | "terms" | "copyright";
+  id: "privacy" | "terms" | "copyright" | "premium" | "offer";
   path: string;
   title: string;
   description: string;
@@ -134,6 +134,26 @@ export const legalPages: ReadonlyArray<LegalPage> = Object.freeze([
     description:
       "Порядок обращений правообладателей к FetchNow: рассмотрение заявлений, меры по прекращению нарушений и контакт copyright@fetchnow.online.",
     h1: "Правообладателям",
+    indexable: false,
+    robotsFollow: true,
+  }),
+  Object.freeze({
+    id: "premium",
+    path: "/premium/",
+    title: "FetchNow Premium — описание услуги",
+    description:
+      "Описание FetchNow Premium: доступ к дополнительным функциям сервиса, планируемая цена 100 ₽ за 24 часа и текущий статус приёма платежей.",
+    h1: "FetchNow Premium",
+    indexable: false,
+    robotsFollow: true,
+  }),
+  Object.freeze({
+    id: "offer",
+    path: "/offer/",
+    title: "Проект оферты FetchNow Premium",
+    description:
+      "Проект публичной оферты FetchNow Premium для согласования. Документ не вступил в силу.",
+    h1: "Проект оферты FetchNow Premium",
     indexable: false,
     robotsFollow: true,
   }),

@@ -84,6 +84,8 @@ describe("seo pages", () => {
       "/privacy/",
       "/terms/",
       "/copyright/",
+      "/premium/",
+      "/offer/",
     ]);
     for (const page of legalPages) {
       expect(page.indexable).toBe(false);
@@ -200,25 +202,58 @@ describe("provider landing wiring", () => {
       join(here, "../../pages/copyright/index.astro"),
       "utf8",
     );
+    const premium = readFileSync(
+      join(here, "../../pages/premium/index.astro"),
+      "utf8",
+    );
+    const offer = readFileSync(
+      join(here, "../../pages/offer/index.astro"),
+      "utf8",
+    );
+    const merchant = readFileSync(
+      join(here, "../legal/merchant.ts"),
+      "utf8",
+    );
     expect(layout).toContain("SiteFooter");
     expect(footer).toContain("/privacy/");
     expect(footer).toContain("/terms/");
     expect(footer).toContain("/copyright/");
-    expect(footer).toContain("mailto:support@fetchnow.online");
-    expect(footer).toContain("mailto:copyright@fetchnow.online");
+    expect(footer).toContain("/premium/");
+    expect(footer).toContain("/offer/");
+    expect(footer).toContain("mailto:${merchant.supportEmail}");
+    expect(footer).toContain("mailto:${merchant.copyrightEmail}");
+    expect(footer).toContain("tel:${merchant.phoneTel}");
+    expect(footer).toContain("merchant.inn");
+    expect(footer).toContain("merchant.fullName");
+    expect(footer).toContain("merchant.location");
+    expect(merchant).toContain('inn: "471701994485"');
+    expect(merchant).toContain('phoneTel: "+79650075607"');
+    expect(merchant).toContain('supportEmail: "support@fetchnow.online"');
+    expect(merchant).toContain("г. Волосово");
+    expect(merchant).toContain("Сейцман Дмитрий Александрович");
+    expect(merchant).toContain(
+      "Приём реальных платежей пока не открыт",
+    );
+    expect(merchant).toContain("priceRub: 100");
     expect(privacy).toContain("Редакция от 29 августа 2026 года");
     expect(privacy).toContain("__Host-fetchnow_client");
     expect(privacy).toContain("Локальная статистика использования");
     expect(privacy).toContain("Обращения правообладателей");
     expect(privacy).toContain("mailto:copyright@fetchnow.online");
     expect(privacy).toContain('href="/copyright/"');
+    expect(privacy).toContain("tel:+79650075607");
+    expect(privacy).toContain("оплаченного доступа Premium");
     expect(terms).toContain("Редакция от 16 августа 2026 года");
     expect(terms).toContain("Назначение FetchNow");
     expect(terms).not.toContain("Раздел готовится");
     expect(terms).toContain('href="/privacy/"');
     expect(terms).toContain('href="/copyright/"');
+    expect(terms).toContain('href="/premium/"');
+    expect(terms).toContain('href="/offer/"');
     expect(terms).toContain("mailto:support@fetchnow.online");
     expect(terms).toContain("mailto:copyright@fetchnow.online");
+    expect(terms).toContain("tel:+79650075607");
+    expect(terms).toContain("Тестовая оплата");
     expect(copyright).not.toContain("Раздел готовится");
     expect(copyright).toContain("Редакция от 16 августа 2026 года");
     expect(copyright).toContain("Обращение правообладателя");
@@ -234,6 +269,20 @@ describe("provider landing wiring", () => {
     expect(privacy).toContain("во внутреннем закрытом");
     expect(privacy).toContain("серверной авторизации");
     expect(privacy).toContain("Обращения правообладателей");
+    expect(premium).toContain("commercialPremium.interimNotice");
+    expect(premium).toContain("commercialPremium.priceRub");
+    expect(premium).toContain("без автопродления");
+    expect(premium).not.toContain("data-flow-premium-cta");
+    expect(premium).not.toContain("Тестовая оплата Premium");
+    expect(offer).toContain("Проект оферты. Не вступил в силу");
+    expect(offer).toContain("merchant.inn");
+    expect(offer).toContain("tel:${merchant.phoneTel}");
+    expect(offer).toContain("merchant.location");
+    expect(offer).toContain("не обещается");
+    expect(legalPageById("premium").indexable).toBe(false);
+    expect(legalPageById("offer").indexable).toBe(false);
+    expect(indexablePaths()).not.toContain("/premium/");
+    expect(indexablePaths()).not.toContain("/offer/");
     expect(robotsContentForLegalPage(legalPageById("copyright"))).toBe(
       "noindex,follow",
     );
@@ -241,6 +290,12 @@ describe("provider landing wiring", () => {
       "noindex,follow",
     );
     expect(robotsContentForLegalPage(legalPageById("terms"))).toBe(
+      "noindex,follow",
+    );
+    expect(robotsContentForLegalPage(legalPageById("premium"))).toBe(
+      "noindex,follow",
+    );
+    expect(robotsContentForLegalPage(legalPageById("offer"))).toBe(
       "noindex,follow",
     );
   });
