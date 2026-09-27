@@ -2,11 +2,23 @@
 
 ## Infrastructure controls
 
-- Least privilege: host-операции через `cryptobot` + точечный `sudo`; backend/web/gateway — non-root UID 10001.
+- Host operator model is environment-specific. Staging handbook target remains
+  least privilege via `cryptobot` + точечный `sudo`. On the current production
+  shared host the owner accepted a **trusted-admin** model: `ubuntuuser` with
+  permanent `docker` group membership for rootful Docker, plus a separate sudo
+  path — see [глава 30](30-production-release-runbook.md). Documenting that
+  model is not a claim that SEC hardening is finished.
+- Application processes: backend/web/gateway — non-root UID 10001.
 - Firewall включён; gateway bind `127.0.0.1:8091`; PostgreSQL/API не имеют staging public port.
 - Secrets вне Git/images/logs, mode 600/700, уникальные production credentials.
-- Containers без `privileged` и Docker socket mount; TLS validation включена.
+- Containers без `privileged` и Docker socket mount (when last verified); absence
+  of sock mounts is necessary but not sufficient proof that apps cannot reach
+  host administration. TLS validation включена.
 - Backups ограничены по правам, проверяются restore и копируются off-server.
+- Temporary Docker socket ACL is not the default control on the current
+  production shared host; do not treat ACL removal as full access revocation
+  while group membership remains (historical SEC-00 captures remain
+  point-in-time evidence and are not rewritten here).
 
 ## Реализованная URL validation (PR1)
 

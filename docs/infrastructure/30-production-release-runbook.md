@@ -87,7 +87,81 @@ disk for images, release trees, and verified backups.
 - SSH key auth only; disable password login for the operator account.
 - Passwordless `sudo` limited to the operations this runbook needs
   (directory create, nginx reload, certbot) — prefer explicit sudoers
-  rules over blanket root.
+  rules over blanket root, **except** where the owner has explicitly
+  accepted a broader model for a named host (see below).
+
+### Production shared host — Docker access (current accepted model)
+
+**INFO:** On the current public production host for `fetchnow.online`,
+the owner accepted a trusted-admin model (documented 2026-09-24; not a
+security hardening claim):
+
+| Item | Accepted value |
+|---|---|
+| Operator account | `ubuntuuser` |
+| Docker daemon | rootful; socket `/run/docker.sock` (symlink target of `/var/run/docker.sock`) |
+| Socket baseline | owner `root`, group `docker`, mode `0660`, **no** named ACL required |
+| Docker CLI access | permanent supplementary membership in group `docker` — direct `docker` / `docker compose` without sudo |
+| Sudo | separate administrative path; unrestricted `NOPASSWD` may exist on this host and is **independent** of the docker group |
+| Compose project | only `fetchnow-production` for FetchNow releases |
+| Release locks | under `/srv/fetchnow-production/locks/` — project-scoped; they do **not** serialize other Compose projects or the Docker daemon |
+
+FetchNow release tooling (`make production-release-*`) calls `docker compose`
+directly. It does **not** grant or revoke socket ACL, and it does **not**
+add/remove group membership.
+
+**CHECK (preflight / post-rollout on this host):**
+
+1. `id -nG` includes `docker` for the operator session that will run
+   release Make targets.
+2. `stat -c '%U:%G %a' /run/docker.sock` shows `root:docker 660` (or the
+   documented equivalent).
+3. `getfacl -p /run/docker.sock` shows **no unexpected named user ACL**.
+4. `docker version` succeeds **without** sudo for that session.
+5. Compose operations use `--project-name fetchnow-production` (via Make)
+   and never a global prune / host-wide cleanup.
+
+Do **not** treat removal of a named ACL as revocation of Docker access
+while group membership remains. Do **not** require
+`docker ps: Permission denied` as a rollout completion criterion on this
+host — that check assumed temporary ACL-only access and is false under
+permanent group membership.
+
+**WARNING — temporary ACL (conditional, other environments only):**
+
+If an environment has **no** docker-group membership and the operator
+must briefly use the rootful socket, a named ACL
+(`setfacl -m u:<operator>:rw` / later `-x`) may still be used as an
+operator procedure. That pattern:
+
+- is **not** the default on the current production shared host;
+- is **not** performed by FetchNow release tooling;
+- does **not** constrain a user who already has unrestricted sudo;
+- must leave socket owner/group/mode unchanged after cleanup;
+- must not be automated to change group databases or kill sessions.
+
+Supplementary groups of already-running processes may lag after a
+group-database change until those sessions are replaced. Do not auto-kill
+sessions or run `usermod`/`gpasswd`/`newgrp` as part of a FetchNow
+release.
+
+**DANGER — shared host isolation:**
+
+- Keep Compose project scope exact (`fetchnow-production`). Other owner
+  projects on the same Docker host (for example AMHelper) use their own
+  compose names and deploy roots.
+- Do not run global `docker system prune`, host-wide `docker compose down`,
+  or broad container filters that can affect non-FetchNow projects.
+- Host Nginx reload / site edits can affect every vhost on the machine —
+  scope changes to the FetchNow server block unless the owner approved a
+  broader change.
+- Holding the FetchNow release lock does **not** prevent parallel Docker
+  or Nginx work by another project on the same host.
+
+Documenting this model records existing operator powers. It is **not**
+evidence that SEC hardening is complete, and absence of `docker.sock`
+mounts in application containers is **not** proof that no host-admin
+path exists for apps.
 
 ### Filesystem layout
 

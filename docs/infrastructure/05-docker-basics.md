@@ -24,17 +24,33 @@ docker system df
 
 Первые две команды проверяют CLI/daemon. `ps` показывает running/all containers, `logs` — stdout/stderr, `inspect` — конфигурацию, `stats` — ресурсы, `system df` — учёт диска. На shared host сначала фильтруйте по Compose project, чтобы не спутать соседей.
 
+## Доступ CLI к daemon (права)
+
+Rootful Docker обычно слушает Unix-socket `root:docker` mode `0660`. Три разных пути:
+
+| Путь | Смысл |
+|---|---|
+| Supplementary group `docker` | постоянный прямой CLI-доступ; на текущем production shared host для `ubuntuuser` — **принятая** модель (см. [главу 30](30-production-release-runbook.md)) |
+| Named ACL на socket | временный операторский обход **только** если group membership нет; не защита от unrestricted sudo; удаление ACL не отзывает group-доступ |
+| `sudo docker …` | отдельный root-путь; не считать «ограничением», если sudo уже широкий |
+
+**CHECK:** перед диагностикой на shared host сверьте `id -nG`, `stat`/`getfacl` на socket и успешный `docker version` без sudo, когда group-доступ ожидается. Не требуйте `docker ps: Permission denied` как критерий «безопасного завершения», если постоянный group-доступ ожидается.
+
+Старые процессы могут сохранять прежний набор supplementary groups после изменения базы групп, пока сессия не перезапущена. Не меняйте группы и не завершайте сессии автоматически ради диагностики.
+
+Membership в `docker` на rootful daemon практически эквивалентна root по влиянию на хост. Это эксплуатационный факт, а не заявление о завершённом security hardening.
+
 ## Lifecycle и ошибки
 
 `created → running → exited → removed`. `unhealthy` означает провал healthcheck, но процесс может оставаться running. При restart контейнерный writable layer сохраняется, при recreate — нет; named volumes сохраняются в обоих случаях.
 
-- `Cannot connect to Docker daemon`: проверить service/permissions, не использовать sudo как случайный обход.
-- `port is already allocated`: найти listener и исправить bind.
+- `Cannot connect to Docker daemon`: проверить service/permissions; на хосте с принятым group-доступом сначала `id`/`getfacl`, не выдавать ACL «на всякий случай» и не использовать sudo как случайный обход.
+- `port is already allocated`: найти listener и исправить bind; на shared host учитывать чужие Compose projects.
 - `no space left on device`: сначала измерить layers, logs, volumes и inodes.
 
 ## Опасные операции
 
-**DANGER:** `docker system prune`, `docker compose down -v` и удаление volume способны уничтожить images/cache или данные. Они не входят в обычный поток. Не запускайте privileged containers, не mount-ите `/var/run/docker.sock` и не публикуйте сервисы на `0.0.0.0` без обоснования.
+**DANGER:** `docker system prune`, `docker compose down -v` и удаление volume способны уничтожить images/cache или данные **соседних** проектов на том же daemon. Они не входят в обычный поток. Держите точный Compose project scope. Не запускайте privileged containers, не mount-ите `/var/run/docker.sock` в приложение и не публикуйте сервисы на `0.0.0.0` без обоснования.
 
 **ROLLBACK:** read-only диагностика не требует отката. Для изменения сохраняйте точную предыдущую image/release reference и Compose config; контейнер восстанавливается recreate из известного image, данные — только из volume/backup.
 
