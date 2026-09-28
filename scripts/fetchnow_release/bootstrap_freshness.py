@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    OutputLimitExceededError,
+    run_docker_probe,
+)
 from .c3_constants import RUNTIME_APPLICATION_SERVICES
 from .c3b3_constants import (
     BOOTSTRAP_ALLOWED_EXTRA_SCHEMAS,
@@ -223,15 +228,20 @@ def probe_user_catalog(
         compose_files=compose_files,
     )
     assert_readonly_subprocess(argv)
-    proc = subprocess.run(
-        argv,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
+    try:
+        result = run_docker_probe(argv, cwd=cwd)
+    except (BoundedTimeoutError, BoundedCancelledError, OutputLimitExceededError) as exc:
+        # Fail closed: timeout/cancel/truncated output is not an empty catalog.
+        return UserCatalogProbe(
+            status="query_failed",
+            relations=(),
+            extra_schemas=(),
+            detail=redact(str(exc)),
+        )
+    detail = redact(
+        result.stderr_text.strip() or result.stdout_text.strip() or "unknown"
     )
-    detail = redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
-    if proc.returncode != 0:
+    if result.returncode != 0:
         return UserCatalogProbe(
             status="query_failed",
             relations=(),
@@ -240,7 +250,7 @@ def probe_user_catalog(
         )
     relations: list[str] = []
     extra_schemas: list[str] = []
-    for raw in proc.stdout.splitlines():
+    for raw in result.stdout_text.splitlines():
         line = raw.strip()
         if not line:
             continue
@@ -285,13 +295,26 @@ def list_project_volumes(
         "{{.Name}}",
     ]
     assert_readonly_subprocess(argv)
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(argv)
+    except (BoundedTimeoutError, BoundedCancelledError, OutputLimitExceededError) as exc:
+        # Fail closed: never treat timeout as an empty volume list / fresh env.
+        raise BootstrapFreshnessError(
+            "docker volume ls timed out, cancelled, or exceeded output limit: "
+            + redact(str(exc))
+        ) from exc
+    if result.returncode != 0:
         raise BootstrapFreshnessError(
             "docker volume ls failed: "
-            + redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
+            + redact(
+                result.stderr_text.strip()
+                or result.stdout_text.strip()
+                or "unknown"
+            )
         )
-    names = tuple(sorted(ln.strip() for ln in proc.stdout.splitlines() if ln.strip()))
+    names = tuple(
+        sorted(ln.strip() for ln in result.stdout_text.splitlines() if ln.strip())
+    )
     return names
 
 
@@ -311,13 +334,20 @@ def _pgdata_present(volume_names: tuple[str, ...], *, project_name: str) -> bool
         "{{.Name}}",
     ]
     assert_readonly_subprocess(argv)
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(argv)
+    except (BoundedTimeoutError, BoundedCancelledError, OutputLimitExceededError) as exc:
+        raise BootstrapFreshnessError(
+            "docker volume ls (pgdata) timed out, cancelled, or exceeded "
+            "output limit: "
+            + redact(str(exc))
+        ) from exc
+    if result.returncode != 0:
         raise BootstrapFreshnessError(
             "docker volume ls (pgdata) failed: "
-            + redact(proc.stderr.strip() or "unknown")
+            + redact(result.stderr_text.strip() or "unknown")
         )
-    return any(ln.strip() for ln in proc.stdout.splitlines())
+    return any(ln.strip() for ln in result.stdout_text.splitlines())
 
 
 def _application_services_present(rows: list[dict]) -> tuple[str, ...]:

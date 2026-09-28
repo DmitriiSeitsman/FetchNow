@@ -22,6 +22,8 @@ DEPLOY_ROOT ?= /srv/fetchnow-staging
 BACKUP_ROOT ?= $(DEPLOY_ROOT)/backups
 STAGING_COMPOSE ?= $(COMPOSE) --env-file "$(ENV_FILE)" --project-name "$(PROJECT_NAME)" -f compose.yaml -f "$(COMPOSE_OVERLAY)"
 PYTHON ?= python3.12
+FETCHNOW_PYTEST_WALL_SECONDS ?= 600
+PYTEST_BOUNDED ?= FETCHNOW_PYTEST_WALL_SECONDS=$(FETCHNOW_PYTEST_WALL_SECONDS) PYTHONPATH=scripts $(PYTHON) scripts/run_pytest_bounded.py --
 PG_BACKUP ?= $(PYTHON) scripts/fetchnow_pg_backup_cli.py
 RELEASE ?= $(PYTHON) scripts/fetchnow_release_cli.py
 
@@ -60,7 +62,7 @@ typecheck:
 
 test:
 	cd $(BACKEND) && .venv/bin/pytest -q
-	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup tests/release
+	$(PYTEST_BOUNDED) -q tests/pg_backup tests/release
 	cd $(WEB) && npm test
 
 build:
@@ -77,7 +79,7 @@ delivery-rate-integration:
 		/tmp/delivery_rate_integration_test.py
 
 pg-backup-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/pg_backup
+	$(PYTEST_BOUNDED) -q tests/pg_backup
 
 pg-backup-integration:
 	$(PYTHON) scripts/pg_backup_integration_test.py
@@ -113,7 +115,7 @@ pg-backup-prune-dry:
 	$(PG_BACKUP) prune --backup-root "$(BACKUP_ROOT)" --keep $${KEEP:-7}
 
 release-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release
+	$(PYTEST_BOUNDED) -q tests/release
 
 release-ancestry-integration:
 	$(PYTHON) scripts/release_ancestry_integration_test.py
@@ -149,7 +151,7 @@ release-gateway-routing-integration:
 	$(PYTHON) scripts/release_gateway_routing_integration_test.py
 
 release-build-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_release_build_unit.py tests/release/test_source_contract_unit.py
+	$(PYTEST_BOUNDED) -q tests/release/test_release_build_unit.py tests/release/test_source_contract_unit.py
 
 release-prepare:
 	@test -f "$(ENV_FILE)" || (echo 'Usage: make release-prepare EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging' && exit 1)
@@ -174,7 +176,7 @@ release-build-integration:
 	$(PYTHON) scripts/release_build_integration_test.py
 
 release-rollout-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py tests/release/test_config_rollout_unit.py
+	$(PYTEST_BOUNDED) -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py tests/release/test_config_rollout_unit.py
 
 release-rollout:
 	@test -n "$(EXPECTED_REVISION)" || (echo 'Usage: make release-rollout EXPECTED_REVISION=<sha> ENV_FILE=.env.staging DEPLOY_ROOT=/srv/fetchnow-staging [BOOTSTRAP=1]' && exit 1)
@@ -203,7 +205,7 @@ release-rollout-integration:
 	$(PYTHON) scripts/release_rollout_integration_test.py
 
 release-deploy-plan-test:
-	$(BACKEND)/.venv/bin/pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/release/test_current_state_unit.py tests/pg_backup/test_alembic_graph.py
+	$(PYTEST_BOUNDED) -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/release/test_current_state_unit.py tests/pg_backup/test_alembic_graph.py
 
 release-deploy-plan:
 	@test -f "$(ENV_FILE)" || (echo "Missing ENV_FILE" && exit 1)
@@ -221,7 +223,7 @@ release-deploy-plan-integration:
 	$(PYTHON) scripts/release_deploy_plan_integration_test.py
 
 release-migration-test:
-	$(BACKEND)/.venv/bin/pytest -q \
+	$(PYTEST_BOUNDED) -q \
 		tests/release/test_migration_journal_unit.py \
 		tests/release/test_migrate_unit.py \
 		tests/release/test_migration_recover_unit.py \

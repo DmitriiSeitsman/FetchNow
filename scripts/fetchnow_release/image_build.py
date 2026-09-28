@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    OutputLimitExceededError,
+    run_docker_probe,
+)
 from . import OCI_REVISION_LABEL
 from .c2_constants import APPLICATION_BUILD_SERVICES, BUILD_PROJECT_NAME
 from .manifest import ImageRecord
@@ -57,6 +63,7 @@ class BuiltImages:
 
 
 def _run(argv: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Unbounded runner for long compose build only — not short probes."""
     return subprocess.run(
         argv,
         cwd=str(cwd),
@@ -64,6 +71,22 @@ def _run(argv: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _probe(argv: list[str], *, cwd: Path = Path("/")):
+    """Short read-only Docker metadata probe under the SEC-01 runner."""
+    try:
+        return run_docker_probe(argv, cwd=cwd)
+    except (
+        BoundedTimeoutError,
+        BoundedCancelledError,
+        OutputLimitExceededError,
+    ) as exc:
+        raise ImageBuildError(
+            "docker metadata probe timed out, cancelled, or exceeded output "
+            "limit: "
+            + redact(str(exc))
+        ) from exc
 
 
 def _compose_build_env(revision: str) -> dict[str, str]:
@@ -81,41 +104,48 @@ def _compose_build_env(revision: str) -> dict[str, str]:
 
 
 def docker_version() -> str:
-    proc = _run(["docker", "version", "--format", "{{.Server.Version}}"], cwd=Path("/"))
-    if proc.returncode != 0:
-        raise ImageBuildError("docker version failed: " + redact(proc.stderr.strip()))
-    return proc.stdout.strip() or "unknown"
+    result = _probe(
+        ["docker", "version", "--format", "{{.Server.Version}}"], cwd=Path("/")
+    )
+    if result.returncode != 0:
+        raise ImageBuildError(
+            "docker version failed: " + redact(result.stderr_text.strip())
+        )
+    return result.stdout_text.strip() or "unknown"
 
 
 def compose_version() -> str:
-    proc = _run(["docker", "compose", "version", "--short"], cwd=Path("/"))
-    if proc.returncode != 0:
-        raise ImageBuildError("compose version failed: " + redact(proc.stderr.strip()))
-    return proc.stdout.strip() or "unknown"
+    result = _probe(["docker", "compose", "version", "--short"], cwd=Path("/"))
+    if result.returncode != 0:
+        raise ImageBuildError(
+            "compose version failed: " + redact(result.stderr_text.strip())
+        )
+    return result.stdout_text.strip() or "unknown"
 
 
 def inspect_image(reference: str) -> dict[str, Any]:
-    proc = _run(
+    result = _probe(
         ["docker", "image", "inspect", reference, "--format", "{{json .}}"],
         cwd=Path("/"),
     )
-    if proc.returncode != 0:
+    if result.returncode != 0:
         raise ImageBuildError(
             f"docker image inspect failed for {reference}: "
-            + redact(proc.stderr.strip())
+            + redact(result.stderr_text.strip())
         )
     try:
-        return json.loads(proc.stdout)
+        return json.loads(result.stdout_text)
     except json.JSONDecodeError as exc:
         raise ImageBuildError(f"invalid inspect JSON for {reference}") from exc
 
 
 def image_exists(reference: str) -> bool:
-    proc = _run(
+    # Transport timeout/cancel raises ImageBuildError (not "absent").
+    result = _probe(
         ["docker", "image", "inspect", reference, "--format", "{{.Id}}"],
         cwd=Path("/"),
     )
-    return proc.returncode == 0 and bool(proc.stdout.strip())
+    return result.returncode == 0 and bool(result.stdout_text.strip())
 
 
 def target_image_refs(revision: str) -> tuple[str, ...]:
@@ -139,7 +169,7 @@ def containers_using_image(reference: str) -> list[str]:
     if not _IMAGE_ID_RE.fullmatch(image_id):
         raise ImageBuildError(f"malformed image ID for {reference}: {image_id!r}")
 
-    proc = _run(
+    result = _probe(
         [
             "docker",
             "ps",
@@ -150,28 +180,30 @@ def containers_using_image(reference: str) -> list[str]:
         ],
         cwd=Path("/"),
     )
-    if proc.returncode != 0:
-        raise ImageBuildError("docker ps failed: " + redact(proc.stderr.strip()))
+    if result.returncode != 0:
+        raise ImageBuildError(
+            "docker ps failed: " + redact(result.stderr_text.strip())
+        )
 
     names: list[str] = []
-    for line in proc.stdout.splitlines():
+    for line in result.stdout_text.splitlines():
         line = line.strip()
         if not line:
             continue
         parts = line.split(None, 1)
         cid = parts[0]
         cname = parts[1] if len(parts) > 1 else cid
-        insp = _run(
+        insp = _probe(
             ["docker", "inspect", cid, "--format", "{{json .Image}}"],
             cwd=Path("/"),
         )
         if insp.returncode != 0:
             raise ImageBuildError(
                 f"docker inspect failed for container {cid}: "
-                + redact(insp.stderr.strip())
+                + redact(insp.stderr_text.strip())
             )
         try:
-            container_image = json.loads(insp.stdout)
+            container_image = json.loads(insp.stdout_text)
         except json.JSONDecodeError as exc:
             raise ImageBuildError(
                 f"invalid container inspect JSON for {cid}"

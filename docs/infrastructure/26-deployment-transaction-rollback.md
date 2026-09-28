@@ -104,4 +104,4 @@ make production-release-recover \
 | PRD1D | host Nginx/TLS/public publish (not claimed by release parameterization) |
 | PRD1D-B | production parameterization of the existing release pipeline — see [chapter 30](30-production-release-runbook.md) |
 
-Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, `fetchnow-production`, or `fetchnow-prod`.
+Bounded Docker diagnostic probes and process-group cleanup for readiness/stabilize paths are documented in [SEC-01 bounded processes](../operations/sec-01-bounded-processes.md). Isolated CI integration uses only unique `fetchnow-rollout-test-*` projects and removes that exact project with `docker compose down -v`. It never targets `fetchnow`, `fetchnow-staging`, `fetchnow-production`, or `fetchnow-prod`.

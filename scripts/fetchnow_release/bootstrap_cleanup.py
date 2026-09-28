@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    run_docker_probe,
+)
 from .c3_constants import (
     RUNTIME_APPLICATION_SERVICES,
     LABEL_DEPLOYMENT_ID,
@@ -47,16 +51,23 @@ def _compose_ps_json(
     for path in compose_files:
         argv.extend(["-f", str(path)])
     argv.extend(["ps", "--format", "json"])
-    proc = subprocess.run(
-        argv, cwd=str(cwd), capture_output=True, text=True, check=False
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(argv, cwd=cwd)
+    except (BoundedTimeoutError, BoundedCancelledError) as exc:
+        raise BootstrapCleanupError(
+            f"compose ps timed out or cancelled: {exc}"
+        ) from exc
+    if result.returncode != 0:
         raise BootstrapCleanupError(
             "compose ps failed: "
-            + redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
+            + redact(
+                result.stderr_text.strip()
+                or result.stdout_text.strip()
+                or "unknown"
+            )
         )
     rows: list[dict[str, object]] = []
-    for line in proc.stdout.splitlines():
+    for line in result.stdout_text.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -70,25 +81,31 @@ def _compose_ps_json(
 
 
 def _inspect_labels(container_id: str) -> dict[str, str]:
-    proc = subprocess.run(
-        [
-            "docker",
-            "inspect",
-            container_id,
-            "--format",
-            "{{json .Config.Labels}}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(
+            [
+                "docker",
+                "inspect",
+                container_id,
+                "--format",
+                "{{json .Config.Labels}}",
+            ]
+        )
+    except (BoundedTimeoutError, BoundedCancelledError) as exc:
+        raise BootstrapCleanupError(
+            f"docker inspect timed out or cancelled: {exc}"
+        ) from exc
+    if result.returncode != 0:
         raise BootstrapCleanupError(
             "docker inspect failed: "
-            + redact(proc.stderr.strip() or proc.stdout.strip() or container_id)
+            + redact(
+                result.stderr_text.strip()
+                or result.stdout_text.strip()
+                or container_id
+            )
         )
     try:
-        raw = json.loads(proc.stdout.strip() or "{}")
+        raw = json.loads(result.stdout_text.strip() or "{}")
     except json.JSONDecodeError as exc:
         raise BootstrapCleanupError(f"invalid inspect labels JSON: {exc}") from exc
     if not isinstance(raw, dict):
@@ -165,17 +182,21 @@ def remove_owned_bootstrap_containers(
             )
     removed: list[RemovedBootstrapContainer] = []
     for item in discovered:
-        proc = subprocess.run(
-            ["docker", "rm", "-f", item.container_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
+        try:
+            result = run_docker_probe(["docker", "rm", "-f", item.container_id])
+        except (BoundedTimeoutError, BoundedCancelledError) as exc:
+            raise BootstrapCleanupError(
+                f"docker rm timed out or cancelled: {exc}"
+            ) from exc
+        if result.returncode != 0:
             raise BootstrapCleanupError(
                 "failed to remove owned bootstrap container "
                 f"{item.container_id}: "
-                + redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
+                + redact(
+                    result.stderr_text.strip()
+                    or result.stdout_text.strip()
+                    or "unknown"
+                )
             )
         removed.append(item)
     return tuple(removed)

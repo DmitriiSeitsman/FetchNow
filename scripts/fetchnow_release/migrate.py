@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    OutputLimitExceededError,
+    run_docker_probe,
+)
 from .alembic_migrate import AlembicMigrateError, run_alembic_upgrade
 from .application_compatibility import (
     CompatibilityError,
@@ -171,24 +176,34 @@ def _snapshot_container_ids(
 ) -> dict[str, str]:
     ids: dict[str, str] = {}
     for service in _MONITORED_SERVICES:
-        proc = subprocess.run(
-            _compose_argv(
-                project_name,
-                env_file,
-                compose_files,
-                ("ps", "-q", service),
-            ),
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=False,
+        argv = _compose_argv(
+            project_name,
+            env_file,
+            compose_files,
+            ("ps", "-q", service),
         )
-        if proc.returncode != 0:
+        try:
+            result = run_docker_probe(argv, cwd=cwd)
+        except (
+            BoundedTimeoutError,
+            BoundedCancelledError,
+            OutputLimitExceededError,
+        ) as exc:
+            # Fail closed: timeout must not look like a missing container.
+            raise MigrationError(
+                f"compose ps timed out or cancelled for {service}: "
+                + redact(str(exc))
+            ) from exc
+        if result.returncode != 0:
             raise MigrationError(
                 f"compose ps failed for {service}: "
-                + redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
+                + redact(
+                    result.stderr_text.strip()
+                    or result.stdout_text.strip()
+                    or "unknown"
+                )
             )
-        cid = proc.stdout.strip()
+        cid = result.stdout_text.strip()
         if not cid:
             raise MigrationError(f"missing running container for {service}")
         ids[service] = cid

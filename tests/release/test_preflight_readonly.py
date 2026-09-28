@@ -52,17 +52,19 @@ def test_compose_config_json_is_config_only(tmp_path: Path) -> None:
     env.write_text("X=1\n")
     compose = tmp_path / "compose.yaml"
     compose.write_text("services: {}\n")
-    with mock.patch.object(docker_checks.subprocess, "run") as run:
-        run.return_value = mock.Mock(
-            returncode=0, stdout='{"services":{}}', stderr=""
-        )
+    fake = mock.Mock(
+        returncode=0,
+        stdout_text='{"services":{}}',
+        stderr_text="",
+    )
+    with mock.patch.object(docker_checks, "run_docker_probe", return_value=fake) as probe:
         compose_config_json(
             project_name="fetchnow-staging",
             env_file=env,
             compose_files=(compose,),
             repo_root=tmp_path,
         )
-    argv = run.call_args.args[0]
+    argv = probe.call_args.args[0]
     assert argv[:2] == ["docker", "compose"]
     assert "config" in argv
     assert argv[argv.index("--format") + 1] == "json"
