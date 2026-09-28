@@ -344,23 +344,22 @@ def test_bool_one_rejected_for_online_with_previous() -> None:
 
 
 def test_deploy_plan_subprocess_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Record subprocess argv during planner DB-head query path."""
-    import subprocess
+    """Record Docker argv during planner DB-head query path (bounded probe)."""
+    from fetchnow_release import db_heads
+    from fetchnow_release.bounded_subprocess import BoundedResult
 
     recorded: list[list[str]] = []
 
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_probe(argv, **kwargs):  # type: ignore[no-untyped-def]
         recorded.append(list(argv))
+        return BoundedResult(
+            argv=tuple(str(a) for a in argv),
+            returncode=0,
+            stdout=b"0001_baseline\n",
+            stderr=b"",
+        )
 
-        class Proc:
-            returncode = 0
-            stdout = "0001_baseline\n"
-            stderr = ""
-
-        return Proc()
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    from fetchnow_release import db_heads
+    monkeypatch.setattr(db_heads, "run_docker_probe", fake_probe)
 
     heads = db_heads.database_heads_via_postgres(
         project_name="fetchnow-staging",

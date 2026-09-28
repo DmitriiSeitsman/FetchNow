@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_subprocess import (
+    BudgetExhaustedError,
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    DeadlineBudget,
+    run_docker_probe,
+)
 from .c3_constants import (
     RUNTIME_APPLICATION_SERVICES,
     SERVICE_HEALTH_DEADLINE_SECONDS,
@@ -48,6 +54,9 @@ def _compose_ps(
     env_file: Path,
     compose_files: tuple[Path, ...],
     cwd: Path,
+    budget: DeadlineBudget | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> list[dict]:
     argv = [
         "docker",
@@ -60,12 +69,21 @@ def _compose_ps(
     for path in compose_files:
         argv.extend(["-f", str(path)])
     argv.extend(["ps", "-a", "--format", "json"])
-    proc = subprocess.run(
-        argv, cwd=str(cwd), capture_output=True, text=True, check=False
-    )
-    if proc.returncode != 0:
-        raise StabilizeError("compose ps failed: " + redact(proc.stderr.strip()))
-    text = proc.stdout.strip()
+    try:
+        result = run_docker_probe(
+            argv, budget=budget, cwd=cwd, clock=clock, sleeper=sleeper
+        )
+    except BudgetExhaustedError as exc:
+        raise StabilizeError(f"compose ps skipped: {exc}") from exc
+    except BoundedTimeoutError as exc:
+        raise StabilizeError(f"compose ps timed out: {exc}") from exc
+    except BoundedCancelledError as exc:
+        raise StabilizeError(f"compose ps cancelled: {exc}") from exc
+    if result.returncode != 0:
+        raise StabilizeError(
+            "compose ps failed: " + redact(result.stderr_text.strip())
+        )
+    text = result.stdout_text.strip()
     if not text:
         return []
     if text.startswith("["):
@@ -74,16 +92,29 @@ def _compose_ps(
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
-def _inspect_restart(cid: str) -> int:
-    proc = subprocess.run(
-        ["docker", "inspect", cid, "--format", "{{.RestartCount}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
+def _inspect_restart(
+    cid: str,
+    *,
+    budget: DeadlineBudget | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
+    try:
+        result = run_docker_probe(
+            ["docker", "inspect", cid, "--format", "{{.RestartCount}}"],
+            budget=budget,
+            clock=clock,
+            sleeper=sleeper,
+        )
+    except BudgetExhaustedError as exc:
+        raise StabilizeError(f"docker inspect skipped: {exc}") from exc
+    except BoundedTimeoutError as exc:
+        raise StabilizeError(f"docker inspect timed out: {exc}") from exc
+    except BoundedCancelledError as exc:
+        raise StabilizeError(f"docker inspect cancelled: {exc}") from exc
+    if result.returncode != 0:
         raise StabilizeError("docker inspect restart failed")
-    return int(proc.stdout.strip() or "0")
+    return int(result.stdout_text.strip() or "0")
 
 
 def wait_services_healthy(
@@ -98,14 +129,19 @@ def wait_services_healthy(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
     """Wait until listed services are running (and healthy when applicable)."""
-    deadline = clock() + policy.service_deadline_seconds
+    budget = DeadlineBudget.from_duration(
+        policy.service_deadline_seconds, clock=clock
+    )
     need = set(services)
-    while clock() < deadline:
+    while not budget.exhausted():
         rows = _compose_ps(
             project_name=project_name,
             env_file=env_file,
             compose_files=compose_files,
             cwd=cwd,
+            budget=budget,
+            clock=clock,
+            sleeper=sleeper,
         )
         by: dict[str, dict] = {}
         for row in rows:
@@ -114,10 +150,10 @@ def wait_services_healthy(
                 by[svc] = row
         ok = True
         for svc in need:
-            row = by.get(svc)
-            if not row:
+            if svc not in by:
                 ok = False
                 break
+            row = by[svc]
             state = str(row.get("State") or "").lower()
             if state != "running":
                 ok = False
@@ -129,7 +165,10 @@ def wait_services_healthy(
                     break
         if ok and need <= set(by):
             return
-        sleeper(policy.service_poll_seconds)
+        sleep_for = budget.sleep_budget(policy.service_poll_seconds)
+        if sleep_for <= 0:
+            break
+        sleeper(sleep_for)
     raise StabilizeError(
         f"timed out waiting for services {sorted(need)} to become healthy"
     )
@@ -141,12 +180,18 @@ def collect_restart_counts(
     env_file: Path,
     compose_files: tuple[Path, ...],
     cwd: Path,
+    budget: DeadlineBudget | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, int]:
     rows = _compose_ps(
         project_name=project_name,
         env_file=env_file,
         compose_files=compose_files,
         cwd=cwd,
+        budget=budget,
+        clock=clock,
+        sleeper=sleeper,
     )
     out: dict[str, int] = {}
     for row in rows:
@@ -156,7 +201,9 @@ def collect_restart_counts(
         cid = str(row.get("ID") or row.get("Id") or "")
         if not cid:
             continue
-        out[svc] = _inspect_restart(cid)
+        out[svc] = _inspect_restart(
+            cid, budget=budget, clock=clock, sleeper=sleeper
+        )
     return out
 
 
@@ -204,6 +251,8 @@ def stabilize_full_health(
         env_file=health_input.env_file,
         compose_files=health_input.compose_files,
         cwd=health_input.repo_root,
+        clock=clock,
+        sleeper=sleeper,
     )
     successes = 0
     window_end = clock() + pol.window_seconds
@@ -221,6 +270,8 @@ def stabilize_full_health(
             env_file=health_input.env_file,
             compose_files=health_input.compose_files,
             cwd=health_input.repo_root,
+            clock=clock,
+            sleeper=sleeper,
         )
         for svc, base in baseline.items():
             if current.get(svc, base) > base:

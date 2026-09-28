@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    run_docker_probe,
+)
 
 
 class DockerCheckError(ValueError):
@@ -20,28 +25,28 @@ def require_docker_cli() -> None:
 
 def require_compose_v2() -> str:
     require_docker_cli()
-    proc = subprocess.run(
-        ["docker", "compose", "version", "--short"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(["docker", "compose", "version", "--short"])
+    except (BoundedTimeoutError, BoundedCancelledError) as exc:
+        raise DockerCheckError(
+            "Docker Compose v2 probe timed out or was cancelled"
+        ) from exc
+    if result.returncode != 0:
         raise DockerCheckError(
             "Docker Compose v2 (`docker compose`) is required but not available"
         )
-    return proc.stdout.strip() or "unknown"
+    return result.stdout_text.strip() or "unknown"
 
 
 def require_docker_daemon() -> None:
     require_docker_cli()
-    proc = subprocess.run(
-        ["docker", "info", "--format", "{{.ServerVersion}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(
+            ["docker", "info", "--format", "{{.ServerVersion}}"]
+        )
+    except (BoundedTimeoutError, BoundedCancelledError) as exc:
+        raise DockerCheckError("Docker daemon probe timed out or was cancelled") from exc
+    if result.returncode != 0:
         raise DockerCheckError("Docker daemon is not responding")
 
 
@@ -70,22 +75,18 @@ def compose_config_json(
     }
     # Avoid host .env leaking: compose still may load project .env; operators
     # should run with explicit --env-file. We do not mutate files.
-    proc = subprocess.run(
-        argv,
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(argv, cwd=repo_root, env=env)
+    except (BoundedTimeoutError, BoundedCancelledError) as exc:
+        raise DockerCheckError(f"compose config timed out or cancelled: {exc}") from exc
+    if result.returncode != 0:
         from .redact import redact
 
         raise DockerCheckError(
             "compose config failed: "
-            + redact(proc.stderr.strip() or proc.stdout.strip())
+            + redact(result.stderr_text.strip() or result.stdout_text.strip())
         )
     try:
-        return json.loads(proc.stdout)
+        return json.loads(result.stdout_text)
     except json.JSONDecodeError as exc:
         raise DockerCheckError(f"compose config JSON invalid: {exc}") from exc

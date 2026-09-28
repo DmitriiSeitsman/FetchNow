@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import EXPECTED_SERVICES, OCI_REVISION_LABEL
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    run_docker_probe,
+)
 from .current_state import CurrentStateError, CurrentStateV2, load_parsed_current_state
 from .deploy_root import DeployRootError, release_dir, validate_deploy_root
 from .docker_checks import DockerCheckError, require_compose_v2, require_docker_daemon
@@ -85,16 +89,18 @@ def _compose_argv(inp: HealthInput, *args: str) -> list[str]:
 
 
 def _ps_services(inp: HealthInput) -> list[dict[str, Any]]:
-    proc = subprocess.run(
-        _compose_argv(inp, "ps", "-a", "--format", "json"),
-        cwd=str(inp.repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise HealthError(f"compose ps failed: {proc.stderr.strip()}")
-    text = proc.stdout.strip()
+    try:
+        result = run_docker_probe(
+            _compose_argv(inp, "ps", "-a", "--format", "json"),
+            cwd=inp.repo_root,
+        )
+    except BoundedTimeoutError as exc:
+        raise HealthError(f"compose ps timed out: {exc}") from exc
+    except BoundedCancelledError as exc:
+        raise HealthError(f"compose ps cancelled: {exc}") from exc
+    if result.returncode != 0:
+        raise HealthError(f"compose ps failed: {result.stderr_text.strip()}")
+    text = result.stdout_text.strip()
     if not text:
         return []
     # Compose may emit NDJSON or a JSON array.
@@ -113,15 +119,15 @@ def _ps_services(inp: HealthInput) -> list[dict[str, Any]]:
 
 
 def _inspect(container_id: str) -> dict[str, Any]:
-    proc = subprocess.run(
-        ["docker", "inspect", container_id],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
+    try:
+        result = run_docker_probe(["docker", "inspect", container_id])
+    except BoundedTimeoutError as exc:
+        raise HealthError(f"docker inspect timed out for {container_id}: {exc}") from exc
+    except BoundedCancelledError as exc:
+        raise HealthError(f"docker inspect cancelled for {container_id}: {exc}") from exc
+    if result.returncode != 0:
         raise HealthError(f"docker inspect failed for {container_id}")
-    data = json.loads(proc.stdout)
+    data = json.loads(result.stdout_text)
     if not data:
         raise HealthError(f"empty inspect for {container_id}")
     return data[0]

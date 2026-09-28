@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_subprocess import (
+    BoundedCancelledError,
+    BoundedTimeoutError,
+    OutputLimitExceededError,
+    run_docker_probe,
+)
 from .c2_constants import SOURCE_DIRNAME
 from .readonly_guard import assert_readonly_subprocess
 from .redact import redact
@@ -89,22 +94,30 @@ def probe_database_heads(
     compose_files: tuple[Path, ...],
     cwd: Path,
 ) -> DatabaseHeadsProbe:
-    """Classify live alembic_version without treating missing-table as heads."""
+    """Classify live alembic_version without treating missing-table as heads.
+
+    Timeout/cancel/truncated output are ``query_failed`` — never an empty or
+    partial head set. Stopping the Docker CLI does not prove the in-container
+    ``psql`` stopped; such outcomes are not treated as successful reads.
+    """
     argv = _alembic_version_select_argv(
         project_name=project_name,
         env_file=env_file,
         compose_files=compose_files,
     )
     assert_readonly_subprocess(argv)
-    proc = subprocess.run(
-        argv,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
+    try:
+        result = run_docker_probe(argv, cwd=cwd)
+    except (BoundedTimeoutError, BoundedCancelledError, OutputLimitExceededError) as exc:
+        return DatabaseHeadsProbe(
+            status="query_failed",
+            heads=frozenset(),
+            detail=redact(str(exc)),
+        )
+    detail = redact(
+        result.stderr_text.strip() or result.stdout_text.strip() or "unknown"
     )
-    detail = redact(proc.stderr.strip() or proc.stdout.strip() or "unknown")
-    if proc.returncode != 0:
+    if result.returncode != 0:
         lowered = detail.lower()
         if "alembic_version" in lowered and "does not exist" in lowered:
             return DatabaseHeadsProbe(status="missing_table", heads=frozenset())
@@ -113,7 +126,7 @@ def probe_database_heads(
             heads=frozenset(),
             detail=detail,
         )
-    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    lines = [ln.strip() for ln in result.stdout_text.splitlines() if ln.strip()]
     if not lines:
         if "alembic_version" in detail.lower() and "does not exist" in detail.lower():
             return DatabaseHeadsProbe(status="missing_table", heads=frozenset())
