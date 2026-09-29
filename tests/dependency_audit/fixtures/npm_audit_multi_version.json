@@ -1,0 +1,43 @@
+{
+  "auditReportVersion": 2,
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 0,
+      "critical": 0,
+      "total": 1
+    },
+    "dependencies": {
+      "prod": 2,
+      "dev": 0,
+      "optional": 0,
+      "peer": 0,
+      "total": 2
+    }
+  },
+  "vulnerabilities": {
+    "dup": {
+      "name": "dup",
+      "severity": "moderate",
+      "via": [
+        {
+          "source": 7,
+          "name": "dup",
+          "title": "Dup advisory",
+          "url": "https://github.com/advisories/GHSA-zzzz-yyyy-xxxx",
+          "severity": "moderate",
+          "range": "<5.0.0"
+        }
+      ],
+      "effects": [],
+      "range": "<5.0.0",
+      "nodes": [
+        "node_modules/dup",
+        "node_modules/nested/node_modules/dup"
+      ],
+      "fixAvailable": true
+    }
+  }
+}

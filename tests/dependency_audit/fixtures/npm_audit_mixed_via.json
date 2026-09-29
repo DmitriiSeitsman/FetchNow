@@ -1,0 +1,59 @@
+{
+  "auditReportVersion": 2,
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 2,
+      "high": 0,
+      "critical": 0,
+      "total": 2
+    },
+    "dependencies": {
+      "prod": 2,
+      "dev": 0,
+      "optional": 0,
+      "peer": 0,
+      "total": 2
+    }
+  },
+  "vulnerabilities": {
+    "example-pkg": {
+      "name": "example-pkg",
+      "severity": "moderate",
+      "via": [
+        "child-pkg",
+        {
+          "source": 1,
+          "name": "example-pkg",
+          "title": "Direct advisory",
+          "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+          "severity": "moderate",
+          "range": "<2.0.0"
+        }
+      ],
+      "effects": [],
+      "range": "<2.0.0",
+      "nodes": ["node_modules/example-pkg"],
+      "fixAvailable": true
+    },
+    "child-pkg": {
+      "name": "child-pkg",
+      "severity": "moderate",
+      "via": [
+        {
+          "source": 2,
+          "name": "child-pkg",
+          "title": "Child advisory",
+          "url": "https://github.com/advisories/GHSA-dddd-eeee-ffff",
+          "severity": "moderate",
+          "range": "<1.0.0"
+        }
+      ],
+      "effects": [],
+      "range": "<1.0.0",
+      "nodes": ["node_modules/child-pkg"],
+      "fixAvailable": true
+    }
+  }
+}

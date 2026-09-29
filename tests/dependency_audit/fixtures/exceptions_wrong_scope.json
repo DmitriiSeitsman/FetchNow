@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "ecosystem": "pypi",
+      "scope": "python-runtime",
+      "advisory": "PYSEC-2026-1995",
+      "package": "urllib3",
+      "versions": ["1.26.18"],
+      "reason": "wrong scope for finding",
+      "owner": "sec-test",
+      "review_deadline": "2099-01-01"
+    }
+  ]
+}

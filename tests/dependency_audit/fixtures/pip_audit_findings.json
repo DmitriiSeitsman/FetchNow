@@ -1,0 +1,17 @@
+{
+  "dependencies": [
+    {
+      "name": "urllib3",
+      "version": "1.26.18",
+      "vulns": [
+        {
+          "id": "PYSEC-2026-1995",
+          "fix_versions": ["1.26.19", "2.2.2"],
+          "aliases": ["GHSA-34jh-p97f-mpxf", "CVE-2024-37891"],
+          "description": "redacted in fixtures"
+        }
+      ]
+    }
+  ],
+  "fixes": []
+}

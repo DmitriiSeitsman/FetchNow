@@ -1,0 +1,6 @@
+{
+  "dependencies": [
+    {"name": "packaging", "version": "26.3"}
+  ],
+  "fixes": []
+}
