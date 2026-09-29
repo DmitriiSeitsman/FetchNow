@@ -4,8 +4,12 @@ FROM python:3.14.6-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /uvx /bin/
 
 WORKDIR /build
 
@@ -13,14 +17,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
 
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install .
+# Frozen lock is the install. Do not follow this with `pip install .`.
+RUN uv lock --check \
+    && uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python
 
 FROM python:3.14.6-slim-bookworm AS runtime
 
