@@ -423,6 +423,10 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Assert Node meets Astro 7 engines
+        run: |
+          set -euo pipefail
+          node -e "const [maj,min]=process.versions.node.split('.').map(Number); if (maj<22 || (maj===22 && min<12)) { console.error('Need Node >=22.12.0, got', process.versions.node); process.exit(1); } console.log('Node', process.versions.node);"
       - name: Install
         run: npm ci
       - name: ESLint
