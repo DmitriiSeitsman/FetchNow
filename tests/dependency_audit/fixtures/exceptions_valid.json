@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "advisory": "PYSEC-2026-1995",
+      "aliases": ["GHSA-34jh-p97f-mpxf"],
+      "package": "urllib3",
+      "versions": ["1.26.18"],
+      "reason": "fixture-only accepted exception",
+      "owner": "sec-test",
+      "review_deadline": "2099-01-01"
+    }
+  ]
+}

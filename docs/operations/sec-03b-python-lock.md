@@ -136,7 +136,11 @@ CI regenerates the same bytes and compares them to the committed file. A changed
 
 ## Direct pins
 
-Unchanged: fastapi 0.141.1, uvicorn[standard] 0.35.0, sqlalchemy[asyncio] 2.0.42, alembic 1.16.4, asyncpg 0.31.0, pydantic-settings 2.14.2, httpx 0.28.1, yt-dlp 2026.7.4, pytest 8.4.1, pytest-asyncio 1.1.0, ruff 0.12.7, mypy 1.17.1.
+Runtime (unchanged): fastapi 0.141.1, uvicorn[standard] 0.35.0, sqlalchemy[asyncio] 2.0.42, alembic 1.16.4, asyncpg 0.31.0, pydantic-settings 2.14.2, httpx 0.28.1, yt-dlp 2026.7.4.
+
+Dev: **pytest 9.0.3**, **pytest-asyncio 1.3.0**, ruff 0.12.7, mypy 1.17.1, httpx 0.28.1 (also a runtime pin).
+
+SEC-03B2 remediation (dev-only): pytest 8.4.1 → 9.0.3 and pytest-asyncio 1.1.0 → 1.3.0 close [GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) / CVE-2025-71176 / PYSEC-2026-1845. `pytest-asyncio` 1.1.0/1.2.0 require `pytest<9`; 1.3.0 is the minimum stable release that allows pytest 9 (`pytest>=8.2,<10`). Runtime dependency set and Dockerfile are unchanged.
 
 The first `uv lock` selected transitive versions that were previously floating. Keeping these direct pins does not mean those transitives match any earlier `pip install`. There was no saved production install inventory to diff against. The locked set is the new baseline.
 
@@ -155,6 +159,5 @@ Lock, install, and the normalized package inventory are the reproducibility clai
 
 ## Not in this change
 
-- SEC-03B2 audit wrapper and advisory queries
 - SEC-03C image or OS scanning
-- Fixes for whatever a future Python audit reports
+- Application/runtime dependency bumps beyond the approved pytest/pytest-asyncio pair

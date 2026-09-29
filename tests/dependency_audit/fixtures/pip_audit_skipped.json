@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    {
+      "name": "secretstuff",
+      "skip_reason": "not found on PyPI and installed neither from wheel nor source distribution or as editable"
+    }
+  ],
+  "fixes": []
+}

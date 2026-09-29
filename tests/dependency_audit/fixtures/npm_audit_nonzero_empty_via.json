@@ -1,0 +1,31 @@
+{
+  "auditReportVersion": 2,
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 0,
+      "critical": 0,
+      "total": 1
+    },
+    "dependencies": {
+      "prod": 10,
+      "dev": 0,
+      "optional": 0,
+      "peer": 0,
+      "total": 10
+    }
+  },
+  "vulnerabilities": {
+    "left-pad": {
+      "name": "left-pad",
+      "severity": "moderate",
+      "via": [],
+      "effects": [],
+      "range": "<1.0.0",
+      "nodes": ["node_modules/left-pad"],
+      "fixAvailable": true
+    }
+  }
+}

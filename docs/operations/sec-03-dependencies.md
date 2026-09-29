@@ -1,6 +1,6 @@
 # SEC-03A — Vitest 4.1.11 and fast-uri 3.1.8
 
-Status: implementation complete locally; **not** committed. SEC-03B and SEC-03C are **NOT STARTED**.
+Status: SEC-03A merged via later history; SEC-03B1 merged (PR #156). SEC-03B2 implemented in worktree (not committed). SEC-03C is **NOT STARTED**.
 
 ## Versions
 
@@ -74,8 +74,8 @@ On 2026-09-29, `npm audit --json --ignore-scripts --package-lock-only` exited 0.
 
 No new npm findings. No exceptions accepted.
 
-## Not started
+## Stage status
 
-- SEC-03B1 — Python lock and frozen install: `docs/operations/sec-03b-python-lock.md` (in progress in worktree; not committed)
-- SEC-03B2 — npm and Python audit CI
-- SEC-03C — local image scanning
+- SEC-03B1 — Python lock and frozen install: `docs/operations/sec-03b-python-lock.md` (**merged**, PR #156; later SEC-03B2 worktree includes approved **dev-only** pytest 9.0.3 / pytest-asyncio 1.3.0 remediation)
+- SEC-03B2 — npm and Python audit CI + acceptance-findings remediation: `docs/operations/sec-03b-dependency-audit.md` (**in worktree**; not committed; offline regression pending final review)
+- SEC-03C — local image scanning: **NOT STARTED**
