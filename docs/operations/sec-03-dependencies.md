@@ -76,5 +76,6 @@ No new npm findings. No exceptions accepted.
 
 ## Not started
 
-- SEC-03B — reproducible npm/Python audit CI
+- SEC-03B1 — Python lock and frozen install: `docs/operations/sec-03b-python-lock.md` (in progress in worktree; not committed)
+- SEC-03B2 — npm and Python audit CI
 - SEC-03C — local image scanning

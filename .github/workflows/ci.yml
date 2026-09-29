@@ -39,12 +39,134 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/pyproject.toml
+      - name: Install uv 0.12.19
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset=uv-x86_64-unknown-linux-gnu.tar.gz
+              want=23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8
+              ;;
+            aarch64|arm64)
+              asset=uv-aarch64-unknown-linux-gnu.tar.gz
+              want=0804e9b164c64b6914182d5920c08551958a095986f10a3731056df701126436
+              ;;
+            *)
+              echo "unsupported architecture $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/astral-sh/uv/releases/download/0.12.19/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/${asset%.tar.gz}" >> "$GITHUB_PATH"
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          set -euo pipefail
+          export UV_PYTHON_DOWNLOADS=never
+          uv lock --check
+          uv sync --frozen --extra dev --python 3.12
+          echo "$GITHUB_WORKSPACE/backend/.venv/bin" >> "$GITHUB_PATH"
+      - name: Check pytest CI requirements match the lock
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          """Regenerate expected pytest-requirements.txt and compare bytes.
+
+          Algorithm (must match docs/operations/sec-03b-python-lock.md):
+          1. Parse uv.lock; take transitive closure of \"pytest\" (all lock edges).
+          2. uv export --frozen --extra dev --no-emit-project --no-header --no-annotate
+          3. Keep only requirement blocks whose name is in that closure.
+          4. Sort by package name; prepend the fixed header; compare to
+             ci/pytest-requirements.txt (exact bytes).
+          """
+          from __future__ import annotations
+
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          HEADER = (
+              "# Generated from backend/uv.lock (pytest transitive closure).\n"
+              "# Do not edit by hand. Regeneration: see docs/operations/sec-03b-python-lock.md\n"
+              "# Install: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt\n"
+              "#\n"
+          )
+
+          lock = tomllib.loads(Path("uv.lock").read_text())
+          pkgs = {pkg["name"]: pkg for pkg in lock["package"]}
+
+          def closure(name: str, acc: set[str] | None = None) -> set[str]:
+              acc = set() if acc is None else acc
+              if name in acc:
+                  return acc
+              if name not in pkgs:
+                  raise SystemExit(f"package {name!r} missing from uv.lock")
+              acc.add(name)
+              for dep in pkgs[name].get("dependencies") or []:
+                  closure(dep["name"], acc)
+              return acc
+
+          wanted = closure("pytest")
+          export = subprocess.check_output(
+              [
+                  "uv",
+                  "export",
+                  "--frozen",
+                  "--extra",
+                  "dev",
+                  "--no-emit-project",
+                  "--no-header",
+                  "--no-annotate",
+              ],
+              text=True,
+          )
+          blocks: dict[str, str] = {}
+          current: list[str] = []
+
+          def flush() -> None:
+              if not current:
+                  return
+              name = current[0].split("==", 1)[0].strip()
+              blocks[name] = "".join(current).rstrip() + "\n"
+              current.clear()
+
+          for line in export.splitlines(True):
+              if not line.strip() or line.lstrip().startswith("#"):
+                  continue
+              if line[:1].isspace():
+                  if current:
+                      current.append(line)
+                  continue
+              flush()
+              current = [line]
+          flush()
+
+          missing = wanted - set(blocks)
+          if missing:
+              raise SystemExit(f"export missing closure members: {sorted(missing)}")
+          for name in sorted(wanted):
+              ver = pkgs[name]["version"]
+              if not blocks[name].startswith(f"{name}=={ver}"):
+                  raise SystemExit(f"{name}: export pin != lock {ver}")
+
+          expected = HEADER + "\n".join(blocks[n] for n in sorted(wanted))
+          if not expected.endswith("\n"):
+              expected += "\n"
+          actual = Path("ci/pytest-requirements.txt").read_text()
+          if actual != expected:
+              raise SystemExit(
+                  "ci/pytest-requirements.txt is stale or manually edited; "
+                  "regenerate per docs/operations/sec-03b-python-lock.md"
+              )
+          foreign = set(blocks) - wanted
+          # blocks may contain more packages from full export; we only emit wanted
+          print(
+              f"pytest CI requirements match regenerated export "
+              f"({len(wanted)} packages: {sorted(wanted)})"
+          )
+          PY
       - name: Ruff
         run: ruff check src tests
       - name: Mypy
@@ -64,11 +186,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: python -m pytest -q tests/pg_backup
 
@@ -111,11 +231,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: python -m pytest -q tests/release
 
@@ -173,11 +291,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: python -m pytest -q tests/release/test_release_build_unit.py
 
@@ -211,11 +327,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: python -m pytest -q tests/release/test_rollout_unit.py tests/release/test_current_state_unit.py tests/release/test_config_rollout_unit.py
 
@@ -284,11 +398,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: |
           python -m pytest -q tests/release/test_deploy_plan_unit.py tests/release/test_source_contract_unit.py tests/release/test_current_state_unit.py tests/pg_backup/test_alembic_graph.py
@@ -331,11 +443,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/ci/pytest-requirements.txt
       - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.4.1
+        run: python -m pip install --require-hashes --no-deps -r backend/ci/pytest-requirements.txt
       - name: Unit tests
         run: |
           python -m pytest -q \
