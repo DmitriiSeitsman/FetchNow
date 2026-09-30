@@ -109,6 +109,14 @@ Current API runtime base (SEC-03C Candidate A): official
 trixie-security OpenSSL `3.5.7-1~deb13u3` set. The completeness check still
 keys on OS **family** `debian`, not a specific Debian release codename.
 
+Native Candidate A backend acceptance (CI job `backend-candidate-a`) builds the
+canonical `backend/Dockerfile` default **runtime** image first, then a separate
+test-only image from `.github/docker/backend-test.Dockerfile` that uses that
+runtime Image ID as `FROM` and layers frozen `--extra dev` plus targeted
+`backend/tests` copies. Production/`image-audit` builds keep using
+`backend/Dockerfile` alone (no test stage; `backend/.dockerignore` still
+excludes `tests` from the production context).
+
 ## Policy
 
 | Condition | Verdict | Process exit |

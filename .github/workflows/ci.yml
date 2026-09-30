@@ -197,6 +197,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      FETCHNOW_CANDIDATE_A_RUNTIME_TAG: sec03c-candidate-a-runtime
       FETCHNOW_CANDIDATE_A_TEST_TAG: sec03c-candidate-a-test
       # Service publishes to the job host; container uses host network (not compose).
       FETCHNOW_TEST_DATABASE_URL: postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow
@@ -213,18 +214,61 @@ jobs:
           docker info --format '{{.Architecture}}' | tee "$RUNNER_TEMP/candidate-a-docker-arch.txt"
           test "$(cat "$RUNNER_TEMP/candidate-a-docker-arch.txt")" = "x86_64"
           echo "native_linux_amd64_ok=1"
-      - name: Build Candidate A test image (Dockerfile test stage, host arch)
+      - name: Build Candidate A runtime image (canonical backend/Dockerfile)
         run: |
           set -euo pipefail
-          # No --platform: build host-native only. Do not route through QEMU.
+          # No --platform / --target: default final stage is runtime. Host-native only.
           docker build \
-            --target test \
             --build-arg "FETCHNOW_RELEASE_REVISION=${GITHUB_SHA}" \
-            -t "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            -t "fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}" \
             ./backend
+          docker image inspect "fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}" \
+            --format '{{.Id}}' | tee "$RUNNER_TEMP/candidate-a-runtime-image-id.txt"
+          docker image inspect "fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}" \
+            --format '{{.Os}}/{{.Architecture}}' | tee "$RUNNER_TEMP/candidate-a-runtime-platform.txt"
+          test "$(cat "$RUNNER_TEMP/candidate-a-runtime-platform.txt")" = "linux/amd64"
+          docker image inspect "fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}" \
+            --format '{{json .Config}}' > "$RUNNER_TEMP/candidate-a-runtime-config.json"
+          python3 - <<PY | tee "$RUNNER_TEMP/candidate-a-runtime-contract.txt"
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path(r"$RUNNER_TEMP/candidate-a-runtime-config.json").read_text())
+          user = cfg.get("User")
+          ep = cfg.get("Entrypoint")
+          cmd = cfg.get("Cmd")
+          print(f"User={user!r} Entrypoint={ep!r} Cmd={cmd!r}")
+          assert user == "fetchnow", user
+          assert ep in (None, [], ""), ep
+          assert cmd == ["fetchnow-api"], cmd
+          print("runtime_contract_ok")
+          PY
+      - name: Build Candidate A test image (separate Dockerfile on runtime base)
+        run: |
+          set -euo pipefail
+          runtime_ref="fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}"
+          runtime_id="$(cat "$RUNNER_TEMP/candidate-a-runtime-image-id.txt")"
+          # Explicit test Dockerfile + repo-root context (targeted COPY of tests).
+          # Production builds keep using ./backend and backend/.dockerignore (tests excluded).
+          docker build \
+            -f .github/docker/backend-test.Dockerfile \
+            --build-arg "FETCHNOW_RUNTIME_IMAGE=${runtime_ref}" \
+            -t "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            .
+          docker image inspect "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            --format '{{.Id}}' | tee "$RUNNER_TEMP/candidate-a-test-image-id.txt"
           docker image inspect "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
             --format '{{.Os}}/{{.Architecture}}' | tee "$RUNNER_TEMP/candidate-a-image-platform.txt"
           test "$(cat "$RUNNER_TEMP/candidate-a-image-platform.txt")" = "linux/amd64"
+          {
+            echo "runtime_image_ref=${runtime_ref}"
+            echo "runtime_image_id=${runtime_id}"
+            echo "test_image_id=$(cat "$RUNNER_TEMP/candidate-a-test-image-id.txt")"
+            echo "test_dockerfile=.github/docker/backend-test.Dockerfile"
+          } | tee "$RUNNER_TEMP/candidate-a-image-chain.txt"
+          docker run --rm --user 10001:10001 \
+            "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            python -c 'import json,os,platform,shutil,sys; meta={"python":sys.version.split()[0],"executable":sys.executable,"machine":platform.machine(),"platform":platform.platform(),"uid":os.getuid(),"gid":os.getgid(),"ffmpeg":shutil.which("ffmpeg"),"ffprobe":shutil.which("ffprobe"),"pytest":shutil.which("pytest")}; print(json.dumps(meta,sort_keys=True)); assert meta["python"]=="3.14.7", meta; assert meta["uid"]==10001 and meta["gid"]==10001, meta; assert meta["machine"]=="x86_64", meta; assert meta["ffmpeg"] and meta["ffprobe"] and meta["pytest"], meta' \
+            | tee "$RUNNER_TEMP/candidate-a-runtime-versions.txt"
       - name: Focused process/storage gate (UID 10001)
         id: focused
         run: |
@@ -235,6 +279,7 @@ jobs:
           # - This job: same UID via --user 10001:10001, command overridden to pytest,
           #   no --init / tini (process/signal topology matches runtime; not a test-only
           #   init wrapper to make kills pass).
+          # - Shell is sh (debian slim has no bash); not an init change.
           docker run --rm \
             --name "fetchnow-canda-focused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --user 10001:10001 \
@@ -245,26 +290,8 @@ jobs:
             -e DATABASE_URL="${DATABASE_URL}" \
             -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
             "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
-            bash -c '
+            sh -c '
               set -euo pipefail
-              python - <<PY
-              import json, os, platform, shutil, sys
-              meta = {
-                  "python": sys.version.split()[0],
-                  "executable": sys.executable,
-                  "machine": platform.machine(),
-                  "platform": platform.platform(),
-                  "uid": os.getuid(),
-                  "gid": os.getgid(),
-                  "ffmpeg": shutil.which("ffmpeg"),
-                  "ffprobe": shutil.which("ffprobe"),
-              }
-              print(json.dumps(meta, sort_keys=True))
-              assert meta["python"] == "3.14.7", meta
-              assert meta["uid"] == 10001 and meta["gid"] == 10001, meta
-              assert meta["machine"] == "x86_64", meta
-              assert meta["ffmpeg"] and meta["ffprobe"], meta
-              PY
               pytest -q --tb=short \
                 tests/test_mux_process.py \
                 tests/test_download_process.py \
@@ -287,7 +314,7 @@ jobs:
             -e DATABASE_URL="${DATABASE_URL}" \
             -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
             "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
-            bash -c '
+            sh -c '
               set -euo pipefail
               pytest -q --tb=line 2>&1 | tee /tmp/pytest-out/full.log
             '
@@ -302,9 +329,16 @@ jobs:
             ${{ runner.temp }}/candidate-a-machine.txt
             ${{ runner.temp }}/candidate-a-docker-arch.txt
             ${{ runner.temp }}/candidate-a-image-platform.txt
+            ${{ runner.temp }}/candidate-a-runtime-image-id.txt
+            ${{ runner.temp }}/candidate-a-runtime-platform.txt
+            ${{ runner.temp }}/candidate-a-runtime-config.json
+            ${{ runner.temp }}/candidate-a-runtime-contract.txt
+            ${{ runner.temp }}/candidate-a-test-image-id.txt
+            ${{ runner.temp }}/candidate-a-image-chain.txt
+            ${{ runner.temp }}/candidate-a-runtime-versions.txt
           if-no-files-found: warn
           retention-days: 14
-      - name: Cleanup Candidate A test image
+      - name: Cleanup Candidate A images
         if: always()
         run: |
           set -euo pipefail
@@ -312,7 +346,10 @@ jobs:
             "fetchnow-canda-focused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             "fetchnow-canda-full-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             2>/dev/null || true
-          docker image rm -f "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" || true
+          docker image rm -f \
+            "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            "fetchnow-api:${FETCHNOW_CANDIDATE_A_RUNTIME_TAG}" \
+            || true
           rm -rf "$RUNNER_TEMP/candidate-a-pytest" || true
 
   pg-backup:
