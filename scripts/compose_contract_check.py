@@ -434,7 +434,7 @@ def check_staging_config() -> None:
         "staging: gateway image must use full SHA tag",
     )
     _assert(
-        str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
+        str(services["postgres"].get("image", "")).startswith("postgres:16.15"),
         "staging: postgres image must remain pinned",
     )
 
@@ -693,7 +693,7 @@ def check_production_config() -> None:
         "production example: API and delivery Free rate candidate must match",
     )
     _assert(
-        str(services["postgres"].get("image", "")).startswith("postgres:16.9"),
+        str(services["postgres"].get("image", "")).startswith("postgres:16.15"),
         "production: postgres image must remain pinned",
     )
 

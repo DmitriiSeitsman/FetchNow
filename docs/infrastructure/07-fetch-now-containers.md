@@ -12,7 +12,7 @@
 | `storage-init` | тот же `fetchnow-api` image, `fetchnow-storage-init` | HTTP-порта нет | UID 10001 | oneshot; `restart: no`; `network_mode: none`; rw `tmp` only; mkdir/validate download root; без DB/tool env; без sleep |
 | `delivery` | тот же `fetchnow-api` image, `fetchnow-delivery` | `8000` internal only; host port нет | UID 10001 | read-only `tmp`; ждёт `storage-init` completed; `MEDIA_DELIVERY_*` only; не вызывает yt-dlp/ffmpeg |
 | `worker` | тот же `fetchnow-api` image/Dockerfile | HTTP-порта нет | UID 10001 | healthcheck отключён; ждёт healthy `postgres` и `storage-init`; volume `tmp`; ffmpeg/ffprobe только здесь |
-| `postgres` | `postgres:16.9-alpine`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
+| `postgres` | `postgres:16.15-alpine3.24`, registry image | `5432`; host port нет | не pinned в Compose; управляет official entrypoint | `pg_isready`; volume `pgdata` |
 
 Все runtime services находятся в bridge network `fetchnow` (Docker name `{project}_fetchnow`). `storage-init` — исключение: `network_mode: none`, без Compose network и без `DATABASE_URL`. `gateway` ждёт healthy `api` и `web`; `api`/`worker` ждут healthy `postgres`. Это startup ordering, не гарантия дальнейшей доступности.
 
@@ -29,7 +29,7 @@ Image `fetchnow-api:<revision>` собирается из `backend/Dockerfile` (
 
 ### worker
 
-Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5), download execution (PR6) и bounded muxing (PR9, default off). Runtime image installs Debian bookworm `ffmpeg` (provides `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`). Paths are Compose-injected on worker only. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
+Тот же backend image и volume `tmp`, команда `fetchnow-worker`, non-root UID 10001. Worker выполняет durable media-inspection orchestration (PR5), download execution (PR6) и bounded muxing (PR9, default off). Runtime image installs Debian trixie `ffmpeg` (provides `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`). Paths are Compose-injected on worker only. Restart прерывает процесс через SIGTERM с bounded grace; cancel/lease loss не считаются успехом.
 
 ### storage-init
 

@@ -79,12 +79,12 @@ RUNTIME_TARGET: dict[str, Any] = {
     "platform_machine": "x86_64",
     "platform_python_implementation": "CPython",
     "python_version": "3.14",
-    "python_full_version": "3.14.6",
+    "python_full_version": "3.14.7",
     "implementation_name": "cpython",
-    "implementation_version": "3.14.6",
+    "implementation_version": "3.14.7",
     "extra_dev": False,
     # Export interpreter must match target when UV_PYTHON_DOWNLOADS=never.
-    "uv_python": "3.14.6",
+    "uv_python": "3.14.7",
 }
 DEV_TARGET: dict[str, Any] = {
     "label": "python-dev",

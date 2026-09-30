@@ -56,4 +56,4 @@ make pg-backup-create BACKUP_ROOT=/srv/fetchnow-staging/backups
 make pg-backup-verify BACKUP_ROOT=/srv/fetchnow-staging/backups BACKUP_ID=<id>
 ```
 
-Утилиты `pg_dump` / `pg_restore` / `psql` выполняются внутри container image `postgres:16.9-alpine`, чтобы клиент совпадал с сервером.
+Утилиты `pg_dump` / `pg_restore` / `psql` выполняются внутри container image `postgres:16.15-alpine3.24`, чтобы клиент совпадал с сервером.

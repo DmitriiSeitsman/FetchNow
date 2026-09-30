@@ -18,7 +18,10 @@ RUN test "$PUBLIC_SEARCH_INDEXING_ENABLED" = "true" -o "$PUBLIC_SEARCH_INDEXING_
 ENV PUBLIC_SEARCH_INDEXING_ENABLED=$PUBLIC_SEARCH_INDEXING_ENABLED
 RUN npm run build
 
-FROM nginx:1.31.3-alpine AS runtime
+FROM nginx:1.31.6-alpine3.24 AS runtime
+
+# SEC-03C: pin libexpat to Alpine v3.24 fix for CVE-2026-93990 (same branch).
+RUN apk add --no-cache 'libexpat=2.8.5-r0'
 
 RUN addgroup -g 10001 -S fetchnow \
     && adduser -S -D -H -u 10001 -G fetchnow fetchnow \

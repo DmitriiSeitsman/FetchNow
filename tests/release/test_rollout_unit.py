@@ -459,6 +459,54 @@ def test_activate_argv_contract() -> None:
         )
 
 
+def test_app_rollout_ignores_postgres_compose_pin_vs_running_image(
+    tmp_path: Path,
+) -> None:
+    """Canonical Compose may name a newer postgres pin while the running
+    container still uses an older image. App activate must not recreate it.
+
+    See docs/operations/sec-03c-postgres-pin-rollout.md.
+    """
+    from fetchnow_release import POSTGRES_IMAGE_PREFIX
+
+    compose = tmp_path / "compose.yaml"
+    # New canonical pin in the plan/source tree…
+    compose.write_text(
+        "services:\n"
+        "  postgres:\n"
+        "    image: postgres:16.15-alpine3.24\n"
+        "  api:\n"
+        "    image: fetchnow-api:x\n",
+        encoding="utf-8",
+    )
+    assert POSTGRES_IMAGE_PREFIX == "postgres:16.15"
+    assert "postgres:16.15-alpine3.24".startswith(POSTGRES_IMAGE_PREFIX)
+
+    # …while a running container could still report the previous image.
+    running_postgres_image = "postgres:16.9-alpine"
+    assert not running_postgres_image.startswith(POSTGRES_IMAGE_PREFIX)
+
+    override = render_images_override(_ids())
+    assert "postgres" not in override
+
+    argv = build_activate_argv(
+        project_name="fetchnow-rollout-test-abcd1234",
+        env_file=tmp_path / "env",
+        compose_files=(compose,),
+        services=("api", "worker", "delivery", "web"),
+    )
+    assert "postgres" not in argv
+    assert "--no-deps" in argv
+    assert "--pull" in argv and "never" in argv
+    with pytest.raises(ActivateError, match="postgres"):
+        build_activate_argv(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            compose_files=(compose,),
+            services=("api", "postgres"),  # type: ignore[arg-type]
+        )
+
+
 def test_db_heads_equality() -> None:
     assert_heads_equal(
         database_heads=frozenset({"0001_baseline"}),

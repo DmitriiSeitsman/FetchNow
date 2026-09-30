@@ -5,7 +5,7 @@
 
 services:
   postgres:
-    image: postgres:16.9-alpine
+    image: postgres:16.15-alpine3.24
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-fetchnow}

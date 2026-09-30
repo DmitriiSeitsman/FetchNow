@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
 
-FROM nginx:1.31.3-alpine
+FROM nginx:1.31.6-alpine3.24
+
+# SEC-03C: pin libexpat to Alpine v3.24 fix for CVE-2026-93990 (same branch).
+RUN apk add --no-cache 'libexpat=2.8.5-r0'
 
 RUN addgroup -g 10001 -S fetchnow \
     && adduser -S -D -H -u 10001 -G fetchnow fetchnow \

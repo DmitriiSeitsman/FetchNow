@@ -19,7 +19,7 @@ jobs:
         working-directory: backend
     services:
       postgres:
-        image: postgres:16.9-alpine
+        image: postgres:16.15-alpine3.24
         env:
           POSTGRES_USER: fetchnow
           POSTGRES_PASSWORD: fetchnow
@@ -175,6 +175,145 @@ jobs:
         run: alembic upgrade head
       - name: Pytest
         run: pytest -q
+
+  backend-candidate-a:
+    name: Backend Candidate A (native amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16.15-alpine3.24
+        env:
+          POSTGRES_USER: fetchnow
+          POSTGRES_PASSWORD: fetchnow
+          POSTGRES_DB: fetchnow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fetchnow -d fetchnow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FETCHNOW_CANDIDATE_A_TEST_TAG: sec03c-candidate-a-test
+      # Service publishes to the job host; container uses host network (not compose).
+      FETCHNOW_TEST_DATABASE_URL: postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow
+      DATABASE_URL: postgresql+asyncpg://fetchnow:fetchnow@127.0.0.1:5432/fetchnow
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require native Linux x86_64 (no QEMU acceptance)
+        run: |
+          set -euo pipefail
+          uname -a | tee "$RUNNER_TEMP/candidate-a-uname.txt"
+          uname -m | tee "$RUNNER_TEMP/candidate-a-machine.txt"
+          test "$(cat "$RUNNER_TEMP/candidate-a-machine.txt")" = "x86_64"
+          test "$(uname -s)" = "Linux"
+          docker info --format '{{.Architecture}}' | tee "$RUNNER_TEMP/candidate-a-docker-arch.txt"
+          test "$(cat "$RUNNER_TEMP/candidate-a-docker-arch.txt")" = "x86_64"
+          echo "native_linux_amd64_ok=1"
+      - name: Build Candidate A test image (Dockerfile test stage, host arch)
+        run: |
+          set -euo pipefail
+          # No --platform: build host-native only. Do not route through QEMU.
+          docker build \
+            --target test \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${GITHUB_SHA}" \
+            -t "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            ./backend
+          docker image inspect "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            --format '{{.Os}}/{{.Architecture}}' | tee "$RUNNER_TEMP/candidate-a-image-platform.txt"
+          test "$(cat "$RUNNER_TEMP/candidate-a-image-platform.txt")" = "linux/amd64"
+      - name: Focused process/storage gate (UID 10001)
+        id: focused
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-a-pytest"
+          # Runtime topology note:
+          # - Canonical runtime: USER 10001, CMD ["fetchnow-api"], no docker --init.
+          # - This job: same UID via --user 10001:10001, command overridden to pytest,
+          #   no --init / tini (process/signal topology matches runtime; not a test-only
+          #   init wrapper to make kills pass).
+          docker run --rm \
+            --name "fetchnow-canda-focused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --user 10001:10001 \
+            --network host \
+            -e HOME=/tmp \
+            -e PYTEST_ADDOPTS="-o cache_dir=/tmp/pytest-cache" \
+            -e FETCHNOW_TEST_DATABASE_URL="${FETCHNOW_TEST_DATABASE_URL}" \
+            -e DATABASE_URL="${DATABASE_URL}" \
+            -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
+            "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            bash -c '
+              set -euo pipefail
+              python - <<PY
+              import json, os, platform, shutil, sys
+              meta = {
+                  "python": sys.version.split()[0],
+                  "executable": sys.executable,
+                  "machine": platform.machine(),
+                  "platform": platform.platform(),
+                  "uid": os.getuid(),
+                  "gid": os.getgid(),
+                  "ffmpeg": shutil.which("ffmpeg"),
+                  "ffprobe": shutil.which("ffprobe"),
+              }
+              print(json.dumps(meta, sort_keys=True))
+              assert meta["python"] == "3.14.7", meta
+              assert meta["uid"] == 10001 and meta["gid"] == 10001, meta
+              assert meta["machine"] == "x86_64", meta
+              assert meta["ffmpeg"] and meta["ffprobe"], meta
+              PY
+              pytest -q --tb=short \
+                tests/test_mux_process.py \
+                tests/test_download_process.py \
+                tests/test_media_inspection_process.py \
+                tests/test_storage_init.py \
+                tests/test_lease_watchdog.py \
+                tests/test_process_descendant_diag.py \
+                2>&1 | tee /tmp/pytest-out/focused.log
+            '
+      - name: Full backend suite (UID 10001)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --name "fetchnow-canda-full-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --user 10001:10001 \
+            --network host \
+            -e HOME=/tmp \
+            -e PYTEST_ADDOPTS="-o cache_dir=/tmp/pytest-cache" \
+            -e FETCHNOW_TEST_DATABASE_URL="${FETCHNOW_TEST_DATABASE_URL}" \
+            -e DATABASE_URL="${DATABASE_URL}" \
+            -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
+            "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
+            bash -c '
+              set -euo pipefail
+              pytest -q --tb=line 2>&1 | tee /tmp/pytest-out/full.log
+            '
+      - name: Upload Candidate A pytest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec03c-candidate-a-pytest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-a-pytest/
+            ${{ runner.temp }}/candidate-a-uname.txt
+            ${{ runner.temp }}/candidate-a-machine.txt
+            ${{ runner.temp }}/candidate-a-docker-arch.txt
+            ${{ runner.temp }}/candidate-a-image-platform.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Cleanup Candidate A test image
+        if: always()
+        run: |
+          set -euo pipefail
+          docker rm -f \
+            "fetchnow-canda-focused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "fetchnow-canda-full-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            2>/dev/null || true
+          docker image rm -f "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" || true
+          rm -rf "$RUNNER_TEMP/candidate-a-pytest" || true
 
   pg-backup:
     name: Postgres backup unit tests
@@ -497,8 +636,8 @@ jobs:
       - name: Pre-pull pinned Postgres image
         run: |
           set -euo pipefail
-          docker pull postgres:16.9-alpine
-          docker image inspect postgres:16.9-alpine >/dev/null
+          docker pull postgres:16.15-alpine3.24
+          docker image inspect postgres:16.15-alpine3.24 >/dev/null
       - name: Initial DB bootstrap integration
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
@@ -596,7 +735,7 @@ jobs:
         with:
           python-version: |
             3.12
-            3.14.6
+            3.14.7
       - name: Install uv 0.12.19
         run: |
           set -euo pipefail
@@ -648,6 +787,149 @@ jobs:
             --pip-audit-bin "$RUNNER_TEMP/dependency-audit-venv/bin/pip-audit" \
             --uv-bin uv \
             --report-out "$RUNNER_TEMP/dependency-audit-report.json"
+
+  image-audit:
+    name: Image audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      FETCHNOW_IMAGE_AUDIT_TAG: sec03c-ci
+      FETCHNOW_TRIVY_VERSION: "0.74.0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install pytest for fixture tests
+        run: |
+          set -euo pipefail
+          python3.12 -m pip install --require-hashes --no-deps \
+            -r backend/ci/pytest-requirements.txt
+      - name: Fixture unit tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=scripts python3.12 -m pytest -q tests/image_audit
+      - name: Install Trivy 0.74.0 (checksum-pinned)
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset=trivy_0.74.0_Linux-64bit.tar.gz
+              want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+              ;;
+            aarch64|arm64)
+              asset=trivy_0.74.0_Linux-ARM64.tar.gz
+              want=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5
+              ;;
+            *)
+              echo "unsupported architecture $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build disposable runtime images (linux/amd64)
+        run: |
+          set -euo pipefail
+          rev="${GITHUB_SHA}"
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-api:${FETCHNOW_IMAGE_AUDIT_TAG}" \
+            ./backend
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            --build-arg PUBLIC_SITE_URL=http://localhost \
+            --build-arg PUBLIC_SEARCH_INDEXING_ENABLED=false \
+            -t "fetchnow-web:${FETCHNOW_IMAGE_AUDIT_TAG}" \
+            ./web
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-gateway:${FETCHNOW_IMAGE_AUDIT_TAG}" \
+            ./deploy/nginx
+          docker pull --platform linux/amd64 postgres:16.15-alpine3.24
+      - name: Write targets and run image audit gate
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fetchnow-sec03c-work"
+          cache="$RUNNER_TEMP/fetchnow-sec03c-trivy-cache"
+          mkdir -p "$work" "$cache"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          tag = os.environ["FETCHNOW_IMAGE_AUDIT_TAG"]
+          targets = {
+              "api": f"fetchnow-api:{tag}",
+              "web": f"fetchnow-web:{tag}",
+              "gateway": f"fetchnow-gateway:{tag}",
+              "postgres": "postgres:16.15-alpine3.24",
+          }
+          path = Path(os.environ["RUNNER_TEMP"]) / "fetchnow-sec03c-targets.json"
+          path.write_text(json.dumps(targets, indent=2) + "\n", encoding="utf-8")
+          print(path)
+          PY
+          set +e
+          PYTHONPATH=scripts python3.12 scripts/image_audit.py \
+            --trivy-bin trivy \
+            --cache-dir "$cache" \
+            --targets-file "$RUNNER_TEMP/fetchnow-sec03c-targets.json" \
+            --expected-platform linux/amd64 \
+            --work-dir "$work" \
+            --summary-out "$RUNNER_TEMP/fetchnow-sec03c-summary.json"
+          gate_rc=$?
+          set -e
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          summary = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "fetchnow-sec03c-summary.json").read_text()
+          )
+          # Safe console summary only (already sanitized by the gate).
+          print("status:", summary.get("status"))
+          print("db:", json.dumps(summary.get("db"), sort_keys=True))
+          for row in summary.get("targets", []):
+              ident = row.get("identity") or {}
+              print(
+                  f"{row.get('name')}: status={row.get('status')} "
+                  f"id={ident.get('image_id')} platform={ident.get('platform')} "
+                  f"counts={row.get('counts')}"
+              )
+          print("findings:", len(summary.get("findings") or []))
+          PY
+          exit "$gate_rc"
+      - name: Upload sanitized summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec03c-image-audit-summary
+          path: ${{ runner.temp }}/fetchnow-sec03c-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Cleanup disposable images and task Trivy cache
+        if: always()
+        run: |
+          set -euo pipefail
+          tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
+          docker image rm -f \
+            "fetchnow-api:${tag}" \
+            "fetchnow-web:${tag}" \
+            "fetchnow-gateway:${tag}" \
+            || true
+          # Only the task-local cache directory created above — not ~/.cache/trivy.
+          if [[ -d "$RUNNER_TEMP/fetchnow-sec03c-trivy-cache" ]]; then
+            trivy --cache-dir "$RUNNER_TEMP/fetchnow-sec03c-trivy-cache" clean --all || true
+            rm -rf "$RUNNER_TEMP/fetchnow-sec03c-trivy-cache"
+          fi
+          rm -rf "$RUNNER_TEMP/fetchnow-sec03c-work" || true
 
   docker:
     name: Docker images

@@ -1,6 +1,6 @@
 # SEC-03A — Vitest 4.1.11 and fast-uri 3.1.8
 
-Status: SEC-03A merged via later history; SEC-03B1 merged (PR #156). SEC-03B2 implemented in worktree (not committed). SEC-03C is **NOT STARTED**.
+Status: SEC-03A merged via later history; SEC-03B1 merged (PR #156); SEC-03B2 merged (PR #157). SEC-03C image audit implemented in worktree — see `docs/operations/sec-03c-image-audit.md` (not committed).
 
 ## Versions
 
@@ -77,5 +77,5 @@ No new npm findings. No exceptions accepted.
 ## Stage status
 
 - SEC-03B1 — Python lock and frozen install: `docs/operations/sec-03b-python-lock.md` (**merged**, PR #156; later SEC-03B2 worktree includes approved **dev-only** pytest 9.0.3 / pytest-asyncio 1.3.0 remediation)
-- SEC-03B2 — npm and Python audit CI + acceptance-findings remediation: `docs/operations/sec-03b-dependency-audit.md` (**in worktree**; not committed; offline regression pending final review)
-- SEC-03C — local image scanning: **NOT STARTED**
+- SEC-03B2 — npm and Python audit CI + acceptance-findings remediation: `docs/operations/sec-03b-dependency-audit.md` (**merged**, PR #157)
+- SEC-03C — final runtime image vulnerability audit (Trivy): `docs/operations/sec-03c-image-audit.md` (**in worktree**; not committed)
