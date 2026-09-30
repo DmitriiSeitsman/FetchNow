@@ -274,12 +274,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate-a-pytest"
+          log="$RUNNER_TEMP/candidate-a-pytest/focused.log"
           # Runtime topology note:
           # - Canonical runtime: USER 10001, CMD ["fetchnow-api"], no docker --init.
           # - This job: same UID via --user 10001:10001, command overridden to pytest,
           #   no --init / tini (process/signal topology matches runtime; not a test-only
           #   init wrapper to make kills pass).
           # - Shell is sh (debian slim has no bash); not an init change.
+          # - Log capture: host-side tee into RUNNER_TEMP (runner-owned). No bind mount
+          #   for logs; container UID 10001 does not need write access to the host path.
+          #   pipefail: pytest/docker non-zero OR tee write failure → step failure.
           docker run --rm \
             --name "fetchnow-canda-focused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --user 10001:10001 \
@@ -288,7 +292,6 @@ jobs:
             -e PYTEST_ADDOPTS="-o cache_dir=/tmp/pytest-cache" \
             -e FETCHNOW_TEST_DATABASE_URL="${FETCHNOW_TEST_DATABASE_URL}" \
             -e DATABASE_URL="${DATABASE_URL}" \
-            -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
             "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
             sh -c '
               set -euo pipefail
@@ -298,12 +301,13 @@ jobs:
                 tests/test_media_inspection_process.py \
                 tests/test_storage_init.py \
                 tests/test_lease_watchdog.py \
-                tests/test_process_descendant_diag.py \
-                2>&1 | tee /tmp/pytest-out/focused.log
-            '
+                tests/test_process_descendant_diag.py
+            ' 2>&1 | tee "$log"
       - name: Full backend suite (UID 10001)
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-a-pytest"
+          log="$RUNNER_TEMP/candidate-a-pytest/full.log"
           docker run --rm \
             --name "fetchnow-canda-full-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --user 10001:10001 \
@@ -312,12 +316,11 @@ jobs:
             -e PYTEST_ADDOPTS="-o cache_dir=/tmp/pytest-cache" \
             -e FETCHNOW_TEST_DATABASE_URL="${FETCHNOW_TEST_DATABASE_URL}" \
             -e DATABASE_URL="${DATABASE_URL}" \
-            -v "$RUNNER_TEMP/candidate-a-pytest:/tmp/pytest-out:rw" \
             "fetchnow-api-test:${FETCHNOW_CANDIDATE_A_TEST_TAG}" \
             sh -c '
               set -euo pipefail
-              pytest -q --tb=line 2>&1 | tee /tmp/pytest-out/full.log
-            '
+              pytest -q --tb=line
+            ' 2>&1 | tee "$log"
       - name: Upload Candidate A pytest logs
         if: always()
         uses: actions/upload-artifact@v4
