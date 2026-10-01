@@ -47,6 +47,136 @@ def memory_max_is_64m(text: str) -> bool:
     return cleaned in {"64M", "67108864"}
 
 
+def _decode_mountinfo_token(token: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), token)
+
+
+def cgroup2_mount_points(mountinfo: str) -> list[str]:
+    """Mount points whose filesystem type is cgroup2. Order follows mountinfo."""
+    found: list[str] = []
+    for line in mountinfo.splitlines():
+        if " - " not in line:
+            continue
+        left, right = line.split(" - ", 1)
+        right_fields = right.split()
+        if not right_fields or right_fields[0] != "cgroup2":
+            continue
+        left_fields = left.split()
+        if len(left_fields) < 5:
+            continue
+        found.append(_decode_mountinfo_token(left_fields[4]))
+    return found
+
+
+def _contained_absolute(path: str) -> str:
+    """Reject empty, relative, root, and any '.' or '..' component.
+
+    The returned string still starts with '/'. An error returns ''.
+    """
+    if not path or path != path.strip() or "\x00" in path or "\n" in path or "\r" in path:
+        return ""
+    if not path.startswith("/"):
+        return ""
+    parts = path.split("/")
+    if any(part in {"", ".", ".."} for part in parts[1:]):
+        return ""
+    if path == "/":
+        return ""
+    return path
+
+
+def resolve_control_group_dir(control_group: str, cgroup2_mount: str) -> tuple[str, str]:
+    """Host directory for a systemd ControlGroup value.
+
+    The unit name is not an input. A missing or root ControlGroup is an error.
+    """
+    raw_group = control_group.strip()
+    mount = cgroup2_mount.strip()
+    if mount != "/":
+        mount = mount.rstrip("/")
+    if not raw_group:
+        return "", "control group is empty"
+    if raw_group in {"/", "/.", "."}:
+        return "", "control group is the cgroup root"
+    contained = _contained_absolute(raw_group.rstrip("/"))
+    if not contained:
+        return "", "control group is not a contained path"
+    mount_contained = _contained_absolute(mount) if mount != "/" else "/"
+    if mount != "/" and not mount_contained:
+        return "", "cgroup2 mount is invalid"
+    if mount == "/":
+        host_dir = contained
+        prefix = "/"
+    else:
+        host_dir = mount_contained + contained
+        prefix = mount_contained + "/"
+    if host_dir == mount_contained or not host_dir.startswith(prefix):
+        return "", "control group is outside the cgroup2 mount"
+    return host_dir, ""
+
+
+def observe_slice_memory_max(
+    *,
+    active_state: str,
+    control_group: str,
+    cgroup2_mounts: list[str],
+    memory_max_text: str | None,
+) -> tuple[dict, str]:
+    """Accept the slice only from ControlGroup plus the memory.max file.
+
+    ``memory_max_text`` is None when that file cannot be read. A systemd
+    MemoryMax property is not an argument and cannot satisfy this check.
+    """
+    if active_state.strip() != "active":
+        return {}, "slice is not active"
+    if len(cgroup2_mounts) != 1:
+        return {}, "cgroup2 mount is not confirmed"
+    host_dir, error = resolve_control_group_dir(control_group, cgroup2_mounts[0])
+    if error:
+        return {}, error
+    if memory_max_text is None:
+        return {}, "memory.max is missing"
+    if not memory_max_is_64m(memory_max_text):
+        return {}, "memory.max is not 64M"
+    return {
+        "control_group": control_group.strip(),
+        "cgroup2_mount": cgroup2_mounts[0],
+        "host_dir": host_dir,
+        "memory_max_path": host_dir + "/memory.max",
+        "memory_max": memory_max_text.strip(),
+    }, ""
+
+
+def control_groups_match(before: str, after: str) -> bool:
+    first = before.strip()
+    return bool(first) and first == after.strip()
+
+
+def cgroup_relative_path(proc_cgroup: str) -> str:
+    for line in proc_cgroup.splitlines():
+        if line.startswith("0::"):
+            return line.split("::", 1)[1].strip()
+    return ""
+
+
+def proc_cgroup_under_control_group(proc_cgroup: str, control_group: str) -> bool:
+    prefix = control_group.strip().rstrip("/")
+    if not prefix.startswith("/") or prefix == "":
+        return False
+    for line in proc_cgroup.splitlines():
+        if "::" not in line:
+            continue
+        relative = line.split("::", 1)[1].strip()
+        if relative == prefix or relative.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def flattened_unit_cgroup_dir(cgroup2_mount: str, unit_name: str) -> str:
+    """The incorrect path this harness used to build from the unit name."""
+    return cgroup2_mount.rstrip("/") + "/" + unit_name
+
+
 def preflight_blockers(facts: dict) -> list[str]:
     """Return reasons to stop before creating a slice. Empty means proceed."""
     blockers: list[str] = []

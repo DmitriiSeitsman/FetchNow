@@ -20,10 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cgroup_contract import (  # noqa: E402
     SLICE_MEMORY_MAX,
+    cgroup2_mount_points,
+    cgroup_relative_path,
+    control_groups_match,
     engine_version_tuple,
     memory_max_is_64m,
     narrow_caps_only,
+    observe_slice_memory_max,
     preflight_blockers,
+    proc_cgroup_under_control_group,
+    resolve_control_group_dir,
     security_options_are_rootless,
 )
 
@@ -115,6 +121,10 @@ class Proof:
         self.cleanup_report: dict = {}
         self.slice_created = False
         self.image_id = ""
+        self.control_group = ""
+        self.host_slice_dir = ""
+        self.host_memory_max_path = ""
+        self.cgroup2_mount = ""
 
     def add(self, name: str, status: str, detail: str = "") -> None:
         self.checks.append({"name": name, "status": status, "detail": detail})
@@ -230,18 +240,61 @@ class Proof:
         self.slice_created = True
         reload_proc = run(["systemctl", "daemon-reload"], 30)
         start_proc = run(["systemctl", "start", self.slice_name], 20)
-        shown = run(["systemctl", "show", self.slice_name, "-p", "MemoryMax", "-p", "CPUQuota", "-p", "TasksMax"], 15)
-        host_max = ""
-        memory_file = Path("/sys/fs/cgroup") / self.slice_name / "memory.max"
-        if memory_file.is_file():
-            host_max = memory_file.read_text().strip()
+        observed = self.capture_slice_limit()
         self.evidence["slice"] = {
             "unit": str(self.unit_path),
             "reload_rc": reload_proc.returncode,
             "start_rc": start_proc.returncode,
-            "show": shown.stdout.strip(),
-            "memory_max_file": host_max,
             "start_stderr": (start_proc.stderr or "")[-400:],
+            **observed,
+        }
+
+    def show_value(self, prop: str) -> str:
+        proc = run(["systemctl", "show", self.slice_name, "-p", prop, "--value"], 15)
+        if proc.returncode != 0:
+            return ""
+        return proc.stdout.strip()
+
+    def capture_slice_limit(self) -> dict:
+        """Read ControlGroup from systemd and memory.max only at that path."""
+        active = self.show_value("ActiveState")
+        control = self.show_value("ControlGroup")
+        cpu_quota_raw = self.show_value("CPUQuota")
+        try:
+            mounts = cgroup2_mount_points(Path("/proc/self/mountinfo").read_text())
+        except OSError:
+            mounts = []
+        memory_text: str | None = None
+        host_dir = ""
+        if len(mounts) == 1:
+            host_dir, _resolve_error = resolve_control_group_dir(control, mounts[0])
+            if host_dir:
+                memory_path = Path(host_dir) / "memory.max"
+                if memory_path.is_file():
+                    try:
+                        memory_text = memory_path.read_text().strip()
+                    except OSError:
+                        memory_text = None
+        observed, error = observe_slice_memory_max(
+            active_state=active,
+            control_group=control,
+            cgroup2_mounts=mounts,
+            memory_max_text=memory_text,
+        )
+        if not error:
+            self.control_group = str(observed["control_group"])
+            self.host_slice_dir = str(observed["host_dir"])
+            self.host_memory_max_path = str(observed["memory_max_path"])
+            self.cgroup2_mount = str(observed["cgroup2_mount"])
+        return {
+            "active_state": active,
+            "control_group": control,
+            "cgroup2_mounts": mounts,
+            "host_dir": observed.get("host_dir", host_dir),
+            "memory_max_path": observed.get("memory_max_path", ""),
+            "memory_max_file": memory_text or "",
+            "cpu_quota_raw": cpu_quota_raw,
+            "error": error,
         }
 
     def build_image(self) -> subprocess.CompletedProcess[str]:
@@ -289,9 +342,10 @@ class Proof:
             "-e",
             "PROOF_OUT=/out",
             "-e",
-            f"SENTINEL_CGROUP={self.evidence.get('sentinel', {}).get('cgroup_file', '')}",
+            "HOST_SENTINEL_CGROUP="
+            + str(self.evidence.get("sentinel", {}).get("host_cgroup_dir", "")),
             "-e",
-            f"SLICE_MEMORY_PATH=/sys/fs/cgroup/{self.slice_name}/memory.max",
+            f"HOST_SLICE_MEMORY_PATH={self.host_memory_max_path}",
             "-v",
             f"{SRC}:/opt/sec08-trusted/harness:ro",
             "-v",
@@ -345,6 +399,8 @@ class Proof:
 
     def processes_in(self, marker: str) -> list[dict]:
         found = []
+        if not marker or marker in {"/", "."} or ".." in marker.split("/"):
+            return found
         proc_root = Path("/proc")
         for entry in proc_root.iterdir():
             if not entry.name.isdigit():
@@ -372,22 +428,29 @@ class Proof:
             facts = self.scope_facts(pid)
             view.update(facts)
             memory = ""
-            path = ""
-            # The host cgroup path is the third field after 0::
-            raw = facts.get("cgroup") or ""
-            if "::" in raw:
-                path = "/sys/fs/cgroup" + raw.split("::", 1)[1]
-                memory_file = Path(path) / "memory.max"
+            relative = cgroup_relative_path(facts.get("cgroup") or "")
+            host_dir, path_error = ("", "cgroup2 mount is not confirmed")
+            if self.cgroup2_mount:
+                host_dir, path_error = resolve_control_group_dir(relative, self.cgroup2_mount)
+            view["host_cgroup_dir"] = host_dir
+            view["host_path_error"] = path_error
+            if host_dir:
+                memory_file = Path(host_dir) / "memory.max"
                 if memory_file.is_file():
                     memory = memory_file.read_text().strip()
-                view["cgroup_file"] = str(memory_file if memory else path)
             view["memory_max"] = memory
         hb = OUT / "sentinel" / "hb"
         view["heartbeat_bytes"] = hb.stat().st_size if hb.exists() else 0
         return view
 
     def slice_memory(self) -> str:
-        path = Path("/sys/fs/cgroup") / self.slice_name / "memory.max"
+        again = self.show_value("ControlGroup")
+        self.evidence.setdefault("control_group_rereads", []).append(again)
+        if not control_groups_match(self.control_group, again):
+            return f"control-group-changed:{again}"
+        if not self.host_memory_max_path:
+            return "missing"
+        path = Path(self.host_memory_max_path)
         if not path.is_file():
             return "missing"
         return path.read_text().strip()
@@ -576,7 +639,9 @@ class Proof:
         self.add("executor_runtime_constraints", "PASS" if security_ok else "FAIL", json.dumps(security)[:500])
         scope = self.scope_facts(int(security.get("pid") or 0))
         self.evidence["executor_scope"] = scope
-        linked = self.slice_name in scope.get("cgroup", "") and scope.get("scope", "").endswith(".scope")
+        linked = proc_cgroup_under_control_group(
+            scope.get("cgroup", ""), self.control_group
+        ) and scope.get("scope", "").endswith(".scope")
         delegate_ok = "Delegate=yes" in scope.get("systemd", "")
         self.add(
             "host_scope_matches_private_namespace",
@@ -608,7 +673,7 @@ class Proof:
             "PASS" if memory_before == memory_after and memory_max_is_64m(memory_after) else "FAIL",
             f"{memory_before} -> {memory_after}; local write {supervisor.get('memory_write')}",
         )
-        current = Path("/sys/fs/cgroup") / self.slice_name / "memory.current"
+        current = Path(self.host_slice_dir) / "memory.current" if self.host_slice_dir else Path()
         current_value = current.read_text().strip() if current.is_file() else "missing"
         self.evidence["slice_memory_current"] = current_value
         try:
@@ -620,7 +685,7 @@ class Proof:
             "PASS" if charged else "FAIL",
             current_value,
         )
-        host_procs = self.processes_in(self.slice_name)
+        host_procs = self.processes_in(self.control_group)
         self.evidence["executor_processes_before_crash"] = [
             {"host_pid": item["host_pid"], "nspid": item["nspid"], "cgroup": item["cgroup"]} for item in host_procs
         ]
@@ -686,9 +751,9 @@ class Proof:
             if proc.returncode != 0 and "No such container" not in (proc.stderr or ""):
                 errors.append(f"{name}: {(proc.stderr or '')[-200:]}")
         if self.slice_created:
-            memory = Path("/sys/fs/cgroup") / self.slice_name
+            memory = Path(self.host_slice_dir) if self.host_slice_dir else None
             leftover = []
-            if memory.is_dir():
+            if memory is not None and memory.is_dir():
                 leftover = [path.name for path in memory.iterdir() if path.is_dir() or path.name == "cgroup.procs"]
                 procs = memory / "cgroup.procs"
                 if procs.is_file() and procs.read_text().strip():

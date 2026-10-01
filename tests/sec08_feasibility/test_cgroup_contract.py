@@ -9,10 +9,16 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from cgroup_contract import (  # noqa: E402
+    cgroup2_mount_points,
+    control_groups_match,
     engine_at_least,
+    flattened_unit_cgroup_dir,
     memory_max_is_64m,
     narrow_caps_only,
+    observe_slice_memory_max,
     preflight_blockers,
+    proc_cgroup_under_control_group,
+    resolve_control_group_dir,
     security_options_are_rootless,
 )
 
@@ -69,6 +75,123 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("os.chown", text)
         self.assertNotIn("os.lchown", text)
         self.assertNotIn("shutil.chown", text)
+
+
+MOUNTINFO = (
+    "36 25 0:30 / /sys/fs/cgroup rw,nosuid,nodev,noexec shared:9 "
+    "- cgroup2 cgroup2 rw,nsdelegate\n"
+    "37 25 0:31 / /sys rw - sysfs sysfs rw\n"
+)
+NESTED = (
+    "/fetchnow.slice/fetchnow-sec08.slice/fetchnow-sec08-cgproof.slice/"
+    "fetchnow-sec08-cgproof-961a2168.slice"
+)
+UNIT = "fetchnow-sec08-cgproof-961a2168.slice"
+
+
+class SlicePathTests(unittest.TestCase):
+    def test_simple_slice_uses_control_group(self) -> None:
+        observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group="/simple.slice",
+            cgroup2_mounts=cgroup2_mount_points(MOUNTINFO),
+            memory_max_text="67108864",
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(observed["host_dir"], "/sys/fs/cgroup/simple.slice")
+        self.assertEqual(observed["memory_max_path"], "/sys/fs/cgroup/simple.slice/memory.max")
+        self.assertEqual(observed["memory_max"], "67108864")
+
+    def test_dashed_slice_is_not_the_flattened_unit_path(self) -> None:
+        mounts = ["/sys/fs/cgroup"]
+        observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group=NESTED,
+            cgroup2_mounts=mounts,
+            memory_max_text="67108864",
+        )
+        flat = flattened_unit_cgroup_dir("/sys/fs/cgroup", UNIT)
+        self.assertEqual(flat, "/sys/fs/cgroup/" + UNIT)
+        self.assertEqual(error, "")
+        self.assertNotEqual(observed["host_dir"], flat)
+        self.assertEqual(observed["host_dir"], "/sys/fs/cgroup" + NESTED)
+        self.assertFalse(observed["memory_max_path"].startswith(flat + "/"))
+
+    def test_empty_control_group_fails(self) -> None:
+        _observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group="   ",
+            cgroup2_mounts=["/sys/fs/cgroup"],
+            memory_max_text="67108864",
+        )
+        self.assertEqual(error, "control group is empty")
+
+    def test_root_and_traversal_fail(self) -> None:
+        for control, expected in (
+            ("/", "control group is the cgroup root"),
+            (".", "control group is the cgroup root"),
+            ("/foo/../../etc", "control group is not a contained path"),
+            ("../simple.slice", "control group is not a contained path"),
+            ("simple.slice", "control group is not a contained path"),
+            ("/foo/../bar.slice", "control group is not a contained path"),
+        ):
+            directory, error = resolve_control_group_dir(control, "/sys/fs/cgroup")
+            self.assertEqual(directory, "", control)
+            self.assertEqual(error, expected, control)
+
+    def test_missing_memory_max_is_not_replaced_by_a_property(self) -> None:
+        _observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group="/simple.slice",
+            cgroup2_mounts=["/sys/fs/cgroup"],
+            memory_max_text=None,
+        )
+        self.assertEqual(error, "memory.max is missing")
+        _observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group="/simple.slice",
+            cgroup2_mounts=["/sys/fs/cgroup"],
+            memory_max_text="max",
+        )
+        self.assertEqual(error, "memory.max is not 64M")
+
+    def test_inactive_slice_fails_before_a_path_is_accepted(self) -> None:
+        _observed, error = observe_slice_memory_max(
+            active_state="inactive",
+            control_group="/simple.slice",
+            cgroup2_mounts=["/sys/fs/cgroup"],
+            memory_max_text="67108864",
+        )
+        self.assertEqual(error, "slice is not active")
+
+    def test_ambiguous_cgroup2_mount_fails(self) -> None:
+        _observed, error = observe_slice_memory_max(
+            active_state="active",
+            control_group="/simple.slice",
+            cgroup2_mounts=["/sys/fs/cgroup", "/sys/fs/cgroup/unified"],
+            memory_max_text="67108864",
+        )
+        self.assertEqual(error, "cgroup2 mount is not confirmed")
+
+    def test_authoritative_path_must_stay_the_same(self) -> None:
+        self.assertTrue(control_groups_match(NESTED, NESTED))
+        self.assertFalse(control_groups_match(NESTED, "/simple.slice"))
+        self.assertFalse(control_groups_match("", ""))
+        self.assertFalse(control_groups_match("  ", NESTED))
+
+    def test_proc_path_must_stay_under_the_control_group(self) -> None:
+        self.assertTrue(
+            proc_cgroup_under_control_group("0::" + NESTED + "/docker-abc.scope", NESTED)
+        )
+        self.assertFalse(proc_cgroup_under_control_group("0::/other.slice/docker-abc.scope", NESTED))
+
+    def test_proof_source_does_not_flatten_the_unit_name(self) -> None:
+        text = pathlib.Path(__file__).with_name("container_cgroup_proof.py").read_text()
+        self.assertNotIn('"/sys/fs/cgroup" / self.slice_name', text)
+        self.assertNotIn("/sys/fs/cgroup/{self.slice_name}", text)
+        self.assertNotIn('f"SLICE_MEMORY_PATH=', text)
+        self.assertIn('f"HOST_SLICE_MEMORY_PATH=', text)
+        self.assertIn("namespace_cgroup_root", pathlib.Path(__file__).with_name("container_supervisor.py").read_text())
 
 
 if __name__ == "__main__":

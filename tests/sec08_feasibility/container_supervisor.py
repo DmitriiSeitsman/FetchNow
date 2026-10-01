@@ -10,7 +10,6 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-import select
 import socket
 import stat
 import subprocess
@@ -374,8 +373,12 @@ def full_mode(report: dict) -> int:
     report["connect_tool"] = connect_as(UID_TOOL, UID_TOOL)
     report["work"] = prepare_work()
 
+    report["namespace_cgroup_root"] = str(CG)
+    report["namespace_memory_max_path"] = str(CG / "memory.max")
+    report["host_slice_memory_path"] = os.environ.get("HOST_SLICE_MEMORY_PATH", "")
+    report["host_sentinel_cgroup"] = os.environ.get("HOST_SENTINEL_CGROUP", "")
     outside: dict[str, str] = {}
-    for label, env_name in (("sentinel", "SENTINEL_CGROUP"), ("slice", "SLICE_MEMORY_PATH")):
+    for label, env_name in (("sentinel", "HOST_SENTINEL_CGROUP"), ("slice", "HOST_SLICE_MEMORY_PATH")):
         target = os.environ.get(env_name, "")
         if not target:
             outside[label] = "unset"
@@ -399,7 +402,7 @@ def full_mode(report: dict) -> int:
     kill_a = (CG / "fn-a" / "cgroup.kill").stat()
     report["cgroup_kill_a_owner"] = {"uid": kill_a.st_uid, "mode": oct(stat.S_IMODE(kill_a.st_mode))}
 
-    jobs = {
+    _jobs = {
         "a": launch(
             "a",
             WORK / "a",
