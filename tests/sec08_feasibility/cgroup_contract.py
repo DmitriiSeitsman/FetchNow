@@ -42,6 +42,75 @@ def narrow_caps_only(cap_eff_hex: str) -> bool:
     return value == NARROW_CAPS
 
 
+def status_caps_are_narrow(status: object) -> bool:
+    try:
+        return isinstance(status, dict) and all(
+            narrow_caps_only(status.get(key, ""))
+            for key in ("CapEff", "CapPrm", "CapBnd")
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def private_cgroup_mount(mountinfo: str) -> bool:
+    """Require exactly one writable cgroup2 mount at the namespace root.
+
+    /sys/fs/cgroup/.. is /sys/fs, not the host's parent cgroup. Namespace
+    containment is checked with mount topology and host/inside identities.
+    """
+    mounts = []
+    for line in mountinfo.splitlines():
+        if " - " not in line:
+            return False
+        left, right = line.split(" - ", 1)
+        fields, fs = left.split(), right.split()
+        if len(fields) < 6 or len(fs) < 3:
+            return False
+        if fs[0] in {"cgroup", "cgroup2"}:
+            mounts.append((fields, fs))
+    if len(mounts) != 1:
+        return False
+    fields, fs = mounts[0]
+    return (
+        fs[0] == "cgroup2"
+        and fields[3:5] == ["/", "/sys/fs/cgroup"]
+        and "rw" in fields[5].split(",")
+        and "rw" in fs[2].split(",")
+        and "nsdelegate" in fs[2].split(",")
+    )
+
+
+def cgroup_boundary_errors(supervisor: dict, host: dict) -> list[str]:
+    """Fail closed on missing evidence; an arbitrary errno is not denial."""
+    errors = []
+    if supervisor.get("cgroup") != "0::/" or not private_cgroup_mount(
+        supervisor.get("mountinfo_all", "")
+    ):
+        errors.append("private mount topology not proven")
+    identity = host.get("root_identity")
+    if (
+        not isinstance(identity, dict)
+        or any(type(identity.get(k)) is not int or identity[k] <= 0 for k in ("dev", "ino"))
+        or supervisor.get("cgroup_root_identity") != identity
+    ):
+        errors.append("container root does not match host scope")
+    namespace = host.get("namespace")
+    if (
+        not isinstance(namespace, str)
+        or re.fullmatch(r"cgroup:\[\d+\]", namespace) is None
+        or supervisor.get("cgroup_namespace") != namespace
+        or not host.get("host_namespace")
+        or namespace == host.get("host_namespace")
+    ):
+        errors.append("distinct cgroup namespace not proven")
+    outside = supervisor.get("outside") or {}
+    if any(outside.get(key) not in {"errno 2", "errno 13"} for key in ("slice", "sentinel")):
+        errors.append("ancestor or sentinel denial not proven")
+    if supervisor.get("inherited_cgroup_fds") != []:
+        errors.append("cgroup descriptor inventory missing or nonempty")
+    return errors
+
+
 REQUIRED_INSPECT_CAPS = frozenset({"SETUID", "SETGID", "SETPCAP"})
 _CAP_NAME = re.compile(r"[A-Z][A-Z0-9_]*\Z")
 

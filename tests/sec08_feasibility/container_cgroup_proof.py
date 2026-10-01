@@ -20,18 +20,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cgroup_contract import (  # noqa: E402
     SLICE_MEMORY_MAX,
+    capabilities_are_exact,
     cgroup2_mount_points,
+    cgroup_boundary_errors,
     cgroup_relative_path,
     control_groups_match,
     engine_version_tuple,
-    capabilities_are_exact,
     memory_max_is_64m,
-    narrow_caps_only,
     observe_slice_memory_max,
     preflight_blockers,
+    private_cgroup_mount,
     proc_cgroup_under_control_group,
     resolve_control_group_dir,
     security_options_are_rootless,
+    status_caps_are_narrow,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -396,10 +398,22 @@ class Proof:
                 15,
             )
             shown = proc.stdout.strip()
-        return {"cgroup": cgroup, "scope": scope, "systemd": shown, "host_pid": host_pid}
+        facts: dict = {"cgroup": cgroup, "scope": scope, "systemd": shown, "host_pid": host_pid}
+        directory, error = resolve_control_group_dir(cgroup_relative_path(cgroup), self.cgroup2_mount)
+        if error:
+            facts["identity_error"] = error
+            return facts
+        try:
+            st = Path(directory).stat()
+            facts["root_identity"] = {"dev": st.st_dev, "ino": st.st_ino}
+            facts["namespace"] = os.readlink(f"/proc/{host_pid}/ns/cgroup")
+            facts["host_namespace"] = os.readlink("/proc/self/ns/cgroup")
+        except OSError as exc:
+            facts["identity_error"] = str(exc)
+        return facts
 
     def processes_in(self, marker: str) -> list[dict]:
-        found = []
+        found: list[dict] = []
         if not marker or marker in {"/", "."} or ".." in marker.split("/"):
             return found
         proc_root = Path("/proc")
@@ -468,22 +482,15 @@ class Proof:
     def evaluate(self, supervisor: dict) -> None:
         self.add(
             "visible_private_cgroup_root",
-            "PASS" if supervisor.get("cgroup") == "0::/" and "/ /sys/fs/cgroup rw" in supervisor.get("mountinfo", "") else "FAIL",
+            "PASS" if supervisor.get("cgroup") == "0::/" and private_cgroup_mount(supervisor.get("mountinfo_all", "")) else "FAIL",
             supervisor.get("mountinfo", "")[:300],
         )
         launcher_caps = supervisor.get("launcher_caps") or {}
-        inside_ok = True
-        for name in ("a", "b"):
-            status = launcher_caps.get(name) or {}
-            try:
-                ok = all(narrow_caps_only(str(status[key])) for key in ("CapEff", "CapPrm", "CapBnd"))
-            except (KeyError, ValueError):
-                ok = False
-            inside_ok = inside_ok and ok
+        inside_ok = all(status_caps_are_narrow(launcher_caps.get(name)) for name in ("a", "b", "probe"))
         self.add(
             "narrow_capabilities_without_chown",
             "PASS"
-            if narrow_caps_only(str(supervisor.get("cap_eff") or "0")) and inside_ok
+            if status_caps_are_narrow(supervisor.get("supervisor_caps")) and inside_ok
             else "FAIL",
             json.dumps({"supervisor": supervisor.get("cap_eff"), "launcher": launcher_caps}),
         )
@@ -559,17 +566,13 @@ class Proof:
         )
         self.add("job_b_continues", "PASS" if b_ok else "FAIL", json.dumps(b_after)[:400])
         outside = supervisor.get("outside") or {}
-        hidden = (
-            str(outside.get("sentinel", "")).startswith("errno")
-            and str(outside.get("slice", "")).startswith("errno")
-            and outside.get("dotdot_same_as_root") is True
-        )
-        self.add("supervisor_cannot_open_outside_subtree", "PASS" if hidden else "FAIL", json.dumps(outside))
-        top = " ".join(supervisor.get("cgroup_top") or [])
+        errors = cgroup_boundary_errors(supervisor, self.evidence.get("executor_scope") or {})
+        self.add("supervisor_cannot_open_outside_subtree", "FAIL" if errors else "PASS", json.dumps({"errors": errors, "outside": outside}))
+        top = supervisor.get("cgroup_dirs")
         self.add(
             "container_view_has_no_sentinel_scope",
-            "PASS" if "docker-" not in top and self.suffix not in top else "FAIL",
-            top[:300],
+            "PASS" if top == ["fn-a", "fn-b", "fn-probe"] else "FAIL",
+            json.dumps(top),
         )
 
     def execute(self) -> int:

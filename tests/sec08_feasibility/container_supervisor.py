@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cancel_oracle import classify_pid  # noqa: E402
+from cgroup_contract import private_cgroup_mount  # noqa: E402
 from workspace_contract import WORK_DIR_MODE, mkdir_visible_mode  # noqa: E402
 
 BIN = "/opt/sec08-trusted/bin/sec08tool"
@@ -125,6 +126,26 @@ def mountinfo_cgroup() -> str:
     return ""
 
 
+def cgroup_fds(mountinfo: str) -> list[int]:
+    """Record inherited cgroup descriptors before opening any proof cgroups."""
+    mount_ids = {
+        line.split()[0]
+        for line in mountinfo.splitlines()
+        if " - cgroup2 " in line or " - cgroup " in line
+    }
+    found = []
+    for path in Path("/proc/self/fdinfo").iterdir():
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            # The descriptor used to enumerate this directory has closed.
+            continue
+        for line in text.splitlines():
+            if line.startswith("mnt_id:") and line.split(":", 1)[1].strip() in mount_ids:
+                found.append(int(path.name))
+    return sorted(found)
+
+
 def run_as(uid: int, gid: int, fn, timeout: float = 5) -> tuple[int, str]:
     read_fd, write_fd = os.pipe()
     pid = os.fork()
@@ -174,23 +195,6 @@ def run_as(uid: int, gid: int, fn, timeout: float = 5) -> tuple[int, str]:
         _, status = os.waitpid(pid, 0)
     code = os.waitstatus_to_exitcode(status)
     return code, b"".join(chunks).decode(errors="replace")
-
-
-def ensure_users() -> None:
-    subprocess.run(["groupadd", "--gid", "10001", "--force", "sec08worker"], check=False)
-    subprocess.run(["groupadd", "--gid", "10003", "--force", "sec08tool"], check=False)
-    subprocess.run(
-        ["useradd", "--uid", "10001", "--gid", "10001", "-M", "-N", "--shell", "/usr/sbin/nologin", "sec08worker"],
-        check=False,
-    )
-    subprocess.run(
-        ["useradd", "--uid", "10002", "--gid", "10001", "-M", "-N", "--shell", "/usr/sbin/nologin", "sec08exec"],
-        check=False,
-    )
-    subprocess.run(
-        ["useradd", "--uid", "10003", "--gid", "10003", "-M", "-N", "--shell", "/usr/sbin/nologin", "sec08tool"],
-        check=False,
-    )
 
 
 def prepare_socket_dir() -> dict:
@@ -401,7 +405,7 @@ def launch(name: str, attempt: Path, procs: Path | None, extra: list[str]) -> su
 
 
 def status_caps(path: Path) -> dict:
-    found = {}
+    found: dict[str, str] = {}
     if not path.is_file():
         return found
     for line in path.read_text().splitlines():
@@ -436,6 +440,17 @@ def pid_from(path: Path) -> int:
         return int(path.read_text().strip())
 
 
+def ready_launcher_caps() -> dict:
+    """Bounded tool readiness is the barrier for closed launcher status files."""
+    deadline = time.monotonic() + 5
+    for name in ("a", "b"):
+        for kind in ("parent", "child"):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not wait_file(WORK / name / f"{kind}.pid", remaining):
+                raise TimeoutError("sleep jobs did not publish pids")
+    return {name: status_caps(OUT / f"{name}-launcher-status.txt") for name in ("a", "b")}
+
+
 def file_size(path: Path) -> int:
     with as_worker_group():
         return path.stat().st_size
@@ -463,11 +478,15 @@ def full_mode(report: dict) -> int:
     report["subreaper_rc"] = int(sub)
     report["euid"] = os.geteuid()
     report["cap_eff"] = cap_eff()
+    report["supervisor_caps"] = status_caps(Path("/proc/self/status"))
     report["cgroup"] = Path("/proc/self/cgroup").read_text().strip()
     report["mountinfo"] = mountinfo_cgroup()
-    report["mount_writable"] = " rw," in f" {report['mountinfo']} " or " rw," in report["mountinfo"]
-    # mountinfo options are the sixth field-ish; also accept the token rw among options.
-    report["mount_writable"] = "rw" in report["mountinfo"].split(" - ")[0]
+    report["mountinfo_all"] = Path("/proc/self/mountinfo").read_text()
+    report["mount_writable"] = private_cgroup_mount(report["mountinfo_all"])
+    root_stat = CG.stat()
+    report["cgroup_root_identity"] = {"dev": root_stat.st_dev, "ino": root_stat.st_ino}
+    report["cgroup_namespace"] = os.readlink("/proc/self/ns/cgroup")
+    report["inherited_cgroup_fds"] = cgroup_fds(report["mountinfo_all"])
     if not report["mount_writable"] or report["cgroup"] != "0::/":
         report["error"] = "cgroup view is not a writable private root"
         return 1
@@ -476,7 +495,8 @@ def full_mode(report: dict) -> int:
             report["error"] = f"{name} existed before the supervisor created it"
             return 1
 
-    ensure_users()
+    # The proof uses numeric identities. Do not mutate passwd/shadow at runtime
+    # with a capability set intentionally unable to maintain those databases.
     report["socket_dir"] = prepare_socket_dir()
     listener = start_listener()
     report["listener_pid"] = listener
@@ -501,15 +521,14 @@ def full_mode(report: dict) -> int:
             outside[label] = "unset"
             continue
         try:
-            os.open(target, os.O_RDONLY)
+            fd = os.open(target, os.O_RDONLY | os.O_CLOEXEC)
+            os.close(fd)
             outside[label] = "opened"
         except OSError as exc:
             outside[label] = f"errno {exc.errno}"
-    try:
-        same = os.path.samefile(CG, CG / "..")
-    except OSError as exc:
-        same = f"errno {exc.errno}"
-    outside["dotdot_same_as_root"] = same
+    # Diagnostic only: .. walks out of the mount to /sys/fs. It is NOT a
+    # handle to the parent host cgroup and must not be a same-inode gate.
+    outside["mount_parent_resolved"] = str((CG / "..").resolve(strict=True))
     report["outside"] = outside
 
     (CG / "fn-a").mkdir()
@@ -533,18 +552,12 @@ def full_mode(report: dict) -> int:
             ["probe", "--mode", "sleep", "--attempt", str(WORK / "b"), "--result", str(OUT / "b-sleep.json")],
         ),
     }
-    report["launcher_caps"] = {
-        "a": status_caps(OUT / "a-launcher-status.txt"),
-        "b": status_caps(OUT / "b-launcher-status.txt"),
-    }
-    ready = all(
-        wait_file(WORK / name / "parent.pid", 5) and wait_file(WORK / name / "child.pid", 5) for name in ("a", "b")
-    )
-    report["jobs_ready"] = ready
-    if not ready:
-        report["error"] = "sleep jobs did not publish pids"
-        return 1
-    tracked = {}
+    # The tool publishes its pid files only after the launcher has written and
+    # closed its status file, applied the domain, and exec'd the tool. Popen
+    # alone is not a readiness barrier. Missing/malformed caps still fail.
+    report["launcher_caps"] = ready_launcher_caps()
+    report["jobs_ready"] = True
+    tracked: dict[str, dict] = {}
     for name in ("a", "b"):
         parent = pid_from(WORK / name / "parent.pid")
         child = pid_from(WORK / name / "child.pid")
@@ -676,6 +689,7 @@ def full_mode(report: dict) -> int:
     del blob
     report["b_still"] = observe(tracked["b"]["parent"]["pid"], tracked["b"]["parent"]["starttime"])
     report["cgroup_top"] = sorted(path.name for path in CG.iterdir())
+    report["cgroup_dirs"] = sorted(path.name for path in CG.iterdir() if path.is_dir())
     atomic_write(OUT / "supervisor.json", report)
     (OUT / "hold").write_text("1\n")
     deadline = time.monotonic() + 40
@@ -689,7 +703,6 @@ def dac_smoke(report: dict) -> int:
     """Filesystem contract only. This mode does not create cgroups."""
     report["cgroups_created"] = []
     report["supervisor_creds"] = creds()
-    ensure_users()
     report["socket_dir"] = prepare_socket_dir()
     listener = start_listener()
     report["socket"] = {

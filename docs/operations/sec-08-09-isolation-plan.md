@@ -11,6 +11,47 @@ Implementation of the executor, merge, and deploy: **NO**.
 One diagnostic harness commit is separate from that.
 SEC-03C gosu VEX and the API residual decision document are **preserved**.
 API residual acceptance: **NOT GRANTED**.
+
+## Local harness closure — 2026-10-02 (no new native run)
+
+The `d48685a` native result remains **23 PASS / 2 FAIL**, with failed
+artifact upload. It is not replaced or retrospectively promoted to PASS.
+The following changes are local and uncommitted:
+
+- Launcher capability snapshots are read only after both jobs publish parent
+  and child pid files (a bounded readiness barrier after launcher status close
+  and tool exec). Missing, incomplete, unexpected or malformed capabilities
+  still fail; supervisor and all three launchers require the narrow set.
+- The invalid `samefile(/sys/fs/cgroup, /sys/fs/cgroup/..)` gate is replaced.
+  `..` leaves the mount to `/sys/fs`; it is not the host ancestor cgroup.
+  New evidence requires one writable, namespace-rooted cgroup2 mount with
+  `nsdelegate`, matching host-scope/container-root device and inode, matching
+  container namespace identities distinct from the host, an empty inherited
+  cgroup-FD inventory, and exact ENOENT/EACCES on the ancestor/sentinel probes.
+  The existing external-limit, cancellation, restart and sentinel gates remain.
+- The visible cgroup directory inventory must be exactly the three proof jobs;
+  missing inventory is not treated as an empty/safe view.
+- Runtime user/group database mutation was removed. All identities are numeric;
+  no added capabilities or passwd/shadow writes are necessary.
+- After cleanup, a separate bounded, allowlisted evidence exporter verifies
+  stage hashes and copies original bytes into readable upload files. It refuses
+  symlinks, special files, unexpected paths and stale hash inventories. Original
+  workspace permissions are unchanged. Upload failure is no longer ignored.
+  `evidence-manifest.json` records SHA-256 of each original byte sequence;
+  these are not hashes of a reformatted console rendering.
+
+Fresh local results: 55 offline tests on Linux/arm64, including a root-owned
+0640 original that uid 10001 cannot read and a byte-identical exported copy
+that it can read; 54 tests on macOS with that Linux-only test skipped.
+The disposable Docker Desktop filesystem smoke passed all 15 checks under
+SETUID/SETGID/SETPCAP and no-new-privileges, with network none. No runtime
+account-database errors occurred. Ruff (E/F/I/UP, excluding pre-existing long
+lines), mypy with Linux target, actionlint and diff whitespace checks passed.
+
+This is **local regression evidence**, not native container cgroup acceptance.
+No new native run, commit, push, production access, VEX change or API residual
+acceptance was performed. Required next evidence is one authorized native
+container proof of these exact changes, including readable uploaded originals.
 SEC-09 implementation: **NOT STARTED**.
 TEST / LIVE / SEO: unchanged.
 
