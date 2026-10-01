@@ -20,14 +20,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run mechanism C feasibility harness
+      - name: Run container cgroup proof
         timeout-minutes: 16
         run: |
           set -eu
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ffmpeg gcc libc6-dev iproute2 util-linux
-          sudo python3 tests/sec08_feasibility/harness.py
+            gcc libc6-dev
+          sudo python3 tests/sec08_feasibility/container_cgroup_proof.py
 
       - name: Print sanitized result
         if: always()

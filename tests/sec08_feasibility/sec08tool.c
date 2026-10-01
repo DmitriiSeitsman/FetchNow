@@ -716,7 +716,9 @@ static int cmd_probe(int argc, char **argv) {
                     fprintf(f, "%d\n", (int)getpid());
                     fclose(f);
                 }
-                for (int i = 0; i < 80; i++) {
+                /* 150 * 200ms: long enough for the container proof to cancel
+                   and still bounded. The host harness cancels before this ends. */
+                for (int i = 0; i < 150; i++) {
                     FILE *h = fopen(child_hb, "a");
                     if (h) {
                         fprintf(h, "%d\n", i);
@@ -737,7 +739,7 @@ static int cmd_probe(int argc, char **argv) {
             fprintf(f, "%d\n", (int)getpid());
             fclose(f);
         }
-        for (int i = 0; i < 80; i++) {
+        for (int i = 0; i < 150; i++) {
             FILE *h = fopen(parent_hb, "a");
             if (h) {
                 fprintf(h, "%d\n", i);
