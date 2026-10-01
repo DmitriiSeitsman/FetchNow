@@ -1,0 +1,50 @@
+{
+  "name": "sec08-mechanism-c-native-feasibility",
+  "not": "production executor",
+  "min_landlock_abi": 3,
+  "min_abi_reason": "TRUNCATE is ABI 3 and REFER is ABI 2. Both are required to deny truncate and rename/link escapes. The floor is not lowered to match a runner.",
+  "handled_access_fs_required": [
+    "EXECUTE",
+    "WRITE_FILE",
+    "READ_FILE",
+    "READ_DIR",
+    "REMOVE_DIR",
+    "REMOVE_FILE",
+    "MAKE_CHAR",
+    "MAKE_DIR",
+    "MAKE_REG",
+    "MAKE_SOCK",
+    "MAKE_FIFO",
+    "MAKE_BLOCK",
+    "MAKE_SYM",
+    "REFER",
+    "TRUNCATE"
+  ],
+  "entrypoint": {
+    "role": "trusted transition component",
+    "starts_as": "uid 0 in the harness supervisor, which stands in for the container entrypoint",
+    "caps_at_transition": ["CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP"],
+    "caps_not_held": ["CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_DAC_OVERRIDE"],
+    "transition": "landlock_restrict_self, clear supplementary groups, setresgid/setresuid to 10003, exec",
+    "executor_uid_10002": "does not call setuid; CapEff stays empty. It only writes a delegated cgroup.kill file."
+  },
+  "uids": {"executor": 10002, "tool": 10003},
+  "files": [
+    {
+      "path": ".github/workflows/sec08-native-feasibility.yml",
+      "role": "one native ubuntu-24.04 x86_64 run"
+    },
+    {
+      "path": "tests/sec08_feasibility/manifest.json",
+      "role": "exact harness manifest"
+    },
+    {
+      "path": "tests/sec08_feasibility/harness.py",
+      "role": "supervisor, fixtures, assertions"
+    },
+    {
+      "path": "tests/sec08_feasibility/sec08tool.c",
+      "role": "entrypoint, Landlock domain, tool probe, executor cancel"
+    }
+  ]
+}

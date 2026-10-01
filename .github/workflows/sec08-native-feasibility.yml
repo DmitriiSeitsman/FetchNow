@@ -1,0 +1,44 @@
+name: sec08-native-feasibility
+
+on:
+  push:
+    branches:
+      - codex/security-sec-03c-image-audit
+    paths:
+      - .github/workflows/sec08-native-feasibility.yml
+      - tests/sec08_feasibility/**
+
+permissions:
+  contents: read
+
+jobs:
+  native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run mechanism C feasibility harness
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ffmpeg gcc libc6-dev iproute2 util-linux
+          sudo python3 tests/sec08_feasibility/harness.py
+
+      - name: Print sanitized result
+        if: always()
+        run: |
+          set -eu
+          test -f sec08-feasibility-out/result.json
+          python3 -m json.tool sec08-feasibility-out/result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: sec08-native-feasibility
+          path: sec08-feasibility-out/
+          if-no-files-found: error
