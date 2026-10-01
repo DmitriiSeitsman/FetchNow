@@ -21,6 +21,7 @@ jobs:
           persist-credentials: false
 
       - name: Run mechanism C feasibility harness
+        timeout-minutes: 16
         run: |
           set -eu
           sudo apt-get update
