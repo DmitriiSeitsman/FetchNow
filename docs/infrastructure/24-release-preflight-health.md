@@ -37,7 +37,9 @@ Rules:
 1. Staging: exactly `[0-9a-f]{40}` — no abbreviated SHA, branch names, or `latest`.
 2. API and worker share `fetchnow-api:<revision>` (same image identity).
 3. Web/gateway use the same revision value on their images.
-4. PostgreSQL stays `postgres:16.9-alpine` (unchanged).
+4. PostgreSQL Compose pin is `postgres:16.15-alpine3.24`. App rollout does not
+   recreate a running older postgres image — see
+   `docs/operations/sec-03c-postgres-pin-rollout.md`.
 5. No separate tag vs source-revision variables.
 
 Build arg `FETCHNOW_RELEASE_REVISION` sets the OCI label on the **final** Dockerfile stage (declared late, after COPY/USER, so a revision change cannot reuse a stale LABEL from an earlier cached layer). Development builds may use `local`. Never pass secrets as build args.

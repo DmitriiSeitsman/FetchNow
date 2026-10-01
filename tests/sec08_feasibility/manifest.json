@@ -1,0 +1,60 @@
+{
+  "name": "sec08-mechanism-c-native-feasibility",
+  "not": "production executor",
+  "min_landlock_abi": 6,
+  "min_abi_reason": "LANDLOCK_SCOPE_SIGNAL and LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET require ABI 6. The floor is not lowered when a runner is older, and a missing scope is a refusal before exec with no fallback.",
+  "ruleset_attr_bytes": 24,
+  "handled_access_net": 0,
+  "scoped": ["LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET", "LANDLOCK_SCOPE_SIGNAL"],
+  "handled_access_fs_required": [
+    "EXECUTE",
+    "WRITE_FILE",
+    "READ_FILE",
+    "READ_DIR",
+    "REMOVE_DIR",
+    "REMOVE_FILE",
+    "MAKE_CHAR",
+    "MAKE_DIR",
+    "MAKE_REG",
+    "MAKE_SOCK",
+    "MAKE_FIFO",
+    "MAKE_BLOCK",
+    "MAKE_SYM",
+    "REFER",
+    "TRUNCATE",
+    "IOCTL_DEV"
+  ],
+  "entrypoint": {
+    "role": "trusted transition component",
+    "starts_as": "uid 0 in the harness supervisor, which stands in for the container entrypoint",
+    "caps_at_transition": ["CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP"],
+    "caps_not_held": ["CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_DAC_OVERRIDE"],
+    "transition": "landlock_restrict_self with scoped signal and abstract-unix, clear supplementary groups, setresgid/setresuid to 10003, exec",
+    "executor_uid_10002": "does not call setuid; CapEff stays empty. It only writes a delegated cgroup.kill file and connects to the control socket."
+  },
+  "uids": {"executor": 10002, "tool": 10003},
+  "layout": {
+    "trusted_executable": "/opt/sec08-trusted/bin/sec08tool",
+    "library_roots": ["/usr", "/lib", "/lib64", "/bin", "/sbin"],
+    "work_root": "/var/tmp/sec08-feasibility-work",
+    "control_directory": "/opt/sec08-control"
+  },
+  "files": [
+    {
+      "path": ".github/workflows/sec08-native-feasibility.yml",
+      "role": "one native ubuntu-24.04 x86_64 run"
+    },
+    {
+      "path": "tests/sec08_feasibility/manifest.json",
+      "role": "exact harness manifest"
+    },
+    {
+      "path": "tests/sec08_feasibility/harness.py",
+      "role": "supervisor, fixtures, assertions"
+    },
+    {
+      "path": "tests/sec08_feasibility/sec08tool.c",
+      "role": "entrypoint, Landlock domain, tool probe, executor cancel"
+    }
+  ]
+}

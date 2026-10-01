@@ -27,6 +27,7 @@ from fetchnow.downloads.selection import (
 )
 from fetchnow.media_inspection.models import FormatCategory
 from fetchnow.media_inspection.protocols import ProcessResult
+from process_descendant_diag import emit_descendant_diag_if_observable
 
 _DB = "postgresql+asyncpg://fetchnow:fetchnow@localhost:5432/fetchnow"
 _VIDEO_TOKEN = "url720-secret"
@@ -364,7 +365,11 @@ async def _run_hang_case(
             complete_cancelled.assert_awaited()
         else:
             complete_cancelled.assert_not_awaited()
-    assert not _pid_alive(child)
+    alive = _pid_alive(child)
+    emit_descendant_diag_if_observable(
+        child, role="lease_watchdog_child", alive=alive
+    )
+    assert not alive
     assert executor._watchdog_started == executor._watchdog_finished
     assert not executor._watchdog_tasks
     fail.assert_not_awaited()
@@ -503,6 +508,10 @@ async def test_watchdog_db_failure_fails_closed_without_catalog(
     explode = True
     tick.set()
     await task
-    assert not _pid_alive(child)
+    alive = _pid_alive(child)
+    emit_descendant_diag_if_observable(
+        child, role="lease_watchdog_child", alive=alive
+    )
+    assert not alive
     fail.assert_not_awaited()
     assert executor._watchdog_started == executor._watchdog_finished

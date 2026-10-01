@@ -265,7 +265,7 @@ def test_exceptions_runtime_dev_not_shared() -> None:
 
 
 def test_marker_strip_and_runtime_vs_scanner_python() -> None:
-    """Target is 3.14.6 linux; scanner Python is irrelevant to kept pins."""
+    """Target is 3.14.7 linux; scanner Python is irrelevant to kept pins."""
     export = (
         "colorama==0.4.6 ; sys_platform == 'win32' \\\n"
         "    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"

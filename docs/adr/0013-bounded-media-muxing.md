@@ -43,7 +43,7 @@ then blocked every quality with “muxing is not offered yet.”
    stages into ``output/`` by same-volume link+unlink (no extra copy), then uses
    the existing atomic publisher. The subprocess boundary connects stdin to
    `DEVNULL`; the ffprobe argv must not use ffmpeg-only `-nostdin`, which Debian
-   bookworm ffprobe rejects before validating the local file.
+   distro ffprobe (bookworm/trixie) rejects before validating the local file.
 6. Peak disk reservation is `video + audio + muxed output` plus the existing
    min-free headroom, and each mux stage is write-capped to that reservation.
    Mux concurrency is the existing single download worker
@@ -68,7 +68,8 @@ then blocked every quality with “muxing is not offered yet.”
 ## Consequences
 
 - Operators must install ffmpeg/ffprobe in the worker image (Debian
-  bookworm `ffmpeg` package) and set absolute paths only on the worker.
+  trixie `ffmpeg` package on the current API runtime base) and set absolute
+  paths only on the worker.
 - Enabling muxing does not enable transcoding, cookies, plugins, or
   client-controlled argv.
 - Free users can still admit only finished combined video+audio choices.

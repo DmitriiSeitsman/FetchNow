@@ -1,0 +1,56 @@
+name: sec08-native-feasibility
+
+on:
+  push:
+    branches:
+      - codex/security-sec-03c-image-audit
+    paths:
+      - .github/workflows/sec08-native-feasibility.yml
+      - tests/sec08_feasibility/**
+
+permissions:
+  contents: read
+
+jobs:
+  native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run container cgroup proof
+        timeout-minutes: 16
+        run: |
+          set -eu
+          sudo env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s tests/sec08_feasibility -p 'test_*.py'
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc libc6-dev
+          sudo python3 tests/sec08_feasibility/container_cgroup_proof.py
+
+      - name: Export readable proof evidence after cleanup
+        if: always()
+        run: |
+          set -eu
+          sudo python3 tests/sec08_feasibility/export_evidence.py \
+            --source sec08-feasibility-out \
+            --destination "$RUNNER_TEMP/sec08-proof-evidence"
+          # Prove readability as the runner, not just as the sudo exporter.
+          python3 -c 'import os,pathlib; p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "sec08-proof-evidence"; [f.read_bytes() for f in p.rglob("*") if f.is_file()]'
+
+      - name: Print sanitized result
+        if: always()
+        run: |
+          set -eu
+          test -f sec08-feasibility-out/result.json
+          python3 -m json.tool sec08-feasibility-out/result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sec08-native-feasibility
+          path: ${{ runner.temp }}/sec08-proof-evidence/
+          if-no-files-found: error

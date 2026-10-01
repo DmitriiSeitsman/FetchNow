@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.14.6-slim-bookworm AS builder
+FROM python:3.14.7-slim-trixie AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -26,7 +26,7 @@ COPY alembic.ini ./
 RUN uv lock --check \
     && uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python
 
-FROM python:3.14.6-slim-bookworm AS runtime
+FROM python:3.14.7-slim-trixie AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -34,11 +34,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_HOME=/app \
     TEMP_STORAGE_PATH=/var/lib/fetchnow/tmp
 
-# ffmpeg/ffprobe: Debian bookworm official apt package (not compiled here).
+# ffmpeg/ffprobe: Debian trixie official apt package (not compiled here).
 # Version token is the distro package; worker logs never dump `--version` text.
+# OpenSSL: pin the trixie-security revision that closes CVE-2026-75804 /
+# CVE-2026-84782 (libssl3t64, openssl, openssl-provider-legacy together).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libssl3t64=3.5.7-1~deb13u3 \
+        openssl=3.5.7-1~deb13u3 \
+        openssl-provider-legacy=3.5.7-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/*
+
+# SEC-03C: base image ships ensurepip's pip with vendored msgpack/setuptools
+# (not app uv.lock packages; not present under /opt/venv). Runtime never invokes
+# pip — remove the system pip install + ensurepip wheel so those copies are gone.
+# Do not touch /opt/venv.
+RUN /usr/local/bin/python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.14/ensurepip \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14
 
 RUN groupadd --system --gid 10001 fetchnow \
     && useradd --system --uid 10001 --gid fetchnow --home-dir /app --shell /usr/sbin/nologin fetchnow \

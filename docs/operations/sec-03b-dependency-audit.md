@@ -1,7 +1,7 @@
 # SEC-03B2 — npm and Python dependency audit gates
 
-Status: implementation + acceptance-findings remediation in the SEC-03B2 worktree.
-Not committed. SEC-03C (image scanning) is **NOT STARTED**. Production unchanged.
+Status: merged (PR #157). SEC-03C image audit is a separate gate —
+`docs/operations/sec-03c-image-audit.md`. Production unchanged by this document.
 
 This gate runs metadata-only advisory checks against locked inputs. It is a dated
 result from advisory services, not a guarantee that those databases are complete
@@ -81,10 +81,10 @@ pip-audit cannot re-filter by the scanner’s Python/platform.
 
 | Section | Platform | Python markers | uv `--python` | extras |
 | --- | --- | --- | --- | --- |
-| python-runtime | linux x86_64 / CPython | 3.14 / **3.14.6** | **3.14.6** | `--no-dev` |
+| python-runtime | linux x86_64 / CPython | 3.14 / **3.14.7** | **3.14.7** | `--no-dev` |
 | python-dev | linux x86_64 / CPython | 3.12 / **3.12.0** | **3.12** | `--extra dev` |
 
-CI installs `3.14.6` and `3.12` with `UV_PYTHON_DOWNLOADS=never` so export
+CI installs `3.14.7` and `3.12` with `UV_PYTHON_DOWNLOADS=never` so export
 interpreters match these targets. Dev markers use the documented `3.12.0` full
 version; the export requests the `3.12` interpreter line from setup-python (patch
 not pinned to a single build). Application `requires-python` is unchanged.

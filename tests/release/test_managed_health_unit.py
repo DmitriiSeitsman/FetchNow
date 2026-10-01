@@ -141,7 +141,7 @@ def _patch_healthy_runtime(
                 "Image": (
                     ids["api"]
                     if service == "delivery"
-                    else ids.get(service, "postgres:16.9-alpine")
+                    else ids.get(service, "postgres:16.15-alpine3.24")
                 ),
             }
             for service in ("gateway", "api", "worker", "delivery", "postgres", "web")
@@ -341,7 +341,7 @@ def test_isolated_tag_mode_still_passes_for_health_test_project(
             "State": "running",
             "Health": "" if service == "worker" else "healthy",
             "ID": f"cid-{service}",
-            "Image": tagged.get(service, "postgres:16.9-alpine"),
+            "Image": tagged.get(service, "postgres:16.15-alpine3.24"),
         }
         for service in ("gateway", "api", "worker", "delivery", "postgres", "web")
     ]

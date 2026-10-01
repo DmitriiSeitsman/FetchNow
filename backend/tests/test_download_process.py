@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
+import sys
 import textwrap
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from fetchnow.downloads.process_download import (
     build_sanitized_env,
 )
 from fetchnow.media_inspection.protocols import ProcessResult
+from process_descendant_diag import emit_descendant_diag_if_observable
 
 
 def _pid_alive(pid: int) -> bool:
@@ -25,6 +28,13 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _fixture_python() -> str:
+    """Absolute interpreter for shell helpers under sanitized PATH."""
+    exe = sys.executable
+    assert os.path.isfile(exe) and os.access(exe, os.X_OK)
+    return shlex.quote(exe)
 
 
 @pytest.mark.asyncio
@@ -114,7 +124,7 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
             #!/bin/sh
             # Descendant inherits stdout/stderr and keeps them open so communicate
             # cannot finish after the direct child exits.
-            python3 -c '
+            {_fixture_python()} -c '
             import os, time
             from pathlib import Path
             Path("{pid_file}").write_text(str(os.getpid()), encoding="utf-8")
@@ -148,7 +158,11 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
         if not _pid_alive(descendant_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(descendant_pid)
+    alive = _pid_alive(descendant_pid)
+    emit_descendant_diag_if_observable(
+        descendant_pid, role="download_exited_parent_descendant", alive=alive
+    )
+    assert not alive
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
 
@@ -157,7 +171,11 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
 async def test_stdout_limit_maps_download_error(tmp_path: Path) -> None:
     script = tmp_path / "big.sh"
     script.write_text(
-        "#!/bin/sh\npython3 -c 'import sys; sys.stdout.write(\"x\"*10000)'\n",
+        (
+            "#!/bin/sh\n"
+            f"{_fixture_python()} -c "
+            "'import sys; sys.stdout.write(\"x\"*10000)'\n"
+        ),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -186,7 +204,7 @@ async def test_runtime_monitor_kills_oversized_output(tmp_path: Path) -> None:
             f"""\
             #!/bin/sh
             echo $$ > "{pid_file}"
-            python3 -c '
+            {_fixture_python()} -c '
             import time
             from pathlib import Path
             p = Path("{target}")
@@ -220,7 +238,11 @@ async def test_runtime_monitor_kills_oversized_output(tmp_path: Path) -> None:
         if not _pid_alive(writer_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(writer_pid)
+    alive = _pid_alive(writer_pid)
+    emit_descendant_diag_if_observable(
+        writer_pid, role="download_writer_process", alive=alive
+    )
+    assert not alive
     with pytest.raises(ProcessLookupError):
         os.kill(writer_pid, 0)
     # Runner itself never publishes; kill happens before a natural clean exit.
@@ -242,7 +264,7 @@ async def test_exited_parent_descendant_killed_on_output_budget(
         textwrap.dedent(
             f"""\
             #!/bin/sh
-            python3 -c '
+            {_fixture_python()} -c '
             import os, time
             from pathlib import Path
             Path("{pid_file}").write_text(str(os.getpid()), encoding="utf-8")
@@ -285,7 +307,11 @@ async def test_exited_parent_descendant_killed_on_output_budget(
         if not _pid_alive(descendant_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(descendant_pid)
+    alive = _pid_alive(descendant_pid)
+    emit_descendant_diag_if_observable(
+        descendant_pid, role="download_exited_parent_descendant", alive=alive
+    )
+    assert not alive
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
 
@@ -356,7 +382,7 @@ async def test_stuck_progress_callback_does_not_block_size_kill(
             f"""\
             #!/bin/sh
             echo $$ > "{pid_file}"
-            python3 -c '
+            {_fixture_python()} -c '
             import time
             from pathlib import Path
             target = Path("{target}")
@@ -407,6 +433,11 @@ async def test_stuck_progress_callback_does_not_block_size_kill(
             break
         await asyncio.sleep(0.05)
     oversized_process_survives_stuck_progress_writer = _pid_alive(writer_pid)
+    emit_descendant_diag_if_observable(
+        writer_pid,
+        role="download_stuck_progress_writer",
+        alive=oversized_process_survives_stuck_progress_writer,
+    )
     assert oversized_process_survives_stuck_progress_writer is False
     progress_db_stall_blocks_size_monitor = False
     progress_writer_tasks_survive_run = bool(_live_progress_writers())
@@ -445,7 +476,7 @@ async def test_stuck_progress_callback_does_not_block_descendant_size_kill(
         textwrap.dedent(
             f"""\
             #!/bin/sh
-            python3 -c '
+            {_fixture_python()} -c '
             import os, time
             from pathlib import Path
             Path("{pid_file}").write_text(str(os.getpid()), encoding="utf-8")
@@ -498,7 +529,11 @@ async def test_stuck_progress_callback_does_not_block_descendant_size_kill(
         if not _pid_alive(descendant_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(descendant_pid)
+    alive = _pid_alive(descendant_pid)
+    emit_descendant_diag_if_observable(
+        descendant_pid, role="download_exited_parent_descendant", alive=alive
+    )
+    assert not alive
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
 
@@ -588,7 +623,11 @@ async def test_stuck_progress_callback_does_not_block_disk_kill(
         if not _pid_alive(writer_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(writer_pid)
+    alive = _pid_alive(writer_pid)
+    emit_descendant_diag_if_observable(
+        writer_pid, role="download_disk_kill_writer", alive=alive
+    )
+    assert not alive
 
 
 @pytest.mark.asyncio

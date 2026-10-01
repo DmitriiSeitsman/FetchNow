@@ -47,7 +47,7 @@ from fetchnow_release.routing_health import (  # noqa: E402
 )
 
 NGINX_CONF = ROOT / "deploy" / "nginx" / "nginx.conf"
-NGINX_IMAGE = "nginx:1.31.3-alpine"
+NGINX_IMAGE = "nginx:1.31.6-alpine3.24"
 PYTHON_IMAGE = "python:3.14-alpine"
 BUSYBOX_IMAGE = "busybox:1.37.0"
 

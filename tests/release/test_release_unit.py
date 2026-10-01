@@ -58,7 +58,7 @@ def _good_cfg(rev: str) -> dict:
                     }
                 ],
             },
-            "postgres": {"image": "postgres:16.9-alpine"},
+            "postgres": {"image": "postgres:16.15-alpine3.24"},
         },
         "volumes": {
             "pgdata": {"name": "fetchnow-staging_pgdata"},
@@ -542,7 +542,7 @@ def test_health_unhealthy_and_duplicate(
                     "Image": f"fetchnow-api:{rev}"
                     if svc in {"api", "worker", "delivery"}
                     else f"fetchnow-{svc}:{rev}".replace(
-                        "fetchnow-postgres", "postgres:16.9-alpine"
+                        "fetchnow-postgres", "postgres:16.15-alpine3.24"
                     ),
                 }
             )
@@ -591,7 +591,7 @@ def test_health_wrong_project_label(
                 "delivery": f"fetchnow-api:{rev}",
                 "web": f"fetchnow-web:{rev}",
                 "gateway": f"fetchnow-gateway:{rev}",
-                "postgres": "postgres:16.9-alpine",
+                "postgres": "postgres:16.15-alpine3.24",
             }[svc]
             out.append(
                 {
@@ -664,7 +664,7 @@ def test_health_wrong_oci_and_exited(
                     "delivery": f"fetchnow-api:{rev}",
                     "web": f"fetchnow-web:{rev}",
                     "gateway": f"fetchnow-gateway:{rev}",
-                    "postgres": "postgres:16.9-alpine",
+                    "postgres": "postgres:16.15-alpine3.24",
                 }[svc],
             }
             for svc in ("gateway", "api", "worker", "delivery", "postgres", "web")

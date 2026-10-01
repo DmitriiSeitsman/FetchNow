@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
+import sys
 import textwrap
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from fetchnow.downloads.process_download import (
     DownloadProcessRunner,
     build_sanitized_env,
 )
+from process_descendant_diag import emit_descendant_diag_if_observable
 
 
 def _pid_alive(pid: int) -> bool:
@@ -30,6 +33,11 @@ def _pid_alive(pid: int) -> bool:
 async def test_stdout_overflow_uses_muxing_failed_and_kills(
     tmp_path: Path,
 ) -> None:
+    # Absolute interpreter from this process — not `python3` on sanitized PATH
+    # (/usr/bin:/bin), which official slim images do not provide.
+    interpreter = sys.executable
+    assert os.path.isfile(interpreter) and os.access(interpreter, os.X_OK)
+
     pid_file = tmp_path / "child.pid"
     flood = tmp_path / "flood.py"
     flood.write_text(
@@ -50,8 +58,8 @@ async def test_stdout_overflow_uses_muxing_failed_and_kills(
             f"""\
             #!/bin/sh
             sleep 30 &
-            echo $! > "{pid_file}"
-            python3 "{flood}"
+            echo $! > {shlex.quote(str(pid_file))}
+            {shlex.quote(interpreter)} {shlex.quote(str(flood))}
             """
         ),
         encoding="utf-8",
@@ -69,9 +77,14 @@ async def test_stdout_overflow_uses_muxing_failed_and_kills(
             overflow_code=DownloadErrorCode.MUXING_FAILED,
         )
     assert exc.value.code == DownloadErrorCode.MUXING_FAILED
+    assert exc.value.internal_reason == "STDOUT_LIMIT"
     child = int(pid_file.read_text(encoding="utf-8").strip())
     for _ in range(50):
         if not _pid_alive(child):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(child)
+    alive = _pid_alive(child)
+    emit_descendant_diag_if_observable(
+        child, role="mux_stdout_overflow_sleep_child", alive=alive
+    )
+    assert not alive

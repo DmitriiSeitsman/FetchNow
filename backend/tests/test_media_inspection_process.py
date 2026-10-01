@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import stat
+import sys
 import textwrap
 from pathlib import Path
 
@@ -30,6 +32,14 @@ from media_inspection_helpers import (
     make_temp_root,
     settings,
 )
+from process_descendant_diag import emit_descendant_diag_if_observable
+
+
+def _fixture_python() -> str:
+    """Absolute interpreter for shell helpers under sanitized PATH."""
+    exe = sys.executable
+    assert os.path.isfile(exe) and os.access(exe, os.X_OK)
+    return shlex.quote(exe)
 
 
 def test_argv_is_fixed_and_url_after_separator() -> None:
@@ -259,7 +269,11 @@ async def test_cancel_kills_process(tmp_path: Path) -> None:
 async def test_stdout_limit(tmp_path: Path) -> None:
     script = tmp_path / "big.sh"
     script.write_text(
-        "#!/bin/sh\npython3 -c 'import sys; sys.stdout.write(\"x\"*10000)'\n",
+        (
+            "#!/bin/sh\n"
+            f"{_fixture_python()} -c "
+            "'import sys; sys.stdout.write(\"x\"*10000)'\n"
+        ),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -280,7 +294,11 @@ async def test_stdout_limit(tmp_path: Path) -> None:
 async def test_stderr_limit(tmp_path: Path) -> None:
     script = tmp_path / "bigerr.sh"
     script.write_text(
-        "#!/bin/sh\npython3 -c 'import sys; sys.stderr.write(\"y\"*10000)'\n",
+        (
+            "#!/bin/sh\n"
+            f"{_fixture_python()} -c "
+            "'import sys; sys.stderr.write(\"y\"*10000)'\n"
+        ),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -403,7 +421,7 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
             #!/bin/sh
             # Descendant inherits stdout/stderr and keeps them open so communicate
             # cannot finish after the direct child exits.
-            python3 -c '
+            {_fixture_python()} -c '
             import os, time
             from pathlib import Path
             Path("{pid_file}").write_text(str(os.getpid()), encoding="utf-8")
@@ -439,7 +457,11 @@ async def test_exited_parent_descendant_killed_on_timeout(tmp_path: Path) -> Non
         if not _pid_alive(descendant_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(descendant_pid)
+    alive = _pid_alive(descendant_pid)
+    emit_descendant_diag_if_observable(
+        descendant_pid, role="media_inspection_descendant", alive=alive
+    )
+    assert not alive
     # Proof: descendant_absence_actually_verified against the exact PID.
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
@@ -487,7 +509,11 @@ async def test_exited_parent_descendant_killed_on_cancel(tmp_path: Path) -> None
         if not _pid_alive(descendant_pid):
             break
         await asyncio.sleep(0.05)
-    assert not _pid_alive(descendant_pid)
+    alive = _pid_alive(descendant_pid)
+    emit_descendant_diag_if_observable(
+        descendant_pid, role="media_inspection_descendant", alive=alive
+    )
+    assert not alive
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
 
@@ -496,8 +522,12 @@ async def test_exited_parent_descendant_killed_on_cancel(tmp_path: Path) -> None
 async def test_reader_tasks_do_not_survive_stdout_overflow(tmp_path: Path) -> None:
     script = tmp_path / "big.sh"
     script.write_text(
-        "#!/bin/sh\npython3 -c 'import sys; sys.stdout.write(\"x\"*100000); "
-        "sys.stdout.flush(); import time; time.sleep(30)'\n",
+        (
+            "#!/bin/sh\n"
+            f"{_fixture_python()} -c "
+            "'import sys; sys.stdout.write(\"x\"*100000); "
+            "sys.stdout.flush(); import time; time.sleep(30)'\n"
+        ),
         encoding="utf-8",
     )
     script.chmod(0o755)
