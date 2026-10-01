@@ -15,11 +15,14 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cancel_oracle import classify_pid  # noqa: E402
+from workspace_contract import WORK_DIR_MODE, mkdir_visible_mode  # noqa: E402
 
 BIN = "/opt/sec08-trusted/bin/sec08tool"
 WORK = Path("/var/tmp/sec08-proof-work")
@@ -69,6 +72,50 @@ def observe(pid: int, starttime: int | None = None) -> dict:
         except OSError as exc:
             item["cgroup_error"] = exc.strerror
     return item
+
+
+def creds() -> dict:
+    return {"euid": os.geteuid(), "egid": os.getegid(), "groups": sorted(os.getgroups())}
+
+
+def chain_stat(path: Path) -> list[dict]:
+    rows = []
+    current = path
+    for _ in range(8):
+        try:
+            st = current.stat()
+        except OSError as exc:
+            rows.append({"path": str(current), "errno": exc.errno})
+            break
+        rows.append(
+            {
+                "path": str(current),
+                "uid": st.st_uid,
+                "gid": st.st_gid,
+                "mode": oct(stat.S_IMODE(st.st_mode)),
+            }
+        )
+        if current.parent == current:
+            break
+        current = current.parent
+    return rows
+
+
+@contextmanager
+def as_worker_group() -> Iterator[None]:
+    """Read the worker-group workspace. uid 0 does not override DAC."""
+    os.setresgid(UID_WORKER, UID_WORKER, 0)
+    try:
+        yield
+    finally:
+        os.setresgid(0, 0, 0)
+
+
+def launcher_credentials() -> None:
+    """Group 10001 lets the uid-0 launcher traverse the attempt directory."""
+    os.umask(0o027)
+    os.setgroups([])
+    os.setresgid(UID_WORKER, UID_WORKER, UID_WORKER)
 
 
 def mountinfo_cgroup() -> str:
@@ -219,13 +266,33 @@ def connect_as(uid: int, gid: int) -> str:
     return text.strip() if code == 0 else f"child {code} {text.strip()}"
 
 
+def make_setgid_dir(path: Path) -> dict:
+    """mkdir(2) stores only mode & 0777. The owner chmod restores setgid."""
+    requested = WORK_DIR_MODE
+    path.mkdir(mode=requested)
+    after_mkdir = stat.S_IMODE(path.stat().st_mode)
+    if after_mkdir != requested:
+        os.chmod(path, requested)
+    proven = stat.S_IMODE(path.stat().st_mode)
+    if proven != requested:
+        raise RuntimeError(
+            f"{path} requested {oct(requested)} mkdir {oct(after_mkdir)} proven {oct(proven)}"
+        )
+    return {
+        "path": str(path),
+        "requested": oct(requested),
+        "after_mkdir": oct(after_mkdir),
+        "proven": oct(proven),
+        "mkdir_masked": oct(mkdir_visible_mode(requested)),
+    }
+
+
 def prepare_work() -> dict:
     def create() -> str:
         os.umask(0)
-        WORK.mkdir(mode=0o2750)
+        modes = [make_setgid_dir(WORK)]
         for name in ("a", "b", "probe", "published"):
-            path = WORK / name
-            path.mkdir(mode=0o2750)
+            modes.append(make_setgid_dir(WORK / name))
         (WORK / "a" / "input.txt").write_text("a\n")
         (WORK / "b" / "input.txt").write_text("b\n")
         (WORK / "probe" / "input.txt").write_text("probe\n")
@@ -243,15 +310,27 @@ def prepare_work() -> dict:
         for name in ("a", "b", "probe"):
             st = (WORK / name).stat()
             rows.append(f"{name} uid={st.st_uid} gid={st.st_gid} mode={oct(stat.S_IMODE(st.st_mode))}")
-        return "\n".join(rows)
+        payload = {
+            "tree": "\n".join(rows),
+            "modes": modes,
+            "creator": creds(),
+            "chain": chain_stat(WORK / "a"),
+        }
+        return json.dumps(payload)
 
-    # /var/tmp is sticky world-writable. The tool uid creates the tree so the
-    # owner is 10003 without chown. egid 10001 makes the attempt group the
-    # worker group; owner access still allows the create.
+    # /var/tmp is sticky. The tool uid owns the tree, so no chown is required.
+    # egid 10001 is the worker group. mkdir drops the setgid bit; chmod by the
+    # owner puts it back. uid 0 is not a member of that group.
     code, text = run_as(UID_TOOL, UID_WORKER, create)
     if code != 0:
         raise RuntimeError(f"work create failed: {code} {text}")
-    return {"tree": text}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"work create returned {text!r}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"work create returned {text!r}")
+    return payload
 
 
 def start_abstract() -> socket.socket:
@@ -287,7 +366,7 @@ def protected_args() -> list[str]:
     ]
 
 
-def launch(name: str, attempt: Path, procs: Path, extra: list[str]) -> subprocess.Popen:
+def launch(name: str, attempt: Path, procs: Path | None, extra: list[str]) -> subprocess.Popen:
     cmd = [
         BIN,
         "launch",
@@ -295,33 +374,71 @@ def launch(name: str, attempt: Path, procs: Path, extra: list[str]) -> subproces
         str(attempt),
         "--binary",
         BIN,
-        "--cgroup-procs",
-        str(procs),
-        "--control-dir",
-        str(CONTROL),
-        "--status",
-        str(OUT / f"{name}-launcher-status.txt"),
-        *ro_args(),
-        *protected_args(),
-        "--",
-        BIN,
-        *extra,
     ]
+    if procs is not None:
+        cmd.extend(["--cgroup-procs", str(procs)])
+    cmd.extend(
+        [
+            "--control-dir",
+            str(CONTROL),
+            "--status",
+            str(OUT / f"{name}-launcher-status.txt"),
+            *ro_args(),
+            *protected_args(),
+            "--",
+            BIN,
+            *extra,
+        ]
+    )
     err = open(OUT / f"{name}-launch.err", "w")
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, close_fds=True)
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=err,
+        close_fds=True,
+        preexec_fn=launcher_credentials,
+    )
+
+
+def status_caps(path: Path) -> dict:
+    found = {}
+    if not path.is_file():
+        return found
+    for line in path.read_text().splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name in {"CapEff", "CapPrm", "CapBnd", "CapInh", "CapAmb"}:
+            found[name] = value.strip()
+    return found
 
 
 def wait_file(path: Path, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.exists() and path.stat().st_size > 0:
+        with as_worker_group():
+            try:
+                ready = path.is_file() and path.stat().st_size > 0
+            except OSError as exc:
+                detail = {
+                    "path": str(path),
+                    "errno": exc.errno,
+                    "creds": creds(),
+                    "chain": chain_stat(path.parent),
+                }
+                raise RuntimeError(f"workspace access failed {detail}") from exc
+        if ready:
             return True
         time.sleep(0.05)
     return False
 
 
 def pid_from(path: Path) -> int:
-    return int(path.read_text().strip())
+    with as_worker_group():
+        return int(path.read_text().strip())
+
+
+def file_size(path: Path) -> int:
+    with as_worker_group():
+        return path.stat().st_size
 
 
 def fresh_mode(report: dict) -> int:
@@ -416,6 +533,10 @@ def full_mode(report: dict) -> int:
             ["probe", "--mode", "sleep", "--attempt", str(WORK / "b"), "--result", str(OUT / "b-sleep.json")],
         ),
     }
+    report["launcher_caps"] = {
+        "a": status_caps(OUT / "a-launcher-status.txt"),
+        "b": status_caps(OUT / "b-launcher-status.txt"),
+    }
     ready = all(
         wait_file(WORK / name / "parent.pid", 5) and wait_file(WORK / name / "child.pid", 5) for name in ("a", "b")
     )
@@ -432,8 +553,8 @@ def full_mode(report: dict) -> int:
         tracked[name] = {
             "parent": parent_obs,
             "child": child_obs,
-            "heartbeat_parent": (WORK / name / "parent.hb").stat().st_size,
-            "heartbeat_child": (WORK / name / "child.hb").stat().st_size,
+            "heartbeat_parent": file_size(WORK / name / "parent.hb"),
+            "heartbeat_child": file_size(WORK / name / "child.hb"),
             "procs": (CG / f"fn-{name}" / "cgroup.procs").read_text(),
         }
     report["before"] = tracked
@@ -450,7 +571,7 @@ def full_mode(report: dict) -> int:
             "--attempt",
             str(WORK / "probe"),
             "--result",
-            str(OUT / "probe.json"),
+            str(WORK / "probe" / "result.json"),
             "--sibling",
             str(WORK / "b" / "canary"),
             "--published",
@@ -480,12 +601,15 @@ def full_mode(report: dict) -> int:
     finally:
         abstract.close()
     report["probe_rc"] = probe.returncode
-    probe_path = OUT / "probe.json"
-    if probe_path.exists():
-        report["probe"] = json.loads(probe_path.read_text())
-    else:
+    report.setdefault("launcher_caps", {})["probe"] = status_caps(OUT / "probe-launcher-status.txt")
+    probe_path = WORK / "probe" / "result.json"
+    with as_worker_group():
+        present = probe_path.is_file()
+        payload = probe_path.read_text() if present else ""
+    if not present:
         report["error"] = "probe result missing"
         return 1
+    report["probe"] = json.loads(payload)
 
     # Cancellation is a write by this uid-0 supervisor to the file it created.
     kill_path = CG / "fn-a" / "cgroup.kill"
@@ -519,17 +643,17 @@ def full_mode(report: dict) -> int:
     grew = False
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
-        if (WORK / "b" / "parent.hb").stat().st_size > b_before_parent and (
+        if file_size(WORK / "b" / "parent.hb") > b_before_parent and file_size(
             WORK / "b" / "child.hb"
-        ).stat().st_size > b_before_child:
+        ) > b_before_child:
             grew = True
             break
         time.sleep(0.1)
     report["b_after"] = {
         "parent": observe(tracked["b"]["parent"]["pid"], tracked["b"]["parent"]["starttime"]),
         "child": observe(tracked["b"]["child"]["pid"], tracked["b"]["child"]["starttime"]),
-        "heartbeat_parent": (WORK / "b" / "parent.hb").stat().st_size,
-        "heartbeat_child": (WORK / "b" / "child.hb").stat().st_size,
+        "heartbeat_parent": file_size(WORK / "b" / "parent.hb"),
+        "heartbeat_child": file_size(WORK / "b" / "child.hb"),
         "grew": grew,
     }
     try:
@@ -561,6 +685,81 @@ def full_mode(report: dict) -> int:
     return 0
 
 
+def dac_smoke(report: dict) -> int:
+    """Filesystem contract only. This mode does not create cgroups."""
+    report["cgroups_created"] = []
+    report["supervisor_creds"] = creds()
+    ensure_users()
+    report["socket_dir"] = prepare_socket_dir()
+    listener = start_listener()
+    report["socket"] = {
+        "uid": SOCKET_PATH.stat().st_uid,
+        "gid": SOCKET_PATH.stat().st_gid,
+        "mode": oct(stat.S_IMODE(SOCKET_PATH.stat().st_mode)),
+    }
+    report["connect_tool"] = connect_as(UID_TOOL, UID_TOOL)
+    report["connect_worker"] = connect_as(UID_WORKER, UID_WORKER)
+    report["work"] = prepare_work()
+    result = WORK / "a" / "result.json"
+    proc = launch(
+        "marker",
+        WORK / "a",
+        None,
+        ["probe", "--mode", "marker", "--attempt", str(WORK / "a"), "--result", str(result)],
+    )
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        report["error"] = "marker timeout"
+        return 1
+    report["marker_rc"] = proc.returncode
+    report["launcher_caps"] = status_caps(OUT / "marker-launcher-status.txt")
+    report["launcher_status"] = (OUT / "marker-launcher-status.txt").read_text() if (
+        OUT / "marker-launcher-status.txt"
+    ).is_file() else ""
+    with as_worker_group():
+        report["supervisor_read_creds"] = creds()
+        report["result_text"] = result.read_text() if result.is_file() else ""
+        result_mode = oct(stat.S_IMODE(result.stat().st_mode)) if result.is_file() else ""
+    report["result_mode"] = result_mode
+
+    def worker_read() -> str:
+        return result.read_text()
+
+    report["worker_read"] = run_as(UID_WORKER, UID_WORKER, worker_read)
+    try:
+        os.kill(listener, 15)
+        os.waitpid(listener, 0)
+    except OSError:
+        pass
+    text = report["result_text"]
+    modes = report["work"].get("modes") or []
+    proven = [item.get("proven") for item in modes]
+    checks = {
+        "workspace_mode_02750": proven == ["0o2750"] * len(proven) and len(proven) == 5,
+        "mkdir_result_recorded": all(item.get("after_mkdir") != item.get("proven") or item.get("after_mkdir") == "0o2750" for item in modes)
+        and any(item.get("after_mkdir") != item.get("requested") for item in modes),
+        "marker_exit_0": proc.returncode == 0,
+        "launcher_caps_narrow": {report["launcher_caps"].get(name) for name in ("CapEff", "CapPrm", "CapBnd")}
+        == {"00000000000001c0"},
+        "launcher_group_is_worker": "resgid 10001 10001 10001" in report["launcher_status"],
+        "tool_uid_10003": "uid 10003 10003 10003" in text,
+        "tool_gid_10003": "gid 10003 10003 10003" in text,
+        "tool_groups_empty": "groups 0 " in text,
+        "tool_caps_clear": "cap 00000000/00000000/00000000" in text,
+        "result_mode_0640": result_mode == "0o640",
+        "supervisor_egid_while_reading": report["supervisor_read_creds"]["egid"] == UID_WORKER,
+        "worker_can_read": report["worker_read"][0] == 0 and "uid 10003 10003 10003" in report["worker_read"][1],
+        "tool_socket_denied": str(report["connect_tool"]).startswith("errno 13"),
+        "worker_socket_ok": report["connect_worker"] == "ok",
+        "socket_not_tool_owned": report["socket"]["uid"] == UID_EXEC and report["socket"]["mode"] == "0o660",
+    }
+    report["checks"] = checks
+    report["passed"] = all(checks.values())
+    return 0 if report["passed"] else 1
+
+
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "full"
     report: dict = {"mode": mode, "phase": "start"}
@@ -569,6 +768,8 @@ def main() -> int:
     try:
         if mode == "fresh":
             code = fresh_mode(report)
+        elif mode == "dac-smoke":
+            code = dac_smoke(report)
         else:
             code = full_mode(report)
     except Exception as exc:  # noqa: BLE001 - the partial report is the evidence
@@ -579,6 +780,25 @@ def main() -> int:
         atomic_write(OUT / "supervisor.json", report)
     except OSError as exc:
         sys.stderr.write(f"report write failed: {exc}\n")
+    if mode == "dac-smoke":
+        modes = (report.get("work") or {}).get("modes") or []
+        print(
+            json.dumps(
+                {
+                    "passed": report.get("passed"),
+                    "checks": report.get("checks"),
+                    "error": report.get("error"),
+                    "mkdir": [
+                        {
+                            "path": item.get("path"),
+                            "after_mkdir": item.get("after_mkdir"),
+                            "proven": item.get("proven"),
+                        }
+                        for item in modes
+                    ],
+                }
+            )
+        )
     return code
 
 

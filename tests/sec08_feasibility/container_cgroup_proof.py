@@ -24,6 +24,7 @@ from cgroup_contract import (  # noqa: E402
     cgroup_relative_path,
     control_groups_match,
     engine_version_tuple,
+    capabilities_are_exact,
     memory_max_is_64m,
     narrow_caps_only,
     observe_slice_memory_max,
@@ -470,10 +471,21 @@ class Proof:
             "PASS" if supervisor.get("cgroup") == "0::/" and "/ /sys/fs/cgroup rw" in supervisor.get("mountinfo", "") else "FAIL",
             supervisor.get("mountinfo", "")[:300],
         )
+        launcher_caps = supervisor.get("launcher_caps") or {}
+        inside_ok = True
+        for name in ("a", "b"):
+            status = launcher_caps.get(name) or {}
+            try:
+                ok = all(narrow_caps_only(str(status[key])) for key in ("CapEff", "CapPrm", "CapBnd"))
+            except (KeyError, ValueError):
+                ok = False
+            inside_ok = inside_ok and ok
         self.add(
             "narrow_capabilities_without_chown",
-            "PASS" if narrow_caps_only(str(supervisor.get("cap_eff") or "0")) else "FAIL",
-            str(supervisor.get("cap_eff")),
+            "PASS"
+            if narrow_caps_only(str(supervisor.get("cap_eff") or "0")) and inside_ok
+            else "FAIL",
+            json.dumps({"supervisor": supervisor.get("cap_eff"), "launcher": launcher_caps}),
         )
         created = supervisor.get("created_cgroups") or []
         self.add(
@@ -515,6 +527,7 @@ class Proof:
             and str(supervisor.get("connect_tool", "")).startswith("errno 13")
             and "uid=10003" in str(work.get("tree"))
             and "gid=10001" in str(work.get("tree"))
+            and "mode=0o2750" in str(work.get("tree"))
         )
         self.add(
             "socket_and_workspace_without_chown",
@@ -630,7 +643,7 @@ class Proof:
             and security.get("cgroupns_mode") == "private"
             and security.get("cgroup_parent") == self.slice_name
             and security.get("cap_drop") == ["ALL"]
-            and set(security.get("cap_add") or []) == {"SETUID", "SETGID", "SETPCAP"}
+            and capabilities_are_exact(security.get("cap_add"))
             and "seccomp=unconfined" not in forbidden
             and "apparmor=unconfined" not in forbidden
             and "writable-cgroups=true" in (security.get("security_opt") or [])

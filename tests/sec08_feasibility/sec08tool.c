@@ -750,6 +750,42 @@ static int cmd_probe(int argc, char **argv) {
         return 0;
     }
 
+    if (!strcmp(mode, "marker")) {
+        char cred[256];
+        char path[512];
+        cred_detail(cred, sizeof(cred));
+        if (snprintf(path, sizeof(path), "%s/parent.pid", attempt) >= (int)sizeof(path)) {
+            return 96;
+        }
+        FILE *pidf = fopen(path, "w");
+        if (!pidf) {
+            perror(path);
+            return 96;
+        }
+        fprintf(pidf, "%d\n", (int)getpid());
+        fclose(pidf);
+        if (snprintf(path, sizeof(path), "%s/parent.hb", attempt) >= (int)sizeof(path)) {
+            return 96;
+        }
+        FILE *hb = fopen(path, "a");
+        if (!hb) {
+            perror(path);
+            return 96;
+        }
+        fprintf(hb, "1\n");
+        fclose(hb);
+        FILE *out = fopen(result, "w");
+        if (!out) {
+            perror(result);
+            return 96;
+        }
+        fprintf(out, "{\"cred\":\"");
+        json_escape(out, cred);
+        fprintf(out, "\"}\n");
+        fclose(out);
+        return 0;
+    }
+
     if (!strcmp(mode, "child")) {
         FILE *out = fopen(result, "w");
         if (!out) {

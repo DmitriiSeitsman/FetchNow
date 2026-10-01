@@ -9,6 +9,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from cgroup_contract import (  # noqa: E402
+    capabilities_are_exact,
     cgroup2_mount_points,
     control_groups_match,
     engine_at_least,
@@ -21,6 +22,7 @@ from cgroup_contract import (  # noqa: E402
     resolve_control_group_dir,
     security_options_are_rootless,
 )
+from workspace_contract import dac_allows, mkdir_visible_mode  # noqa: E402
 
 
 def facts(**overrides: object) -> dict:
@@ -192,6 +194,56 @@ class SlicePathTests(unittest.TestCase):
         self.assertNotIn('f"SLICE_MEMORY_PATH=', text)
         self.assertIn('f"HOST_SLICE_MEMORY_PATH=', text)
         self.assertIn("namespace_cgroup_root", pathlib.Path(__file__).with_name("container_supervisor.py").read_text())
+
+
+class CapabilityAndDacTests(unittest.TestCase):
+    def test_prefixed_and_unprefixed_caps_are_the_exact_set(self) -> None:
+        prefixed = ["CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID"]
+        unprefixed = ["SETUID", "SETGID", "SETPCAP"]
+        self.assertTrue(capabilities_are_exact(prefixed))
+        self.assertTrue(capabilities_are_exact(unprefixed))
+        self.assertTrue(capabilities_are_exact(["cap_setuid", "Cap_Setgid", "setpcap"]))
+
+    def test_extra_or_missing_capability_is_not_exact(self) -> None:
+        self.assertFalse(capabilities_are_exact(["CAP_SETUID", "CAP_SETGID", "CAP_SETPCAP", "CAP_CHOWN"]))
+        self.assertFalse(capabilities_are_exact(["CAP_SETUID", "CAP_SETGID"]))
+        self.assertFalse(capabilities_are_exact(["SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE"]))
+
+    def test_malformed_capability_list_is_not_pass(self) -> None:
+        self.assertFalse(capabilities_are_exact(None))
+        self.assertFalse(capabilities_are_exact("CAP_SETUID"))
+        self.assertFalse(capabilities_are_exact([]))
+        self.assertFalse(capabilities_are_exact(["CAP_SETUID", None, "CAP_SETGID"]))
+        self.assertFalse(capabilities_are_exact(["CAP_"]))
+        self.assertFalse(capabilities_are_exact(["SETUID SETGID"]))
+
+    def test_in_container_hex_is_separate_from_inspect_names(self) -> None:
+        self.assertTrue(narrow_caps_only("00000000000001c0"))
+        self.assertFalse(capabilities_are_exact(["00000000000001c0"]))
+        with self.assertRaises(ValueError):
+            narrow_caps_only("CAP_SETUID")
+
+    def test_uid_zero_does_not_bypass_attempt_directory_dac(self) -> None:
+        attempt = {"owner": 10003, "group": 10001, "mode": 0o750}
+        self.assertFalse(
+            dac_allows(euid=0, egid=0, groups=[], access="x", **attempt)
+        )
+        self.assertTrue(
+            dac_allows(euid=0, egid=10001, groups=[], access="x", **attempt)
+        )
+        self.assertTrue(
+            dac_allows(euid=10003, egid=10003, groups=[], access="w", owner=10003, group=10001, mode=0o2750)
+        )
+        self.assertTrue(
+            dac_allows(euid=10001, egid=10001, groups=[], access="r", owner=10003, group=10001, mode=0o640)
+        )
+        self.assertFalse(
+            dac_allows(euid=10003, egid=10003, groups=[], access="w", owner=10002, group=10001, mode=0o660)
+        )
+
+    def test_mkdir_drops_setgid_so_requested_mode_is_not_proven(self) -> None:
+        self.assertEqual(mkdir_visible_mode(0o2750), 0o750)
+        self.assertNotEqual(mkdir_visible_mode(0o2750), 0o2750)
 
 
 if __name__ == "__main__":

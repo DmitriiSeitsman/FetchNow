@@ -42,6 +42,40 @@ def narrow_caps_only(cap_eff_hex: str) -> bool:
     return value == NARROW_CAPS
 
 
+REQUIRED_INSPECT_CAPS = frozenset({"SETUID", "SETGID", "SETPCAP"})
+_CAP_NAME = re.compile(r"[A-Z][A-Z0-9_]*\Z")
+
+
+def normalize_capability_name(value: object) -> str | None:
+    """Accept CAP_SETUID or SETUID. Anything else is malformed."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip().upper()
+    if name.startswith("CAP_"):
+        name = name[4:]
+    if _CAP_NAME.fullmatch(name) is None:
+        return None
+    return name
+
+
+def capability_set(values: object) -> frozenset[str] | None:
+    """Return the normalized set, or None when the input is not a cap list."""
+    if not isinstance(values, list) or not values:
+        return None
+    found: list[str] = []
+    for item in values:
+        name = normalize_capability_name(item)
+        if name is None:
+            return None
+        found.append(name)
+    return frozenset(found)
+
+
+def capabilities_are_exact(values: object) -> bool:
+    """True only for exactly SETUID, SETGID, and SETPCAP. Not a subset check."""
+    return capability_set(values) == REQUIRED_INSPECT_CAPS
+
+
 def memory_max_is_64m(text: str) -> bool:
     cleaned = text.strip()
     return cleaned in {"64M", "67108864"}
