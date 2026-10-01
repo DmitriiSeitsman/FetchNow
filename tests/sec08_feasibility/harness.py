@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import cancel_oracle
 import platform
 import pwd
 import shutil
@@ -349,6 +350,97 @@ def died(pid: int, timeout: float = 2.0) -> bool:
     return not alive(pid)
 
 
+def _read_limited(path: Path, limit: int = 2000) -> str:
+    try:
+        return path.read_text()[:limit]
+    except OSError as exc:
+        return f"error:{getattr(exc, 'errno', exc)}"
+
+
+def observe_pid(pid: int, expected_start: int | None) -> dict:
+    """Read stat, cgroup and signal-0. Does not read environ."""
+    kill0: bool | str
+    try:
+        os.kill(pid, 0)
+        kill0 = True
+    except ProcessLookupError:
+        kill0 = False
+    except OSError as exc:
+        kill0 = f"error:{exc.errno}"
+    stat_path = Path(f"/proc/{pid}/stat")
+    if not stat_path.exists():
+        item = cancel_oracle.classify_pid(None, expected_starttime=expected_start, read_error="absent")
+    else:
+        try:
+            item = cancel_oracle.classify_pid(stat_path.read_text(), expected_starttime=expected_start)
+        except OSError as exc:
+            item = cancel_oracle.classify_pid(
+                None, expected_starttime=expected_start, read_error=f"errno {exc.errno}"
+            )
+    item["pid"] = pid
+    item["cgroup"] = _read_limited(Path(f"/proc/{pid}/cgroup"), 300).strip()
+    item["kill0"] = kill0
+    return item
+
+
+def in_cgroup(item: dict, name: str) -> bool:
+    text = str(item.get("cgroup") or "")
+    return any(line.endswith("/" + name) for line in text.splitlines())
+
+
+def cgroup_tree_snapshot(root: str) -> dict:
+    base = Path(root)
+    subgroups: dict[str, dict[str, str]] = {}
+    try:
+        children = sorted(path for path in base.iterdir() if path.is_dir())
+    except OSError:
+        children = []
+    for child in children:
+        subgroups[child.name] = {
+            "procs": _read_limited(child / "cgroup.procs"),
+            "events": _read_limited(child / "cgroup.events", 500),
+        }
+    return {
+        "procs": _read_limited(base / "cgroup.procs"),
+        "events": _read_limited(base / "cgroup.events", 500),
+        "subgroups": subgroups,
+    }
+
+
+def hb_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def enable_child_subreaper() -> tuple[bool, str]:
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    rc = libc.prctl(ctypes.c_int(36), ctypes.c_ulong(1), ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if rc != 0:
+        return False, f"prctl PR_SET_CHILD_SUBREAPER errno {ctypes.get_errno()}"
+    return True, "PR_SET_CHILD_SUBREAPER=1"
+
+
+def reap_adopted(expected: set[int], timeout: float) -> list[dict]:
+    found: list[dict] = []
+    pending = set(expected)
+    deadline = time.monotonic() + timeout
+    while pending and time.monotonic() < deadline:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if pid == 0:
+            time.sleep(0.05)
+            continue
+        found.append({"pid": int(pid), "status": int(status)})
+        pending.discard(int(pid))
+    return found
+
+
 def setup_cgroup(name: str) -> str | None:
     path = Path("/sys/fs/cgroup") / name
     try:
@@ -561,7 +653,10 @@ REQUIRED = [
     "jobB_published_read_denied",
     "signal_cannot_signal_sibling_same_uid",
     "sibling_sleeper_survived_signal_probe",
-    "cancel_kills_tree_a_including_reparented",
+    "cancel_test_supervisor_subreaper",
+    "cancel_targets_running_before",
+    "cancel_termination_no_running_in_a",
+    "cancel_supervisor_reaped_a",
     "cancel_leaves_tree_b",
     "cgroup_cannot_open_parent_cgroup_procs",
     "cgroup_cannot_write_delegated_cgroup_kill",
@@ -894,6 +989,19 @@ def main() -> int:
                 load_probe_checks(escape_attempt / "result.json", "cgroup")
                 tree_a = WORK / "treeA"
                 tree_b = WORK / "treeB"
+                subreaper_ok, subreaper_detail = enable_child_subreaper()
+                if subreaper_ok:
+                    HOST_ACTIONS.append(
+                        "test supervisor set PR_SET_CHILD_SUBREAPER before launching job trees; "
+                        "future trusted job supervisor must reap setsid orphans; this is not a production component"
+                    )
+                else:
+                    HOST_ACTIONS.append(f"test supervisor failed to set child subreaper: {subreaper_detail}")
+                add(
+                    "cancel_test_supervisor_subreaper",
+                    "PASS" if subreaper_ok else "FAIL",
+                    subreaper_detail,
+                )
                 popens = []
                 for tree, cg in ((tree_a, cg_a), (tree_b, cg_b)):
                     tree.mkdir()
@@ -916,43 +1024,147 @@ def main() -> int:
                     wait_file(tree_a / "parent.pid", 8)
                     and wait_file(tree_a / "child.pid", 8)
                     and wait_file(tree_b / "parent.pid", 8)
+                    and wait_file(tree_b / "child.pid", 8)
                 )
                 add("cancel_trees_ready", "PASS" if ready else "FAIL",
                     f"A={(tree_a / 'launcher.err').read_text()[-180:] if (tree_a / 'launcher.err').exists() else ''}")
                 if ready:
-                    parent_pid = int((tree_a / "parent.pid").read_text().strip())
-                    child_pid = int((tree_a / "child.pid").read_text().strip())
-                    b_pid = int((tree_b / "parent.pid").read_text().strip())
-                    before = (tree_b / "parent.hb").stat().st_size if (tree_b / "parent.hb").exists() else 0
-                    status_dir = WORK / "executor-status"
-                    status_dir.mkdir()
-                    os.chmod(status_dir, 0o777)
-                    status_path = status_dir / "cancel.txt"
-                    cancel = run([
-                        "setpriv", "--reuid", str(EXEC_UID), "--regid", str(EXEC_UID), "--clear-groups",
-                        "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all",
-                        str(binary), "cancel", f"{cg_a}/cgroup.kill", str(status_path),
-                    ], timeout=10)
-                    EXECUTOR_ACTIONS.append("uid 10002 with empty capabilities wrote sec08-job-a/cgroup.kill")
-                    IDENTITY["cancel_status"] = status_path.read_text()[:800] if status_path.exists() else ""
-                    IDENTITY["cancel_stderr"] = (cancel.stderr or "")[:400]
-                    a_gone = died(parent_pid) and died(child_pid)
-                    b_live = alive(b_pid)
-                    grew = False
-                    grow_deadline = time.monotonic() + 2
-                    while time.monotonic() < grow_deadline:
-                        after = (tree_b / "parent.hb").stat().st_size if (tree_b / "parent.hb").exists() else 0
-                        if b_live and after > before:
-                            grew = True
-                            break
-                        time.sleep(0.1)
-                        b_live = alive(b_pid)
-                    add("cancel_writer_uid_10002", "PASS" if cancel.returncode == 0 else "FAIL",
-                        f"rc={cancel.returncode} status={IDENTITY['cancel_status'][:180]}")
-                    add("cancel_kills_tree_a_including_reparented", "PASS" if a_gone else "FAIL",
-                        f"parent {parent_pid} child {child_pid}")
-                    add("cancel_leaves_tree_b", "PASS" if b_live and grew else "FAIL",
-                        f"b_pid {b_pid} alive={b_live} hb_grew={grew}")
+                    tracked = {
+                        "a-parent": int((tree_a / "parent.pid").read_text().strip()),
+                        "a-child": int((tree_a / "child.pid").read_text().strip()),
+                        "b-parent": int((tree_b / "parent.pid").read_text().strip()),
+                        "b-child": int((tree_b / "child.pid").read_text().strip()),
+                    }
+                    before_obs = []
+                    for role, pid in tracked.items():
+                        item = observe_pid(pid, None)
+                        item["role"] = role
+                        before_obs.append(item)
+                    hb_paths = {
+                        "b-parent": tree_b / "parent.hb",
+                        "b-child": tree_b / "child.hb",
+                    }
+                    hb_before = {name: hb_size(path) for name, path in hb_paths.items()}
+                    IDENTITY["cancel_before"] = {
+                        "pids": before_obs,
+                        "cgroup_a": cgroup_tree_snapshot(cg_a),
+                        "cgroup_b": cgroup_tree_snapshot(cg_b),
+                        "heartbeat_b": hb_before,
+                        "roles": {
+                            "termination": "uid 10002 writes delegated cgroup.kill; root does not signal the tree",
+                            "reaping": "root test supervisor is the parent and child subreaper; it wait()s only after the kill write",
+                        },
+                    }
+                    flush("cancel-before")
+                    a_before = [item for item in before_obs if str(item["role"]).startswith("a-")]
+                    a_ready = cancel_oracle.targets_were_running(a_before) and all(
+                        in_cgroup(item, "sec08-job-a") for item in a_before
+                    )
+                    add(
+                        "cancel_targets_running_before",
+                        "PASS" if a_ready else "FAIL",
+                        " ".join(
+                            f"{item['role']}={item['class']}:start={item['starttime']}" for item in a_before
+                        ),
+                    )
+                    if not a_ready:
+                        add("cancel_termination_no_running_in_a", "FAIL", "targets were not running in sec08-job-a")
+                        add("cancel_supervisor_reaped_a", "FAIL", "cancellation was not started")
+                        add("cancel_leaves_tree_b", "FAIL", "cancellation was not started")
+                    else:
+                        starts = {item["role"]: item["starttime"] for item in before_obs}
+                        status_dir = WORK / "executor-status"
+                        status_dir.mkdir()
+                        os.chmod(status_dir, 0o777)
+                        status_path = status_dir / "cancel.txt"
+                        cancel = run([
+                            "setpriv", "--reuid", str(EXEC_UID), "--regid", str(EXEC_UID), "--clear-groups",
+                            "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all",
+                            str(binary), "cancel", f"{cg_a}/cgroup.kill", str(status_path),
+                        ], timeout=10)
+                        EXECUTOR_ACTIONS.append("uid 10002 with empty capabilities wrote sec08-job-a/cgroup.kill")
+                        IDENTITY["cancel_status"] = status_path.read_text()[:800] if status_path.exists() else ""
+                        IDENTITY["cancel_stderr"] = (cancel.stderr or "")[:400]
+                        samples = []
+                        deadline = time.monotonic() + 2.0
+                        while time.monotonic() < deadline and len(samples) < 15:
+                            observed = []
+                            for role, pid in tracked.items():
+                                item = observe_pid(pid, starts[role])
+                                item["role"] = role
+                                observed.append(item)
+                            samples.append({
+                                "pids": observed,
+                                "cgroup_a": cgroup_tree_snapshot(cg_a),
+                                "heartbeat_b": {name: hb_size(path) for name, path in hb_paths.items()},
+                            })
+                            a_now = [item for item in observed if str(item["role"]).startswith("a-")]
+                            if cancel_oracle.termination_proven(a_now):
+                                break
+                            time.sleep(0.1)
+                        post = samples[-1]["pids"] if samples else []
+                        a_post = [item for item in post if str(item["role"]).startswith("a-")]
+                        terminated = cancel.returncode == 0 and cancel_oracle.termination_proven(a_post)
+                        add("cancel_writer_uid_10002", "PASS" if cancel.returncode == 0 else "FAIL",
+                            f"rc={cancel.returncode} status={IDENTITY['cancel_status'][:180]}")
+                        add(
+                            "cancel_termination_no_running_in_a",
+                            "PASS" if terminated else "FAIL",
+                            " ".join(f"{item['role']}={item['class']}" for item in a_post),
+                        )
+                        collected: set[int] = set()
+                        direct = popens[0]
+                        try:
+                            direct.wait(timeout=2)
+                            collected.add(direct.pid)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        adopted = reap_adopted({tracked["a-child"]} - collected, 2.0)
+                        collected.update(item["pid"] for item in adopted)
+                        reaped_ok = terminated and cancel_oracle.reaping_proven(
+                            collected, {tracked["a-parent"], tracked["a-child"]}
+                        )
+                        after_reap = []
+                        for role in ("a-parent", "a-child"):
+                            item = observe_pid(tracked[role], starts[role])
+                            item["role"] = role
+                            after_reap.append(item)
+                        grow_deadline = time.monotonic() + 1.5
+                        while time.monotonic() < grow_deadline and not all(
+                            hb_size(path) > hb_before[name] for name, path in hb_paths.items()
+                        ):
+                            time.sleep(0.1)
+                        b_after = []
+                        for role in ("b-parent", "b-child"):
+                            item = observe_pid(tracked[role], starts[role])
+                            item["role"] = role
+                            b_after.append(item)
+                        hb_after = {name: hb_size(path) for name, path in hb_paths.items()}
+                        b_running = all(item["class"] in {"running", "sleeping"} for item in b_after)
+                        b_same = all(item["starttime"] == starts[item["role"]] for item in b_after)
+                        hb_grew = all(hb_after[name] > hb_before[name] for name in hb_before)
+                        add(
+                            "cancel_supervisor_reaped_a",
+                            "PASS" if reaped_ok and all(item["class"] == "reaped" for item in after_reap) else "FAIL",
+                            f"waited={sorted(collected)} after={' '.join(item['class'] for item in after_reap)}",
+                        )
+                        add(
+                            "cancel_leaves_tree_b",
+                            "PASS" if b_running and b_same and hb_grew else "FAIL",
+                            f"class={' '.join(item['class'] for item in b_after)} hb {hb_before}->{hb_after}",
+                        )
+                        IDENTITY["cancel_after"] = {
+                            "samples": samples,
+                            "supervisor_wait_pids": sorted(collected),
+                            "adopted_waits": adopted,
+                            "after_reap_a": after_reap,
+                            "after_b": b_after,
+                            "heartbeat_b_before": hb_before,
+                            "heartbeat_b_during": [sample["heartbeat_b"] for sample in samples],
+                            "heartbeat_b_after": hb_after,
+                            "direct_popen_pid": direct.pid,
+                        }
+                        flush("cancel-after")
             flush("cgroup")
 
         if budget_left(50):

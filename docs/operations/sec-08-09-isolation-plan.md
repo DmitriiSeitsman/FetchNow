@@ -1,6 +1,6 @@
 # SEC-08 / SEC-09 — isolation architecture (feasibility revision)
 
-Status: **SEC-08 — NATIVE RUN INCOMPLETE / NOT READY FOR IMPLEMENTATION**
+Status: **SEC-08 — CORRECTED HARNESS RUN FAILED ONE CHECK / NOT READY FOR IMPLEMENTATION**
 
 Worktree: `/Users/dina/projects/FetchNow-sec03c`
 Branch: `codex/security-sec-03c-image-audit`
@@ -425,10 +425,58 @@ The diagnostic harness correction that follows that run:
   prerequisites, not proof that a non-root Compose executor can do either,
   and not a Compose network-policy test.
 
+The single new run is
+[36908081313](https://github.com/DmitriiSeitsman/FetchNow/actions/runs/36908081313),
+commit `d9095b9c6ce0e6e30c63df71810101728f79495c`. It was not retried.
+Conclusion: **failure**, 93 pass, 1 fail, 0 not run. Final `result.json`
+SHA-256 `ef343baf4ca8a26bef75ff109a8969be5237a11ebf626a53182a9725307e5ba4`.
+
+Runner ABI 7. The ruleset used ABI floor 6, size 24, `scoped_mask=3`
+(signal and abstract unix), `handled_access_net=0`, filesystem mask
+`0xffff`. Read-only roots were `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`,
+and `/opt/sec08-trusted/bin`, and they did not cover the work tree.
+Sibling, published, rename, link, and symlink checks returned `EACCES` for
+both jobs while the canaries stayed mode `0666`. Same-uid signal 0 across
+two domains returned `EPERM`. The pathname control socket accepted uid
+10002 and returned `EACCES` for uid 10003 while the listener was accepting.
+Abstract connect from the tool returned `EPERM`. ffmpeg and ffprobe
+completed in the offline netns. `cgroup.kill` was written by uid 10002 with
+an empty capability set, and job B's heartbeat continued. Job A's parent
+pid 3466 and child pid 3469 still accepted signal 0 afterwards, so
+`cancel_kills_tree_a_including_reparented` failed. The harness did not
+record `/proc/<pid>/stat`, so that failure does not separate a live task
+from an unreaped zombie.
+
+Cgroup directories and `ip netns` were created by the root supervisor.
+That remains a deployment prerequisite, not a non-root Compose capability
+and not a Compose network-policy result.
+
+Run 36908081313 stays **93 PASS / 1 FAIL, cancellation outcome inconclusive**.
+`kill(pid, 0)` stayed true for pids 3466 and 3469. That run did not record
+`/proc` state, so it is not evidence those tasks were zombies.
+
+### Lifecycle contract for the following diagnostic run
+
+Termination and reaping are separate. uid 10002, with an empty capability
+set, still writes the delegated `cgroup.kill`. The root harness does not
+signal that tree to obtain a pass. The harness is the test supervisor: it
+is the parent of the launcher and, before the trees start, sets
+`PR_SET_CHILD_SUBREAPER` so a `setsid` descendant is reparented to it and
+can be `wait`ed. The future trusted job supervisor must do that reaping.
+This harness is not that production component.
+
+A tracked pid counts as terminated only when its `/proc` state is zombie or
+the pid is absent with the same starttime identity. A different starttime is
+pid reuse and is not success. `kill(pid, 0)` is recorded and is not the
+criterion. An empty `cgroup.procs` does not by itself prove a process that
+left the cgroup is gone. Reaping passes only when the supervisor's own
+`wait` collected every tracked pid from job A. Job B's heartbeat is recorded
+before, during, and after. If termination passes and reaping does not, the
+run stays non-pass.
+
 No implementation approval follows from either run. This is not approval to
 add `CAP_SYS_ADMIN`, to disable seccomp, or to start the executor. SEC-08 is
-not implemented and is not ready to roll out, including if the new run
-passes.
+not implemented and is not ready to roll out.
 
 The image-audit workflow on the same commit failed separately
 ([CI run 36892636976](https://github.com/DmitriiSeitsman/FetchNow/actions/runs/36892636976)).
@@ -453,9 +501,8 @@ It was not changed here.
 
 ## Status line
 
-**SEC-08 — NATIVE RUN INCOMPLETE / NOT READY FOR IMPLEMENTATION**
+**SEC-08 — CORRECTED HARNESS RUN FAILED ONE CHECK / NOT READY FOR IMPLEMENTATION**
 
-Runner ABI 7. Credential drop to uid 10003 held. Per-attempt read denial was
-not measured, because the binary directory rule covered the shared work root.
-Signal, cgroup cancel, and network checks did not run before the job timeout.
-SEC-09: **NOT STARTED**. API residual acceptance: **NOT GRANTED**.
+Run 36892631777 remains CANCELLED with confirmed isolation failures.
+Run 36908081313 failed `cancel_kills_tree_a_including_reparented` and was
+not retried. SEC-09: **NOT STARTED**. API residual acceptance: **NOT GRANTED**.
