@@ -52,7 +52,7 @@ def save(path: Path, payload: object) -> None:
     temp.replace(path)
 
 
-def cleanup(state: dict[str, object]) -> list[str]:
+def cleanup(state: dict[str, object], *, remove_image: bool = True) -> list[str]:
     name = state["name"]
     if not isinstance(name, str) or not PATTERN.fullmatch(name):
         raise ValueError("unsafe cleanup identity")
@@ -76,12 +76,15 @@ def cleanup(state: dict[str, object]) -> list[str]:
                 run(["systemctl", "daemon-reload"])
         except (OSError, subprocess.TimeoutExpired):
             failures.append("slice")
-    try:
-        image = f"fetchnow-media-executor:{name}"
-        if run(["docker", "image", "ls", "-q", image]).stdout.strip():
-            run(["docker", "image", "rm", image])
-    except (OSError, subprocess.TimeoutExpired):
-        failures.append("image")
+    if remove_image:
+        try:
+            image = state.get("image_ref") or f"fetchnow-media-executor:{name}"
+            if not isinstance(image, str):
+                raise OSError("image ref invalid")
+            if run(["docker", "image", "ls", "-q", image]).stdout.strip():
+                run(["docker", "image", "rm", image])
+        except (OSError, subprocess.TimeoutExpired):
+            failures.append("image")
     return failures
 
 
@@ -149,7 +152,7 @@ def start(name: str, mode: str, work: Path, image: str, proof: Path) -> str:
 
 
 def inside(target: str, phase: str) -> dict[str, object]:
-    return json.loads(
+    payload: dict[str, object] = json.loads(
         run(
             [
                 "docker",
@@ -162,6 +165,7 @@ def inside(target: str, phase: str) -> dict[str, object]:
             timeout=90,
         ).stdout
     )
+    return payload
 
 
 def verify_runtime(target: str, control: Path) -> dict[str, object]:
@@ -222,10 +226,55 @@ def verify_runtime(target: str, control: Path) -> dict[str, object]:
     }
 
 
-def execute(output: Path) -> int:
+def inspect_image_id(image: str) -> str:
+    image_id = run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", image]
+    ).stdout.strip()
+    if not image_id.startswith("sha256:") or len(image_id) != 71:
+        raise OSError("image id invalid")
+    return image_id
+
+
+def assert_runtime_inventory(target: str) -> dict[str, object]:
+    """Fail closed if C source or build-cache objects leaked into runtime."""
+    script = (
+        "from pathlib import Path\n"
+        "import json, subprocess\n"
+        "root = Path('/opt/fetchnow/src/fetchnow/media_executor')\n"
+        "c_files = sorted(str(p) for p in root.rglob('*.c'))\n"
+        "pyc = sorted(str(p) for p in root.rglob('*.pyc'))\n"
+        "pycache = sorted(str(p) for p in root.rglob('__pycache__'))\n"
+        "bad = c_files + pyc + pycache\n"
+        "pkgs = subprocess.check_output(\n"
+        "  ['dpkg-query','-W','libpcre2-8-0'], text=True\n"
+        ").strip()\n"
+        "print(json.dumps({\n"
+        "  'bad': bad, 'libpcre2': pkgs,\n"
+        "  'c_files': c_files, 'pyc': pyc, 'pycache': pycache\n"
+        "}))\n"
+    )
+    data: dict[str, object] = json.loads(
+        run(["docker", "exec", target, "python", "-c", script]).stdout
+    )
+    assert data["bad"] == [], data["bad"]
+    pkg, sep, ver = str(data["libpcre2"]).partition("\t")
+    if not sep:
+        pkg, _, ver = str(data["libpcre2"]).partition(" ")
+    assert pkg == "libpcre2-8-0" and ver == "10.46-1~deb13u3", data["libpcre2"]
+    return data
+
+
+def execute(
+    output: Path,
+    *,
+    image: str | None = None,
+    expected_image_id: str | None = None,
+    retain_image: bool = False,
+) -> int:
     output.mkdir(parents=True, exist_ok=False)
     name = f"fetchnow-sec08-exec-{uuid.uuid4().hex[:8]}"
-    state = {"name": name}
+    image_ref = image or f"fetchnow-media-executor:{name}"
+    state: dict[str, object] = {"name": name, "image_ref": image_ref}
     save(output / "state.json", state)
     result: dict[str, object] = {"status": "FAIL", "checks": {}, "phase": "preflight"}
     checks: dict[str, object] = {}
@@ -258,20 +307,36 @@ def execute(output: Path) -> int:
         assert relative.startswith("/") and ".." not in Path(relative).parts
         control = Path("/sys/fs/cgroup") / relative.lstrip("/")
         assert (control / "memory.max").read_text().strip() == str(LIMIT)
-        result["phase"] = "build"
-        image = f"fetchnow-media-executor:{name}"
-        run(
-            [
-                "docker",
-                "build",
-                "-f",
-                "backend/Dockerfile.media-executor",
-                "-t",
-                image,
-                "backend",
-            ],
-            timeout=600,
-        )
+        if image is None:
+            result["phase"] = "build"
+            run(
+                [
+                    "docker",
+                    "build",
+                    "-f",
+                    "backend/Dockerfile.media-executor",
+                    "-t",
+                    image_ref,
+                    "backend",
+                ],
+                timeout=600,
+            )
+        image_id = inspect_image_id(image_ref)
+        if expected_image_id is not None and image_id != expected_image_id:
+            raise OSError(
+                f"image identity drift before native: {image_id} != {expected_image_id}"
+            )
+        arch = run(
+            ["docker", "image", "inspect", "--format", "{{.Architecture}}", image_ref]
+        ).stdout.strip()
+        assert arch == "amd64"
+        result["image_id"] = image_id
+        result["image_ref"] = image_ref
+        result["platform"] = f"linux/{arch}"
+        checks["image_identity"] = {
+            "image_id": image_id,
+            "platform": result["platform"],
+        }
         proof = Path(__file__).resolve().parent
         work = output / "private"
         work.mkdir(mode=0o700)
@@ -279,7 +344,14 @@ def execute(output: Path) -> int:
         (work / "probe-tool").chmod(0o555)
         for mode in ("media", "lifecycle"):
             result["phase"] = mode
-            target = start(name, mode, work, image, proof)
+            target = start(name, mode, work, image_ref, proof)
+            if mode == "media":
+                checks["runtime_inventory"] = assert_runtime_inventory(target)
+            observed = run(
+                ["docker", "inspect", "--format", "{{.Image}}", target]
+            ).stdout.strip()
+            if observed != image_id:
+                raise OSError(f"container image drift: {observed} != {image_id}")
             checks[f"{mode}_runtime"] = verify_runtime(target, control)
             checks[mode] = inside(target, mode)
             if mode == "lifecycle":
@@ -287,16 +359,20 @@ def execute(output: Path) -> int:
                 checks["restart"] = inside(target, "restart")
             run(["docker", "rm", "-f", target])
             save(output / "result.json", result)
+        after = inspect_image_id(image_ref)
+        if after != image_id:
+            raise OSError(f"image identity drift after native: {after} != {image_id}")
         result["status"] = "PASS"
     except Exception as exc:
         result["error_type"] = type(exc).__name__
         print(f"native acceptance failed in {result['phase']}: {exc}", flush=True)
     finally:
         try:
-            errors = cleanup(state)
+            errors = cleanup(state, remove_image=not retain_image)
         except Exception as exc:
             errors = [type(exc).__name__]
         result["cleanup_errors"] = errors
+        result["image_retained"] = retain_image
         if errors:
             result["status"] = "FAIL"
         save(output / "result.json", result)
@@ -315,11 +391,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cleanup", action="store_true")
+    parser.add_argument("--image", default=None)
+    parser.add_argument("--expected-image-id", default=None)
+    parser.add_argument("--retain-image", action="store_true")
     args = parser.parse_args()
     if args.cleanup:
         state_path = args.output / "state.json"
         errors = (
-            cleanup(json.loads(state_path.read_text())) if state_path.exists() else []
+            cleanup(json.loads(state_path.read_text()), remove_image=True)
+            if state_path.exists()
+            else []
         )
         raise SystemExit(1 if errors else 0)
-    raise SystemExit(execute(args.output))
+    raise SystemExit(
+        execute(
+            args.output,
+            image=args.image,
+            expected_image_id=args.expected_image_id,
+            retain_image=args.retain_image,
+        )
+    )

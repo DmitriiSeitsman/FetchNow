@@ -189,3 +189,53 @@ and `run_attempt == 1`. Ordinary later pushes and reruns cannot run this job.
 No other workflow is changed by this authorization. A failure is evidence,
 not permission for an automatic retry. The outcome will be recorded separately;
 the local and historical results above are not native executor acceptance.
+
+## Native executor acceptance — 2026-10-04: PASS
+
+One authorized commit and push:
+`be254879fc4e4f520af680de3b3d8adfe1881b92` (29 files), branch
+`codex/security-sec-08-media-executor`. No PR was created. One push-event run,
+attempt 1, no dispatch/retry/second push:
+[37224290556](https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37224290556),
+[native job 111500628925](https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37224290556/job/111500628925).
+Job ran 2026-10-04T18:24:02Z through 18:24:52Z, conclusion `success`.
+Acceptance, independent cleanup, safe export and upload all succeeded.
+
+Evidence was downloaded and `result.json` bytes verified against `hashes.json`:
+
+- Artifact: `sec08-media-executor-37224290556-1`, ID `11311109013`.
+- Archive digest: `0a787d1a2d96c0afa384c8131b4a537ee5214300c4272037ffdaade49b737a38`.
+- `result.json`: `feb4a7e4b6b42dc51507734bb86e98a892ae10de5d6cff8512cc9fad9734f7a5`.
+- `hashes.json`: `8846764bdb7d726b6460a577150c0675b63e04017a493694dda9f0faab2abbb0`.
+- Both test containers used image
+  `sha256:90b1e70475f1bd6e664d1c61b6d7e413bf38b7259aa7a435fcf7230838b77951`.
+
+Runner: Ubuntu 24.04.5, native x86_64, rootful Docker 28.0.4, systemd driver,
+cgroup v2. Report `status=PASS`, `cleanup_errors=[]`. Proven on this artifact:
+
+- Real UID peer authentication rejects UID 0; worker UID 10001 succeeds.
+- Real ffmpeg MP4 and WebM stream-copy, ffprobe, cached replay and release.
+- Tool real/effective/saved UID/GID all 10003, no supplementary groups;
+  only PATH/LANG/LC_ALL in the observed tool environment.
+- Actual executed tool gets EACCES for sibling/published/symlink/proc/cgroup
+  reads and control socket access, rather than an unexecuted-launcher failure.
+- Two concurrent tasks, third rejected; cancel kills and reaps the selected
+  tree (parent and setsid/reparented descendant absent from `/proc`), while
+  the other task's parent and descendant heartbeats continue. Job cgroups removed.
+- Both private cgroup roots match their host scope by device/inode; the hidden
+  256 MiB ancestor ceiling remains after attempted visible-root limit change.
+- Restart loses cached results and refuses stale on-disk reservations.
+
+This is actual executor native acceptance, not a reuse of the old mechanism
+proof. It is not a full backend-suite run on AMD64, a production-host test, an
+executor image vulnerability scan, SEC-09 networking or end-to-end DB publication
+proof. Local 1420 backend tests remain separate evidence. Pre-push targeted tests
+were freshly rerun: 42 passed; the sandbox-only invocation first had two socket
+bind EPERM failures, then the authorized unsandboxed local run passed. No source
+test weakening. Actionlint and diff check passed. Lock hashes above unchanged.
+
+No merge/deploy/production/TEST/LIVE/SEO/VEX/residual decisions were performed.
+The result record in this section is a local unstaged documentation addition
+after the successful run; no second commit or push was made. Before rollout,
+the remaining artifact audit, production prerequisite/budget decisions and
+SEC-09 scope still require their own acceptance.

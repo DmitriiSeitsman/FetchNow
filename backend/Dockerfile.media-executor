@@ -6,19 +6,22 @@ RUN gcc -O2 -Wall -Wextra -Werror -o /build/sec08-launch /build/sec08-launch.c
 FROM python:3.14.7-slim-trixie
 
 # Offline ffmpeg/ffprobe plus a matching glibc for the launcher. Build tools
-# are removed after compile. This image is not the audited API/worker image
-# and is not started by the production Compose file.
+# stay in the launcher-build stage only. This image is not the audited
+# API/worker image and is not started by the production Compose file.
+# libpcre2-8-0 is pinned to the Debian trixie-security fix for CVE-2026-103111.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
         libssl3t64=3.5.7-1~deb13u3 openssl=3.5.7-1~deb13u3 \
         openssl-provider-legacy=3.5.7-1~deb13u3 \
+        libpcre2-8-0=10.46-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip uninstall -y pip \
     && rm -rf /usr/local/lib/python3.14/ensurepip
 
 WORKDIR /opt/fetchnow
+# Explicit runtime modules only — no C source, no __pycache__ from the context.
 COPY src/fetchnow/__init__.py /opt/fetchnow/src/fetchnow/__init__.py
-COPY src/fetchnow/media_executor /opt/fetchnow/src/fetchnow/media_executor
+COPY src/fetchnow/media_executor/*.py /opt/fetchnow/src/fetchnow/media_executor/
 
 COPY --from=launcher-build /build/sec08-launch /usr/local/bin/sec08-launch
 

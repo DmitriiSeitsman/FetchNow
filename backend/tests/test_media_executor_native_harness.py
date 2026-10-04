@@ -68,7 +68,9 @@ def test_timeout_still_records_failure_and_cleanup(
         raise subprocess.TimeoutExpired("docker info", 60)
 
     monkeypatch.setattr(gate, "run", fail)
-    monkeypatch.setattr(gate, "cleanup", lambda _: ["container-media"])
+    monkeypatch.setattr(
+        gate, "cleanup", lambda *_a, **_k: ["container-media"]
+    )
     out = tmp_path / "out"
     assert gate.execute(out) == 1
     result = json.loads((out / "result.json").read_text())

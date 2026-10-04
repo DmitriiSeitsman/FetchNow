@@ -2,6 +2,7 @@ name: SEC-08 media executor
 
 # Owner-authorized bootstrap run; no default-branch registration or PR required.
 # Only the exact acceptance commit title starts a push job. Reruns are disabled.
+# One local image is built once and shared by native acceptance + Trivy audit.
 on:
   workflow_dispatch:
   push:
@@ -16,18 +17,52 @@ jobs:
     if: >-
       github.run_attempt == 1 &&
       (github.event_name == 'workflow_dispatch' ||
-       github.event.head_commit.message == 'feat(security): validate SEC-08 executor [native-once-20261004]')
+       github.event.head_commit.message == 'feat(security): SEC-08 same-artifact pcre2 fix [native-once-20261004b]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Native executor acceptance
-        run: sudo python3 backend/tests/media_executor/native_acceptance.py --output "$RUNNER_TEMP/sec08-executor"
+      - name: Install Trivy 0.74.0 (checksum-pinned)
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset=trivy_0.74.0_Linux-64bit.tar.gz
+              want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+              ;;
+            aarch64|arm64)
+              asset=trivy_0.74.0_Linux-ARM64.tar.gz
+              want=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5
+              ;;
+            *)
+              echo "unsupported architecture $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
+      - name: Same-artifact native + image audit
+        run: |
+          set -euo pipefail
+          sudo python3 backend/tests/media_executor/same_artifact.py \
+            --output "$RUNNER_TEMP/sec08-executor" \
+            --trivy-bin "$RUNNER_TEMP/trivy-bin/trivy"
       - name: Cleanup disposable resources
         if: always()
-        run: sudo python3 backend/tests/media_executor/native_acceptance.py --output "$RUNNER_TEMP/sec08-executor" --cleanup
+        run: |
+          set -euo pipefail
+          sudo python3 backend/tests/media_executor/same_artifact.py \
+            --output "$RUNNER_TEMP/sec08-executor" \
+            --trivy-bin "$RUNNER_TEMP/trivy-bin/trivy" \
+            --cleanup
       - name: Export sanitized evidence
         if: always()
         run: sudo python3 backend/tests/media_executor/export_evidence.py "$RUNNER_TEMP/sec08-executor" "$RUNNER_TEMP/sec08-executor-upload"
