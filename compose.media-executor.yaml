@@ -1,0 +1,54 @@
+# Opt-in SEC-08 offline media executor.
+# Not loaded by `docker compose up` unless this file is passed explicitly.
+# The service also has profile media-executor, so it stays stopped until:
+#   docker compose -f compose.yaml -f compose.media-executor.yaml \
+#     --profile media-executor up
+# MEDIA_EXECUTOR_ENABLED stays false until an operator sets it true.
+# Turning the flag off again is an operator action. The worker does not
+# fall back to in-process ffmpeg when the flag is on.
+
+services:
+  media-executor:
+    profiles: ["media-executor"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.media-executor
+    image: fetchnow-media-executor:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    network_mode: none
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - SETPCAP
+    security_opt:
+      - no-new-privileges:true
+      - writable-cgroups=true
+    cgroup: private
+    cgroup_parent: fetchnow-media-executor.slice
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=67108864
+    volumes:
+      - executor-ipc:/run/fetchnow-executor
+      - executor-work:/var/lib/fetchnow/executor
+    environment:
+      MEDIA_EXECUTOR_SOCKET: /run/fetchnow-executor/ctrl/worker.sock
+      MEDIA_EXECUTOR_WORK_ROOT: /var/lib/fetchnow/executor
+    pids_limit: 128
+    mem_limit: 1024m
+
+  worker:
+    environment:
+      MEDIA_EXECUTOR_ENABLED: ${MEDIA_EXECUTOR_ENABLED:-false}
+      MEDIA_EXECUTOR_SOCKET: /run/fetchnow-executor/ctrl/worker.sock
+      MEDIA_EXECUTOR_WORK_ROOT: /var/lib/fetchnow/executor
+    volumes:
+      - executor-ipc:/run/fetchnow-executor
+      - executor-work:/var/lib/fetchnow/executor
+
+volumes:
+  executor-ipc:
+  executor-work:

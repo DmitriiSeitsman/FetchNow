@@ -1,0 +1,33 @@
+FROM python:3.14.7-slim-trixie AS launcher-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev
+COPY src/fetchnow/media_executor/sec08-launch.c /build/sec08-launch.c
+RUN gcc -O2 -Wall -Wextra -Werror -o /build/sec08-launch /build/sec08-launch.c
+
+FROM python:3.14.7-slim-trixie
+
+# Offline ffmpeg/ffprobe plus a matching glibc for the launcher. Build tools
+# are removed after compile. This image is not the audited API/worker image
+# and is not started by the production Compose file.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+        libssl3t64=3.5.7-1~deb13u3 openssl=3.5.7-1~deb13u3 \
+        openssl-provider-legacy=3.5.7-1~deb13u3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.14/ensurepip
+
+WORKDIR /opt/fetchnow
+COPY src/fetchnow/__init__.py /opt/fetchnow/src/fetchnow/__init__.py
+COPY src/fetchnow/media_executor /opt/fetchnow/src/fetchnow/media_executor
+
+COPY --from=launcher-build /build/sec08-launch /usr/local/bin/sec08-launch
+
+ENV PYTHONPATH=/opt/fetchnow/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MEDIA_EXECUTOR_LAUNCHER=/usr/local/bin/sec08-launch \
+    MEDIA_MUXING_FFMPEG_PATH=/usr/bin/ffmpeg \
+    MEDIA_MUXING_FFPROBE_PATH=/usr/bin/ffprobe
+
+USER 0
+ENTRYPOINT ["python", "-m", "fetchnow.media_executor"]

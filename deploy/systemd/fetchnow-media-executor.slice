@@ -1,0 +1,16 @@
+# Uninstalled template. Do not copy this unit onto a host from this change.
+# The 64 MiB ceiling used by the container proof is a test ceiling, not a
+# production budget. These numbers are the documented starting shape only.
+# A writable cgroup namespace can raise the container memory.max; this slice
+# is the external ceiling and must be the ancestor of the container scope.
+# Resolve the real path with: systemctl show fetchnow-media-executor.slice -p ControlGroup --value
+# Do not guess /sys/fs/cgroup/fetchnow-media-executor.slice.
+
+[Unit]
+Description=FetchNow media executor resource ceiling (not installed by SEC-08)
+
+[Slice]
+MemoryMax=1024M
+CPUQuota=50%
+TasksMax=256
+MemorySwapMax=0

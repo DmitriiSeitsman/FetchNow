@@ -547,3 +547,18 @@ It was not changed here.
 Run 36892631777 remains CANCELLED with confirmed isolation failures.
 Run 36908081313 failed `cancel_kills_tree_a_including_reparented` and was
 not retried. SEC-09: **NOT STARTED**. API residual acceptance: **NOT GRANTED**.
+
+---
+
+## 10. Implementation contract (does not rewrite the sections above)
+
+The status line above is historical. The container mechanism later
+passed on `af2f53a` as run `36927034793` (25/0/0). That pass is the mechanism
+baseline, not this executor.
+
+The current implementation contract is
+[sec-08-media-executor.md](sec-08-media-executor.md). Flag off keeps today's
+in-process path. Flag on switches only `mux_copy` and `ffprobe_validate`,
+fail-closed, with no fallback. yt-dlp stays on the worker until SEC-09.
+Native executor acceptance has not been run. Production rollout is not
+approved. API residual acceptance remains **NOT GRANTED**.

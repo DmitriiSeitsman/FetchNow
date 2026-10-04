@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -54,6 +55,11 @@ from fetchnow.downloads.snapshot_codec import decode_selected_format_snapshot
 from fetchnow.downloads.tool_executable import validate_trusted_executable
 from fetchnow.downloads.ytdlp_download_argv import build_ytdlp_download_argv
 from fetchnow.jobs.target_rebuild import rebuild_resolution_result
+from fetchnow.media_executor.client import ExecutorCallError, UnixExecutorClient
+from fetchnow.media_executor.constants import INPUT_AUDIO, INPUT_VIDEO, OUTPUT_MUX
+from fetchnow.media_executor.handoff import HandoffError, copy_regular
+from fetchnow.media_executor.layout import job_directory
+from fetchnow.media_executor.protocol import Request
 from fetchnow.media_inspection.errors import InspectionError
 from fetchnow.media_inspection.models import MediaKind
 from fetchnow.media_inspection.protocols import ProcessResult
@@ -64,6 +70,14 @@ from fetchnow.url.providers import ProviderRegistry
 from fetchnow.url.validate import URLValidator
 
 logger = logging.getLogger("fetchnow.downloads.executor")
+
+
+def offline_mux_backend(settings: Settings) -> str:
+    """``executor`` only when the operator flag is on. Never an automatic fallback."""
+    if settings.media_executor_enabled:
+        return "executor"
+    return "inprocess"
+
 
 _OUTPUT_TEMPLATE = "output/artifact.%(ext)s"
 
@@ -142,6 +156,7 @@ class DownloadExecutor:
         validator: URLValidator | None = None,
         artifact_store: ArtifactStore | None = None,
         process_runner: DownloadProcessRunner | None = None,
+        executor_client: UnixExecutorClient | None = None,
         worker_id: str,
     ) -> None:
         self._settings = settings
@@ -152,6 +167,7 @@ class DownloadExecutor:
         self._providers = provider_registry
         self._validator = validator
         self._runner = process_runner or DownloadProcessRunner()
+        self._executor_client = executor_client
         self._worker_id = worker_id
         self._closed = False
         self._lease_lost = False
@@ -487,82 +503,28 @@ class DownloadExecutor:
             media_kind=selection.media_kind,
         )
 
-    async def _run_muxed_download(
+    async def _mux_and_probe_locally(
         self,
         snap: DownloadClaimSnapshot,
-        selection: MuxedDownloadSelection,
         workspace: AttemptWorkspace,
         *,
-        peak_bytes: int,
-    ) -> None:
+        video_path: Path,
+        audio_path: Path,
+        container: str,
+        ffmpeg: str,
+        ffprobe: str,
+        stage_write_cap: int,
+        consumed: int,
+    ) -> tuple[ProcessResult, Path]:
         settings = self._settings
-        if not settings.media_muxing_enabled:
-            raise_download_error(
-                DownloadErrorCode.MUXING_UNAVAILABLE,
-                internal_reason="MUXING_DISABLED",
-            )
-        ffmpeg = validate_trusted_executable(
-            settings.media_muxing_ffmpeg_path, kind="ffmpeg"
-        )
-        ffprobe = validate_trusted_executable(
-            settings.media_muxing_ffprobe_path, kind="ffprobe"
-        )
-        # Enforce the product byte ceiling on each yt-dlp stage. Approximate
-        # per-stream sizes are only for reservation/progress — using them as
-        # max_output_bytes falsely fails long DASH audio/video as TOO_LARGE.
-        stage_write_cap = int(settings.media_download_max_bytes)
-        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
-            if self._user_cancel:
-                raise _JobCancelledError()
-            raise _LeaseLostError()
-        await self._run_exact_ytdlp(
-            snap,
-            token=selection.video_format_token,
-            workspace=workspace,
-            output_template="video/stream.%(ext)s",
-            output_dir=str(workspace.video),
-            max_bytes=stage_write_cap,
-            min_free_headroom=max(0, peak_bytes - stage_write_cap),
-            expected_bytes=selection.video_approx_bytes,
-        )
-        video_path = self._store.find_single_regular_file_in(
-            workspace.video,
-            allowed_suffixes=frozenset({"mp4", "webm"}),
-        )
-        consumed = video_path.stat().st_size
-        self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
-        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
-            if self._user_cancel:
-                raise _JobCancelledError()
-            raise _LeaseLostError()
-        await self._run_exact_ytdlp(
-            snap,
-            token=selection.audio_format_token,
-            workspace=workspace,
-            output_template="audio/stream.%(ext)s",
-            output_dir=str(workspace.audio),
-            max_bytes=stage_write_cap,
-            min_free_headroom=max(0, peak_bytes - consumed - stage_write_cap),
-            expected_bytes=selection.audio_approx_bytes,
-        )
-        audio_path = self._store.find_single_regular_file_in(
-            workspace.audio,
-            allowed_suffixes=frozenset({"m4a", "mp4", "webm", "ogg", "opus"}),
-        )
-        consumed += audio_path.stat().st_size
-        self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
-        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
-            if self._user_cancel:
-                raise _JobCancelledError()
-            raise _LeaseLostError()
-        mux_path = workspace.mux / f"artifact.{selection.container}"
+        mux_path = workspace.mux / f"artifact.{container}"
         try:
             argv = build_ffmpeg_mux_argv(
                 executable=ffmpeg,
                 video_path=str(video_path),
                 audio_path=str(audio_path),
                 output_path=str(mux_path),
-                output_container=selection.container,
+                output_container=container,
             )
         except ValueError:
             error = DownloadError(
@@ -619,7 +581,7 @@ class DownloadExecutor:
         )
         mux_file = self._store.find_single_regular_file_in(
             workspace.mux,
-            allowed_suffixes=frozenset({selection.container}),
+            allowed_suffixes=frozenset({container}),
             error_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
         )
         if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
@@ -666,6 +628,306 @@ class DownloadExecutor:
             nonzero_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
             failure_class_override=FailureClass.VERIFY_FAILED,
         )
+        return probe, mux_file
+
+    async def _executor_client_for(self) -> UnixExecutorClient:
+        if self._executor_client is not None:
+            return self._executor_client
+        client = UnixExecutorClient(Path(self._settings.media_executor_socket))
+        self._executor_client = client
+        return client
+
+    async def _call_executor(
+        self,
+        snap: DownloadClaimSnapshot,
+        factory: Any,
+    ) -> ProcessResult:
+        client = await self._executor_client_for()
+        started = asyncio.Event()
+
+        async def _go() -> ProcessResult:
+            started.set()
+            result = await factory()
+            if not isinstance(result, ProcessResult):
+                raise ExecutorCallError("protocol")
+            return result
+
+        run_task = asyncio.create_task(_go())
+        watchdog = asyncio.create_task(
+            self._watch_lease_during_run(snap, run_task, started)
+        )
+        self._watchdog_tasks.add(watchdog)
+        try:
+            try:
+                return await run_task
+            except ExecutorCallError:
+                # A lost/expired RPC must not leave the remote tool running until
+                # its independent operation deadline. Cancellation is not a retry.
+                with contextlib.suppress(ExecutorCallError):
+                    await client.cancel(
+                        job_id=str(snap.job_id),
+                        attempt=snap.attempt_count,
+                        fence=snap.fence,
+                    )
+                raise
+            except asyncio.CancelledError:
+                with contextlib.suppress(ExecutorCallError):
+                    await client.cancel(
+                        job_id=str(snap.job_id),
+                        attempt=snap.attempt_count,
+                        fence=snap.fence,
+                    )
+                if not run_task.done():
+                    run_task.cancel()
+                    await asyncio.gather(run_task, return_exceptions=True)
+                current = asyncio.current_task()
+                outer_cancelling = current is not None and current.cancelling() > 0
+                if self._user_cancel and not outer_cancelling:
+                    raise _JobCancelledError() from None
+                if self._lease_lost and not outer_cancelling:
+                    raise _LeaseLostError() from None
+                raise
+        finally:
+            if not watchdog.done():
+                watchdog.cancel()
+            await asyncio.gather(watchdog, return_exceptions=True)
+            self._watchdog_tasks.discard(watchdog)
+
+    async def _mux_and_probe_via_executor(
+        self,
+        snap: DownloadClaimSnapshot,
+        workspace: AttemptWorkspace,
+        *,
+        video_path: Path,
+        audio_path: Path,
+        container: str,
+        max_bytes: int,
+    ) -> tuple[ProcessResult, Path]:
+        """Offline mux and ffprobe. Unavailable executor fails closed."""
+        settings = self._settings
+        client = await self._executor_client_for()
+        job_id = str(snap.job_id)
+        attempt = snap.attempt_count
+        fence = snap.fence
+        request = Request(
+            op="reserve",
+            job_id=job_id,
+            attempt=attempt,
+            fence=fence,
+        )
+        job_dir = job_directory(Path(settings.media_executor_work_root), request)
+        try:
+            try:
+                await client.reserve(job_id=job_id, attempt=attempt, fence=fence)
+                copy_regular(video_path, job_dir / INPUT_VIDEO, max_bytes=max_bytes)
+                copy_regular(audio_path, job_dir / INPUT_AUDIO, max_bytes=max_bytes)
+            except ExecutorCallError as exc:
+                reason = (
+                    "EXECUTOR_UNAVAILABLE"
+                    if exc.code == "unavailable"
+                    else "EXECUTOR_PROTOCOL"
+                )
+                raise DownloadError(
+                    DownloadErrorCode.MUXING_FAILED,
+                    internal_reason=reason,
+                ) from None
+            except HandoffError:
+                raise DownloadError(
+                    DownloadErrorCode.MUXING_FAILED,
+                    internal_reason="EXECUTOR_INPUT_REJECTED",
+                ) from None
+            emit_stage_event(
+                DownloadStageEvent.MUX_STARTED,
+                download_job_id=str(snap.job_id),
+                attempt_count=snap.attempt_count,
+                fence_token=snap.fence,
+                stage="muxing",
+            )
+            await self._advance_progress(snap, DownloadProgressStage.MUXING)
+            try:
+                mux_result = await self._call_executor(
+                    snap,
+                    lambda: client.mux_copy(
+                        job_id=job_id,
+                        attempt=attempt,
+                        fence=fence,
+                        container=container,
+                        timeout_seconds=settings.media_muxing_timeout_seconds,
+                    ),
+                )
+            except ExecutorCallError as exc:
+                reason = (
+                    "EXECUTOR_UNAVAILABLE"
+                    if exc.code == "unavailable"
+                    else "EXECUTOR_PROTOCOL"
+                )
+                raise DownloadError(
+                    DownloadErrorCode.MUXING_FAILED,
+                    internal_reason=reason,
+                ) from None
+            self._finish_tool_stage(
+                snap,
+                mux_result,
+                completed=DownloadStageEvent.MUX_COMPLETED,
+                failed=DownloadStageEvent.MUX_FAILED,
+                stage="muxing",
+                timeout_code=DownloadErrorCode.MUXING_TIMEOUT,
+                nonzero_code=DownloadErrorCode.MUXING_FAILED,
+                failure_class_override=FailureClass.MUX_FAILED,
+            )
+            emit_stage_event(
+                DownloadStageEvent.VERIFY_STARTED,
+                download_job_id=str(snap.job_id),
+                attempt_count=snap.attempt_count,
+                fence_token=snap.fence,
+                stage="verifying",
+            )
+            await self._advance_progress(snap, DownloadProgressStage.VERIFYING)
+            try:
+                probe = await self._call_executor(
+                    snap,
+                    lambda: client.ffprobe_validate(
+                        job_id=job_id,
+                        attempt=attempt,
+                        fence=fence,
+                        timeout_seconds=settings.media_muxing_timeout_seconds,
+                    ),
+                )
+            except ExecutorCallError as exc:
+                reason = (
+                    "EXECUTOR_UNAVAILABLE"
+                    if exc.code == "unavailable"
+                    else "EXECUTOR_PROTOCOL"
+                )
+                raise DownloadError(
+                    DownloadErrorCode.MUXING_FAILED,
+                    internal_reason=reason,
+                ) from None
+            self._finish_tool_stage(
+                snap,
+                probe,
+                completed=DownloadStageEvent.VERIFY_COMPLETED,
+                failed=DownloadStageEvent.VERIFY_FAILED,
+                stage="verifying",
+                timeout_code=DownloadErrorCode.MUXING_TIMEOUT,
+                nonzero_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                failure_class_override=FailureClass.VERIFY_FAILED,
+            )
+            if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+                if self._user_cancel:
+                    raise _JobCancelledError()
+                raise _LeaseLostError()
+            dest = workspace.mux / f"artifact.{container}"
+            try:
+                copy_regular(job_dir / OUTPUT_MUX, dest, max_bytes=max_bytes)
+            except HandoffError:
+                raise DownloadError(
+                    DownloadErrorCode.MUXED_OUTPUT_INVALID,
+                    internal_reason="EXECUTOR_OUTPUT_REJECTED",
+                ) from None
+            mux_file = self._store.find_single_regular_file_in(
+                workspace.mux,
+                allowed_suffixes=frozenset({container}),
+                error_code=DownloadErrorCode.MUXED_OUTPUT_INVALID,
+            )
+            return probe, mux_file
+        finally:
+            with contextlib.suppress(ExecutorCallError):
+                await client.release(job_id=job_id, attempt=attempt, fence=fence)
+
+    async def _run_muxed_download(
+        self,
+        snap: DownloadClaimSnapshot,
+        selection: MuxedDownloadSelection,
+        workspace: AttemptWorkspace,
+        *,
+        peak_bytes: int,
+    ) -> None:
+        settings = self._settings
+        if not settings.media_muxing_enabled:
+            raise_download_error(
+                DownloadErrorCode.MUXING_UNAVAILABLE,
+                internal_reason="MUXING_DISABLED",
+            )
+        if not settings.media_executor_enabled:
+            ffmpeg = validate_trusted_executable(
+                settings.media_muxing_ffmpeg_path, kind="ffmpeg"
+            )
+            ffprobe = validate_trusted_executable(
+                settings.media_muxing_ffprobe_path, kind="ffprobe"
+            )
+        else:
+            ffmpeg = ""
+            ffprobe = ""
+        # Enforce the product byte ceiling on each yt-dlp stage. Approximate
+        # per-stream sizes are only for reservation/progress — using them as
+        # max_output_bytes falsely fails long DASH audio/video as TOO_LARGE.
+        stage_write_cap = int(settings.media_download_max_bytes)
+        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
+            raise _LeaseLostError()
+        await self._run_exact_ytdlp(
+            snap,
+            token=selection.video_format_token,
+            workspace=workspace,
+            output_template="video/stream.%(ext)s",
+            output_dir=str(workspace.video),
+            max_bytes=stage_write_cap,
+            min_free_headroom=max(0, peak_bytes - stage_write_cap),
+            expected_bytes=selection.video_approx_bytes,
+        )
+        video_path = self._store.find_single_regular_file_in(
+            workspace.video,
+            allowed_suffixes=frozenset({"mp4", "webm"}),
+        )
+        consumed = video_path.stat().st_size
+        self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
+        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
+            raise _LeaseLostError()
+        await self._run_exact_ytdlp(
+            snap,
+            token=selection.audio_format_token,
+            workspace=workspace,
+            output_template="audio/stream.%(ext)s",
+            output_dir=str(workspace.audio),
+            max_bytes=stage_write_cap,
+            min_free_headroom=max(0, peak_bytes - consumed - stage_write_cap),
+            expected_bytes=selection.audio_approx_bytes,
+        )
+        audio_path = self._store.find_single_regular_file_in(
+            workspace.audio,
+            allowed_suffixes=frozenset({"m4a", "mp4", "webm", "ogg", "opus"}),
+        )
+        consumed += audio_path.stat().st_size
+        self._ensure_remaining_disk(peak_bytes=peak_bytes, consumed_bytes=consumed)
+        if not await self.lease_still_owned(job_id=snap.job_id, fence=snap.fence):
+            if self._user_cancel:
+                raise _JobCancelledError()
+            raise _LeaseLostError()
+        if offline_mux_backend(settings) == "executor":
+            probe, mux_file = await self._mux_and_probe_via_executor(
+                snap,
+                workspace,
+                video_path=video_path,
+                audio_path=audio_path,
+                container=selection.container,
+                max_bytes=stage_write_cap,
+            )
+        else:
+            probe, mux_file = await self._mux_and_probe_locally(
+                snap,
+                workspace,
+                video_path=video_path,
+                audio_path=audio_path,
+                container=selection.container,
+                ffmpeg=ffmpeg,
+                ffprobe=ffprobe,
+                stage_write_cap=stage_write_cap,
+                consumed=consumed,
+            )
         raw = probe.stdout
         try:
             parse_ffprobe_json(
@@ -763,9 +1025,7 @@ class DownloadExecutor:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.info(
-                    "download_progress_percent_update_failed outcome=transient"
-                )
+                logger.info("download_progress_percent_update_failed outcome=transient")
 
         result = await self._run_supervised(
             snap,

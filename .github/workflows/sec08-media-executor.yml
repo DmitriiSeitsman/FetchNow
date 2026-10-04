@@ -1,0 +1,40 @@
+name: SEC-08 media executor
+
+# Owner-authorized bootstrap run; no default-branch registration or PR required.
+# Only the exact acceptance commit title starts a push job. Reruns are disabled.
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/security-sec-08-media-executor]
+    paths: [.github/workflows/sec08-media-executor.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    if: >-
+      github.run_attempt == 1 &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.head_commit.message == 'feat(security): validate SEC-08 executor [native-once-20261004]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Native executor acceptance
+        run: sudo python3 backend/tests/media_executor/native_acceptance.py --output "$RUNNER_TEMP/sec08-executor"
+      - name: Cleanup disposable resources
+        if: always()
+        run: sudo python3 backend/tests/media_executor/native_acceptance.py --output "$RUNNER_TEMP/sec08-executor" --cleanup
+      - name: Export sanitized evidence
+        if: always()
+        run: sudo python3 backend/tests/media_executor/export_evidence.py "$RUNNER_TEMP/sec08-executor" "$RUNNER_TEMP/sec08-executor-upload"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec08-media-executor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sec08-executor-upload/
+          if-no-files-found: error

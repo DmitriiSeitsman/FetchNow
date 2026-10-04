@@ -569,6 +569,20 @@ class Settings(BaseSettings):
         ge=1,
         le=32,
     )
+    # SEC-08 offline executor. Default off. There is no fallback to in-process
+    # ffmpeg/ffprobe when this is true and the executor is unavailable.
+    media_executor_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_EXECUTOR_ENABLED",
+    )
+    media_executor_socket: str = Field(
+        default="",
+        alias="MEDIA_EXECUTOR_SOCKET",
+    )
+    media_executor_work_root: str = Field(
+        default="",
+        alias="MEDIA_EXECUTOR_WORK_ROOT",
+    )
 
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
@@ -765,6 +779,19 @@ class Settings(BaseSettings):
         # MEDIA_MUXING_ENABLED must not require ffmpeg/ffprobe paths here: the
         # API container never receives worker tool paths. Worker construction
         # validates executables at runtime when muxing is on.
+        if self.media_executor_enabled:
+            socket_path = self.media_executor_socket.strip()
+            work_root = self.media_executor_work_root.strip()
+            if not socket_path or not os.path.isabs(socket_path):
+                raise ValueError(
+                    "MEDIA_EXECUTOR_SOCKET must be absolute when executor is enabled"
+                )
+            if not work_root or not os.path.isabs(work_root):
+                raise ValueError(
+                    "MEDIA_EXECUTOR_WORK_ROOT must be absolute when executor is enabled"
+                )
+            self.media_executor_socket = socket_path
+            self.media_executor_work_root = work_root
         return self
 
 
