@@ -13,11 +13,38 @@ permissions:
   contents: read
 
 jobs:
-  native:
+  authorize:
     if: >-
       github.run_attempt == 1 &&
-      (github.event_name == 'workflow_dispatch' ||
-       github.event.head_commit.message == 'feat(security): SEC-08 same-artifact pcre2 fix [native-once-20261004b]')
+      github.ref == 'refs/heads/codex/security-sec-08-media-executor'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      allowed: ${{ steps.subject.outputs.allowed }}
+    steps:
+      - name: Match exact commit subject (trailers are not part of subject)
+        id: subject
+        env:
+          EXPECTED_SUBJECT: 'ci(security): fix SEC-08 subject gate [native-once-20261004c]'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          message = (event.get("head_commit") or {}).get("message", "")
+          subject = message.splitlines()[0] if isinstance(message, str) and message else ""
+          allowed = os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch" or (
+              os.environ["GITHUB_EVENT_NAME"] == "push"
+              and subject == os.environ["EXPECTED_SUBJECT"]
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"allowed={str(allowed).lower()}\n")
+          PY
+  native:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
