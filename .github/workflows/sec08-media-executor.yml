@@ -25,7 +25,7 @@ jobs:
       - name: Match exact commit subject (trailers are not part of subject)
         id: subject
         env:
-          EXPECTED_SUBJECT: 'ci(security): fix SEC-08 subject gate [native-once-20261004c]'
+          EXPECTED_SUBJECT: 'test(security): fix SEC-08 dpkg inventory [native-once-20261005]'
         run: |
           python3 - <<'PY'
           import json

@@ -235,6 +235,19 @@ def inspect_image_id(image: str) -> str:
     return image_id
 
 
+def validate_pcre2_inventory(raw: object) -> None:
+    """Require one exact package/version AND its installed Debian architecture."""
+    if not isinstance(raw, str) or len(raw.splitlines()) != 1:
+        raise AssertionError("invalid libpcre2 inventory")
+    fields = raw.splitlines()[0].split("\t")
+    if len(fields) != 3:
+        raise AssertionError("invalid libpcre2 inventory fields")
+    package, architecture, version = fields
+    assert package in {"libpcre2-8-0", "libpcre2-8-0:amd64"}, package
+    assert architecture == "amd64", architecture
+    assert version == "10.46-1~deb13u3", version
+
+
 def assert_runtime_inventory(target: str) -> dict[str, object]:
     """Fail closed if C source or build-cache objects leaked into runtime."""
     script = (
@@ -246,8 +259,9 @@ def assert_runtime_inventory(target: str) -> dict[str, object]:
         "pycache = sorted(str(p) for p in root.rglob('__pycache__'))\n"
         "bad = c_files + pyc + pycache\n"
         "pkgs = subprocess.check_output(\n"
-        "  ['dpkg-query','-W','libpcre2-8-0'], text=True\n"
-        ").strip()\n"
+        "  ['dpkg-query','-W', '-f=${Package}\\t${Architecture}\\t${Version}\\n',\n"
+        "   'libpcre2-8-0'], text=True\n"
+        ")\n"
         "print(json.dumps({\n"
         "  'bad': bad, 'libpcre2': pkgs,\n"
         "  'c_files': c_files, 'pyc': pyc, 'pycache': pycache\n"
@@ -257,10 +271,7 @@ def assert_runtime_inventory(target: str) -> dict[str, object]:
         run(["docker", "exec", target, "python", "-c", script]).stdout
     )
     assert data["bad"] == [], data["bad"]
-    pkg, sep, ver = str(data["libpcre2"]).partition("\t")
-    if not sep:
-        pkg, _, ver = str(data["libpcre2"]).partition(" ")
-    assert pkg == "libpcre2-8-0" and ver == "10.46-1~deb13u3", data["libpcre2"]
+    validate_pcre2_inventory(data["libpcre2"])
     return data
 
 

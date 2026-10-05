@@ -283,7 +283,7 @@ def test_runtime_inventory_rejects_c_source_and_pycache() -> None:
                     "/opt/fetchnow/src/fetchnow/media_executor/sec08-launch.c",
                     "/opt/fetchnow/src/fetchnow/media_executor/__pycache__",
                 ],
-                "libpcre2": "libpcre2-8-0\t10.46-1~deb13u3",
+                "libpcre2": "libpcre2-8-0\tamd64\t10.46-1~deb13u3\n",
                 "c_files": [
                     "/opt/fetchnow/src/fetchnow/media_executor/sec08-launch.c"
                 ],
@@ -301,14 +301,31 @@ def test_runtime_inventory_rejects_c_source_and_pycache() -> None:
     assert calls and calls[0][:3] == ["docker", "exec", "container"]
 
 
-def test_runtime_inventory_accepts_clean_pinned_pcre2() -> None:
+@pytest.mark.parametrize("package", ["libpcre2-8-0", "libpcre2-8-0:amd64"])
+def test_runtime_inventory_accepts_clean_pinned_pcre2(package: str) -> None:
     gate = load("native_acceptance")
 
     def fake_run(argv: list[str], timeout: int = 60, *, check: bool = True):
+        # Exercise the actual generated in-container script with a fake dpkg,
+        # so the real command's format is checked, not just the parser fixture.
+        observed: list[list[str]] = []
+
+        def query(command: list[str], *, text: bool) -> str:
+            assert text is True
+            observed.append(command)
+            return f"{package}\tamd64\t10.46-1~deb13u3\n"
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(subprocess, "check_output", query)
+            exec(compile(argv[-1], "inventory-probe", "exec"), {})
+        assert observed == [[
+            "dpkg-query", "-W", "-f=${Package}\t${Architecture}\t${Version}\n",
+            "libpcre2-8-0",
+        ]]
         payload = json.dumps(
             {
                 "bad": [],
-                "libpcre2": "libpcre2-8-0\t10.46-1~deb13u3",
+                "libpcre2": f"{package}\tamd64\t10.46-1~deb13u3\n",
                 "c_files": [],
                 "pyc": [],
                 "pycache": [],
@@ -319,6 +336,28 @@ def test_runtime_inventory_accepts_clean_pinned_pcre2() -> None:
     gate.run = fake_run  # type: ignore[assignment]
     data = gate.assert_runtime_inventory("container")
     assert data["bad"] == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "libpcre2-8-0:arm64\tarm64\t10.46-1~deb13u3\n",
+        "libpcre2-8-0:arm64\tamd64\t10.46-1~deb13u3\n",
+        "libpcre2-8-0:amd64\tarm64\t10.46-1~deb13u3\n",
+        "libpcre2-8-0\tarm64\t10.46-1~deb13u3\n",
+        "libpcre2-8-0\tamd64\t10.46-1~deb13u2\n",
+        "other-package\tamd64\t10.46-1~deb13u3\n",
+        "libpcre2-8-0\t10.46-1~deb13u3\n",
+        "libpcre2-8-0\tamd64\t10.46-1~deb13u3\textra\n",
+        "libpcre2-8-0\tamd64\t10.46-1~deb13u3\n" * 2,
+        "",
+        None,
+    ],
+)
+def test_runtime_inventory_rejects_wrong_or_incomplete_pcre2(raw: object) -> None:
+    gate = load("native_acceptance")
+    with pytest.raises(AssertionError):
+        gate.validate_pcre2_inventory(raw)
 
 
 def test_export_includes_sanitized_native_and_audit(tmp_path: Path) -> None:

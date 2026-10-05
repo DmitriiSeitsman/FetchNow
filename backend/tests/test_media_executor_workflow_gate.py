@@ -15,7 +15,7 @@ WORKFLOW = (
     Path(__file__).resolve().parents[2]
     / ".github/workflows/sec08-media-executor.yml"
 )
-SUBJECT = "ci(security): fix SEC-08 subject gate [native-once-20261004c]"
+SUBJECT = "test(security): fix SEC-08 dpkg inventory [native-once-20261005]"
 
 
 @pytest.mark.parametrize(
