@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.14.6-slim-bookworm AS builder
+FROM python:3.14.8-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -26,7 +26,7 @@ COPY alembic.ini ./
 RUN uv lock --check \
     && uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python
 
-FROM python:3.14.6-slim-bookworm AS runtime
+FROM python:3.14.8-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
