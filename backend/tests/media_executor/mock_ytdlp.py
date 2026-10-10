@@ -34,6 +34,10 @@ def _heartbeat(path: Path) -> None:
 
 def _controlled_writer(path: Path, *, mode: str) -> None:
     """Ignore --max-filesize deliberately; only the executor may stop us."""
+    # The production launcher inherits cwd=/, not the writable attempt. Keep
+    # every fixture marker and the child's inherited cwd inside that attempt.
+    path = path.absolute()
+    os.chdir(path.parent)
     child = subprocess.Popen(
         [sys.executable, __file__, "--fixture-child"], start_new_session=True
     )

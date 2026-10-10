@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -30,6 +31,8 @@ UNIT_ROOT = Path("/run/systemd/system")
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 PROOF_MEMORY_MAX = 2 * 1024 * 1024 * 1024
 _ACTIVE_OVERLAY: str | None = None
+_EVIDENCE_OUTPUT: Path | None = None
+_EVIDENCE_LOCK = threading.Lock()
 
 
 def run(
@@ -68,6 +71,60 @@ def save(path: Path, payload: object) -> None:
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     temp.chmod(0o644)
     temp.replace(path)
+
+
+def _diagnostic_text(text: str) -> str:
+    """Bounded synthetic-fixture stderr only; never publish URLs or credentials."""
+    text = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"']+", "[url]", text)
+    text = re.sub(
+        r"(?i)\b(password|secret|token|api[_-]?key|authorization)\b"
+        r"\s*[:=]\s*[^\s,;]+",
+        "[credential]",
+        text,
+    )
+    text = re.sub(r"(?i)\bbearer\s+\S+", "[credential]", text)
+    text = re.sub(r"\b(?:ghp_|github_pat_)[A-Za-z0-9_]+", "[credential]", text)
+    return text[-4000:]
+
+
+def _response_diagnostic(payload: dict[str, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key in ("ok", "code", "exit_code", "timed_out", "cancelled", "artifact_bytes"):
+        value = payload.get(key)
+        if value is None or isinstance(value, bool | int):
+            result[key] = value
+        elif isinstance(value, str):
+            result[key] = _diagnostic_text(value)[:120]
+    for stream in ("stdout", "stderr"):
+        value = payload.get(f"{stream}_b64")
+        if not isinstance(value, str):
+            continue
+        try:
+            data = base64.b64decode(value, validate=True)
+        except ValueError:
+            result[f"{stream}_error"] = "invalid_base64"
+            continue
+        result[f"{stream}_bytes"] = len(data)
+        result[f"{stream}_sha256"] = hashlib.sha256(data).hexdigest()
+        if stream == "stderr":
+            result["stderr_excerpt"] = _diagnostic_text(data.decode("utf-8", "replace"))
+    return result
+
+
+def _record_rpc(request: dict[str, object], response: dict[str, object]) -> None:
+    if _EVIDENCE_OUTPUT is None:
+        return
+    identity = {
+        key: request[key]
+        for key in ("op", "job_id", "attempt", "fence")
+        if key in request
+    }
+    event = {"request": identity, "response": _response_diagnostic(response)}
+    with _EVIDENCE_LOCK:
+        path = _EVIDENCE_OUTPUT / "rpc-diagnostics.jsonl"
+        with path.open("a") as handle:
+            handle.write(json.dumps(event, sort_keys=True) + "\n")
+        path.chmod(0o644)
 
 
 def inspect_image_id(image: str) -> str:
@@ -217,6 +274,7 @@ def _wait_socket(project: str, service: str, path: str, timeout: float = 60) -> 
 def _rpc(
     project: str, service: str, socket_path: str, payload: dict[str, object]
 ) -> dict[str, object]:  # noqa: E501
+    request = payload
     body = json.dumps(payload, separators=(",", ":")) + "\n"
     script = (
         "import json,socket,sys\n"
@@ -255,6 +313,7 @@ def _rpc(
     payload = json.loads(proc.stdout.strip().splitlines()[-1])
     if not isinstance(payload, dict):
         raise OSError("rpc response is not an object")
+    _record_rpc(request, payload)
     return payload
 
 
@@ -575,11 +634,17 @@ def _tree_state(snapshot: dict[str, object], *, gone: bool) -> bool:
 
 def _wait_fixture_started(project: str, job: str, fence: int) -> dict[str, object]:
     deadline = time.monotonic() + 15
+    snapshot: dict[str, object] = {}
     while time.monotonic() < deadline:
         snapshot = _fixture_snapshot(project, job, fence)
         if _tree_state(snapshot, gone=False):
             return snapshot
         time.sleep(0.05)
+    if _EVIDENCE_OUTPUT is not None:
+        save(
+            _EVIDENCE_OUTPUT / f"fixture-start-{job}_{fence}.json",
+            {"job_id": job, "fence": fence, "last_snapshot": snapshot},
+        )
     raise OSError("fixture tree did not start")
 
 
@@ -761,11 +826,16 @@ def _matrix(
     project: str,
     state: dict[str, object],
     identities: dict[str, str],
+    checks: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    checks: dict[str, object] = {}
+    if checks is None:
+        checks = {}
 
     def mark(key: str, ok: bool) -> None:
         checks[key] = bool(ok)
+        if _EVIDENCE_OUTPUT is not None:
+            save(_EVIDENCE_OUTPUT / "matrix-progress.json", checks)
+        print(f"sec09: {key} = {'PASS' if ok else 'FAIL'}", flush=True)
 
     job = str(uuid.uuid4())
     _wait_socket(
@@ -1208,8 +1278,9 @@ def execute(output: Path, *, trivy_bin: str | None) -> int:
     helpers = Path(__file__).resolve().parent
     overlay = output / "compose.sec09.disposable.yaml"
     _write_disposable_overlay(overlay, helpers=helpers, tag=tag)
-    global _ACTIVE_OVERLAY
+    global _ACTIVE_OVERLAY, _EVIDENCE_OUTPUT
     _ACTIVE_OVERLAY = str(overlay)
+    _EVIDENCE_OUTPUT = output
     state: dict[str, object] = {
         "name": name,
         "project": project,
@@ -1322,7 +1393,9 @@ def execute(output: Path, *, trivy_bin: str | None) -> int:
 
         result["phase"] = "matrix"
         print("sec09: starting native N1-N12 matrix", flush=True)
-        checks = _matrix(project=project, state=state, identities=ids)
+        checks: dict[str, object] = {}
+        result["checks"] = checks
+        checks = _matrix(project=project, state=state, identities=ids, checks=checks)
         result["checks"] = checks
 
         if not trivy_bin:
@@ -1383,6 +1456,11 @@ def execute(output: Path, *, trivy_bin: str | None) -> int:
     except Exception as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)[:800]
+        if result["phase"] == "matrix":
+            failed_checks = result["checks"]
+            if isinstance(failed_checks, dict):
+                failed_checks["N13_same_artifact_audit"] = "NOT_RUN"
+                failed_checks["N13_reason"] = "matrix_exception"
         if result.get("status") not in {"NOT_RUN"}:
             result["status"] = "FAIL"
         print(f"sec09 native acceptance failed in {result['phase']}: {exc}", flush=True)
@@ -1393,6 +1471,7 @@ def execute(output: Path, *, trivy_bin: str | None) -> int:
         except Exception as exc:
             errors = [type(exc).__name__]
         _ACTIVE_OVERLAY = None
+        _EVIDENCE_OUTPUT = None
         result["cleanup_errors"] = errors
         if errors and result["status"] == "PASS":
             result["status"] = "FAIL"

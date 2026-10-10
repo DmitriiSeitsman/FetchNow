@@ -3,6 +3,7 @@ name: SEC-09 media-net executor
 # Prepared native Compose gate. Does NOT run on ordinary push.
 # One authorized exact-commit push (or workflow_dispatch) is required separately.
 # Reruns are disabled. Same-artifact Trivy shares Image IDs from one build.
+# Corrective run records partial matrix verdicts and sanitized RPC stderr.
 on:
   workflow_dispatch:
   push:

@@ -238,13 +238,17 @@ def test_oversize_mock_ignores_cap_and_requires_executor_kill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mock = load("mock_ytdlp")
+    attempt = tmp_path / "attempt"
+    attempt.mkdir()
+    # Unlike the old regression, do NOT start in the attempt directory.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "fixture-child.json").write_text("{}")
-    (tmp_path / "fixture-grow").touch()
+    (attempt / "fixture-child.json").write_text("{}")
+    (attempt / "fixture-grow").touch()
     monkeypatch.setattr(mock, "_identity", lambda: {"pid": 1, "starttime": 2})
     calls: list[dict[str, object]] = []
 
     def popen(_argv, **kwargs):  # type: ignore[no-untyped-def]
+        assert Path.cwd() == attempt
         calls.append(kwargs)
         return object()
 
@@ -254,9 +258,124 @@ def test_oversize_mock_ignores_cap_and_requires_executor_kill(
     monkeypatch.setattr(mock.subprocess, "Popen", popen)
     monkeypatch.setattr(mock, "_heartbeat", heartbeat)
     with pytest.raises(InterruptedError):
-        mock._controlled_writer(tmp_path / "output-artifact.bin", mode="oversize")
-    assert (tmp_path / "output-artifact.bin").stat().st_size == 1_048_576
+        mock._controlled_writer(attempt / "output-artifact.bin", mode="oversize")
+    assert (attempt / "output-artifact.bin").stat().st_size == 1_048_576
+    assert (attempt / "fixture-parent.json").is_file()
+    assert not (tmp_path / "fixture-parent.json").exists()
     assert calls == [{"start_new_session": True}]
+
+
+def test_rpc_diagnostics_preserve_stderr_without_urls_or_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = load("network_acceptance")
+    monkeypatch.setattr(harness, "_EVIDENCE_OUTPUT", tmp_path)
+    request = {
+        "op": "download_progressive",
+        "job_id": "fixture",
+        "attempt": 1,
+        "fence": 4,
+        "url": "https://private.invalid/source?token=not-public",
+    }
+    stderr = (
+        b"PermissionError: [Errno 13] denied\n"
+        b"https://user:password@private.invalid/source?token=secret-value\n"
+        b"token=hidden authorization=hidden bearer hidden github_pat_hidden\n"
+    )
+    harness._record_rpc(
+        request,
+        {
+            "ok": False,
+            "code": "failed",
+            "exit_code": 1,
+            "stdout_b64": base64.b64encode(b"private media metadata").decode(),
+            "stderr_b64": base64.b64encode(stderr).decode(),
+        },
+    )
+    text = (tmp_path / "rpc-diagnostics.jsonl").read_text()
+    value = json.loads(text)
+    assert "PermissionError" in value["response"]["stderr_excerpt"]
+    assert value["response"]["stderr_bytes"] == len(stderr)
+    assert len(value["response"]["stderr_sha256"]) == 64
+    for secret in (
+        "private.invalid",
+        "password@",
+        "secret-value",
+        "hidden",
+        "media metadata",
+        "not-public",
+    ):
+        assert secret not in text
+    assert (tmp_path / "rpc-diagnostics.jsonl").stat().st_mode & 0o777 == 0o644
+
+
+def test_fixture_failure_saves_last_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = load("network_acceptance")
+    monkeypatch.setattr(harness, "_EVIDENCE_OUTPUT", tmp_path)
+    times = iter((0, 0, 16))
+    monkeypatch.setattr(harness.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(harness.time, "sleep", lambda *_a: None)
+    missing = {"parent": {"ready": False}, "child": {"ready": False}}
+    monkeypatch.setattr(harness, "_fixture_snapshot", lambda *_a: missing)
+    job = "33333333-3333-4333-8333-333333333333"
+    with pytest.raises(OSError, match="fixture tree did not start"):
+        harness._wait_fixture_started("project", job, 4)
+    value = json.loads((tmp_path / f"fixture-start-{job}_4.json").read_text())
+    assert value["last_snapshot"] == missing
+
+
+def test_matrix_exception_preserves_partial_checks_before_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = load("network_acceptance")
+    monkeypatch.setattr(harness.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(harness.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(harness.platform, "machine", lambda: "x86_64")
+    info = {
+        "Architecture": "amd64",
+        "CgroupDriver": "systemd",
+        "CgroupVersion": "2",
+        "ServerVersion": "28.0.4",
+    }
+    monkeypatch.setattr(
+        harness,
+        "run",
+        lambda argv, **_k: subprocess.CompletedProcess(argv, 0, json.dumps(info), ""),
+    )
+    monkeypatch.setattr(harness, "_prepare_slice", lambda *_a: {})
+    monkeypatch.setattr(
+        harness,
+        "_build_images",
+        lambda *_a: {
+            "network_executor": "sha256:" + "a" * 64,
+            "egress_proxy": "sha256:" + "b" * 64,
+            "offline_executor": "sha256:" + "c" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        harness.subprocess,
+        "run",
+        lambda argv, **_k: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    monkeypatch.setattr(harness, "_configure_canary", lambda *_a: None)
+    cleaned: list[bool] = []
+    monkeypatch.setattr(harness, "cleanup", lambda *_a: cleaned.append(True) or [])
+
+    def matrix(**kwargs):  # type: ignore[no-untyped-def]
+        kwargs["checks"].update({"N1_inspect_ok": True, "N2_download_ok": False})
+        raise OSError("fixture tree did not start")
+
+    monkeypatch.setattr(harness, "_matrix", matrix)
+    out = tmp_path / "proof"
+    assert harness.execute(out, trivy_bin="pinned-trivy") == 1
+    result = json.loads((out / "result.json").read_text())
+    assert result["checks"]["N1_inspect_ok"] is True
+    assert result["checks"]["N2_download_ok"] is False
+    assert result["checks"]["N13_same_artifact_audit"] == "NOT_RUN"
+    assert result["status"] == "FAIL" and cleaned == [True]
+    assert harness._EVIDENCE_OUTPUT is None
 
 
 @pytest.mark.parametrize(

@@ -107,3 +107,71 @@ as above). Ruff, source-resolved mypy, actionlint and `git diff --check` pass.
 The three added regressions cover nested ControlGroup resolution, exclusive unit
 ownership and refusal to clean up a foreign slice. The existing three-scanner
 timeout regression explicitly reaches all three mocked scans after preflight.
+
+### Native run 38082649102 — FAIL, Trivy scan NOT RUN
+
+One commit/push: `594a2897359f76a81b7b3c2a06a5fd3b95a200da`; event `push`,
+attempt 1. Run: https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38082649102
+Job ran 2026-10-10T20:09:51Z–20:11:34Z. No rerun/second dispatch.
+
+Preflight verified native x86_64, rootful Docker 28.0.4, systemd cgroup driver,
+cgroup v2. The unique proof slice's resolved ControlGroup was
+`/fetchnow.slice/fetchnow-sec09.slice/fetchnow-sec09-net.slice/fetchnow-sec09-net-7fec8347.slice`,
+with memory.max 2147483648. All three image builds and Compose startup completed.
+
+- Network executor: `sha256:44898245dd665f2bd766c54bc1959ae91d30c131a77b23d3a8e3fb160230ab13`
+- Proxy: `sha256:efca94733372d9c00b3485c16d4121cb706016f141ec35f838e4b9dc16ea862c`
+- Offline executor: `sha256:e6b7f69048c497827185221d430fb8c4e4301bf3cce904c9faf89b0bbe41f8ca`
+
+At 20:11:09Z the matrix raised `OSError: fixture tree did not start`.
+The harness did not preserve partial matrix checks or the failing operation's
+response/child stderr; saved checks are `{}`. Therefore no individual N1–N12
+PASS count is claimed, and the exact cause of the missing tree is UNKNOWN.
+This is not evidence that isolation, cancellation or the executor passed.
+
+Trivy 0.74.0 installation/checksum verification passed, but no image scan ran:
+the exception exited the matrix before N13. No new CVE/residual verdict exists.
+Cleanup reported `cleanup_errors: []`; the separate cleanup and evidence-upload
+steps succeeded. Runtime images were disposable and were removed by cleanup.
+
+Downloaded result.json SHA-256 (matches uploaded hashes.json):
+`5c60bb9a935d23c1acc4b196e24e0656ea5a9c495d1cfd4c5f42530ab36b089f`.
+
+Native acceptance **BLOCKED**; same-artifact audit **NOT RUN**. Production,
+TEST/LIVE/SEO, VEX and residual acceptance remain unchanged. No PR/merge/deploy.
+This run record is a local, unstaged documentation append, not another push.
+
+### Fixture cwd diagnosis and bounded evidence correction
+
+The trusted job process starts the launcher with cwd `/`; the launcher does not
+change cwd. The synthetic controlled writer used relative parent/child marker
+paths, unlike the server's absolute output path. Its child therefore attempted
+to create `/fixture-child.json`, outside the writable attempt. Old local tests
+had hidden this by starting in the attempt directory.
+
+Local read-only Linux container reproduction as uid 10003 from `/` raised
+`OSError: [Errno 30] Read-only file system: fixture-child.json`. This proves the
+fixture defect; the original native run did not retain stderr and is not
+retroactively assigned an independently observed exception.
+
+The controlled writer now resolves its output path and enters that parent
+directory before spawning the child. Production launcher, permissions, cgroup,
+Landlock, network policy and application code are unchanged. A local ARM64
+Landlock launcher smoke (three original capabilities, network none, read-only
+root) completed with parent and child markers in the attempt and 4096 output
+bytes. This is cwd proof only, not native AMD64 cancellation acceptance.
+An initial smoke-driver import failed because the script has no `.py` extension;
+using explicit SourceFileLoader corrected the diagnostic driver, not the runtime.
+
+Native RPC diagnostics now retain allowlisted status fields, stream byte counts
+and SHA-256, and bounded/redacted stderr (URLs/credential patterns removed).
+No request URL or stdout contents are retained in that diagnostic stream.
+Partial matrix verdicts survive exceptions; fixture-start failure saves the
+last process snapshot. An interrupted matrix explicitly marks N13 NOT_RUN,
+never clean. New regressions cover out-of-attempt cwd and evidence/privacy.
+
+Fresh expanded regression: **178 passed**, no skips in the diagnostic Python
+3.12.13/pytest 8.4.1 environment. Ruff, source-resolved mypy, actionlint and
+`git diff --check` pass. Dependency lock hashes remain unchanged. The prior
+run's formerly local record is included in this corrective commit, not rewritten.
+One new native run is authorized for this correction; no automatic rerun.
