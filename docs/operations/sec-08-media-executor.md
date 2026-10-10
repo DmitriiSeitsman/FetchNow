@@ -1,5 +1,102 @@
 # SEC-08 media executor — current contract
 
+## Same-artifact native PASS / fixable remediated — 2026-10-05
+
+One authorized follow-up commit/push: `022d83f901d22ffa8a0132c35e7128ba1d0f9b31`.
+Four files only: native inventory harness, same-artifact regression tests,
+workflow subject marker and its regression test. Runtime, Dockerfile, locks,
+scanner/policy and the pre-existing local documentation additions were unchanged.
+`dpkg-query` now explicitly emits Package, Architecture and Version; the parser
+requires one record, correct package (bare or `:amd64`), installed `amd64`, and
+exact version `10.46-1~deb13u3`. Wrong versions/architectures, duplicates and
+incomplete rows remain failures. Fresh offline tests: 40 passed; Ruff, mypy,
+actionlint 1.7.7 and diff check passed.
+
+Single push-event run, attempt 1, no retry:
+https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37268708428
+Native job: https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37268708428/job/111630932475
+Job ran 2026-10-05T05:38:57Z through 05:39:57Z. Overall workflow **failure**
+is intentional under unchanged policy: wrapper exit 2, `unfixed_residual`.
+No technical or native failure was reported.
+
+- **Native PASS**, exit 0: actual MP4/WebM mux/probe, real peer credentials,
+  six explicit EACCES denials after tool execution, overflow, cancel/reap of
+  parent and setsid/reparented descendant, other-task heartbeats, cgroup cleanup,
+  private-root/ancestor-limit checks and restart refusal all passed.
+- Inventory PASS: `libpcre2-8-0`, installed `amd64`, `10.46-1~deb13u3`;
+  no C sources, pyc or __pycache__ in the executor runtime source directory.
+- **Same image** for native and Trivy, one build, no rebuild between stages:
+  `sha256:3969a416cacb3db87f9f03f514a6343c3c6e625bb117609d2aedc465fdaece21`,
+  linux/amd64. Dockerfile SHA-256 unchanged:
+  `a59147b7c1a2ffd2e85bf613c33441ca52320436a33974cb2ee2218c6bfd615d`.
+- Audit `needs_owner_decision`, exit 2: **0 fixable HC**, CVE-2026-103111 absent;
+  **213 unfixed HC instances / 47 unique IDs**. The ID set matches run
+  37226784669 (none added/removed). This is not residual acceptance.
+- Trivy 0.74.0, DB v2 UpdatedAt `2026-10-05T01:10:31.191619+00:00`,
+  downloaded `2026-10-05T05:39:49.445716+00:00`.
+- Both cleanup error lists empty; independent cleanup, export and upload passed.
+
+Artifact `sec08-media-executor-37268708428-1`, ID `11327094077`:
+- archive digest: `7762fde154d9aaaac91109203e3fa2d0704df2c6b90a892477860b9dcb078a70`;
+- result.json: `95903cd3459ee54b57862d61b79864a11eb4b3dd650ddedec910163a27ac6dc2`;
+- native/result.json: `d7b11c795d980af48f869108aeb145ad9fb2877581cce6499a52a240465e083b`;
+- audit/summary.json: `c3b71923aac26f41734970adcc0ed3a96ae564491cde9dfaa56b642539347452`;
+- raw scan hash recorded by wrapper: `abebc6954b3ff9d0c142e6b711c385028876a66bcd5a43a87f4262b5a4626d86`.
+Downloaded result bytes match hashes.json. Raw scan is not published to git.
+
+**SEC-08 — SAME-ARTIFACT NATIVE PASS / FIXABLE REMEDIATED.**
+**UNFIXED RESIDUAL DECISION STILL REQUIRED.** No SECURITY PASS/rollout approval.
+No PR/merge/deploy/SSH/production/TEST/LIVE/SEO/VEX changes. SEC-09 not started.
+This result entry remains local and unstaged, without a second commit/push.
+Earlier skipped/failed runs below remain independent historical evidence.
+
+## Latest bounded follow-up — 2026-10-04, run 37226784669
+
+Commit `16a819a2b3a2a7acd1bcbea6a96030a31e61e418` fixes only the workflow
+subject gate and adds `backend/tests/test_media_executor_workflow_gate.py`.
+The two pre-existing local report additions were preserved, not committed.
+One push, one run, attempt 1:
+https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37226784669
+
+`authorize` succeeded; native/audit really executed. No full-message equality:
+the first line is compared exactly; Co-authored-by trailers are tolerated,
+unrelated subjects/suffixes rejected. Branch and attempt restrictions retained.
+Offline gate + same-artifact + harness tests: 28 passed. Ruff, normal typed
+mypy, actionlint 1.7.7 and diff check passed. An initial mypy invocation with
+`--follow-imports=skip` discarded pytest decorator types and failed; normal
+mypy passed without source changes or suppression.
+
+Overall workflow **failure**, wrapper `native_fail` (exit 1). This is NOT a
+same-artifact native PASS. Native preflight passed on x86_64/Docker 28.0.4,
+systemd/cgroup v2. The inventory assertion then rejected the actual output
+`libpcre2-8-0:amd64\t10.46-1~deb13u3` because it expected an unqualified
+package name. Its preceding assertion verified no C/pyc/cache files in the
+executor source directory. Media/isolation/cancellation/restart phases did not
+run on this image; earlier native PASS remains separate. No launcher/runtime
+regression is established by this package-name assertion.
+
+Audit nevertheless completed on the same built image (no rebuild):
+`sha256:98d506693dcd7d543c9c0a22122cf9ae588235d601ab71307caa50c465c6a683`,
+linux/amd64. Dockerfile unchanged in this follow-up, SHA-256
+`a59147b7c1a2ffd2e85bf613c33441ca52320436a33974cb2ee2218c6bfd615d`.
+Trivy 0.74.0, DB v2 UpdatedAt `2026-10-04T14:28:15.152965+00:00`.
+Audit `needs_owner_decision` (exit 2): **0 fixable HC**, CVE-2026-103111 absent;
+213 unfixed HC instances / 47 unique IDs. No VEX/exceptions or residual approval.
+
+Artifact `sec08-media-executor-37226784669-1`, ID `11312570063`:
+- archive digest: `5dce596751b14c6b37af77785a45d3b3e21cfedc377c0d0bfb0ebfe14c96f6c6`;
+- result.json: `9a3f7419fb71029a697a378f274d337eb06da0da7bed470ccb4e1abbc9d63f39`;
+- native/result.json: `9f365034f3f43ca999d2342379f217910693ed17a2ba38b7427dda6d179c2bf7`;
+- audit/summary.json: `808405d6843fed6f868424668344290262c4f82e111f3a4bd5e857e0195de92c`.
+Downloaded result hash matches hashes.json. Both cleanup error lists empty;
+independent cleanup, export and artifact upload succeeded.
+
+No retry, second push, runtime/Dockerfile/audit-policy changes, PR/merge/deploy
+or production access. This result entry remains local and unstaged. The exact
+next harness fix is architecture-aware dpkg inventory parsing with regressions
+that still reject wrong package/version/architecture; not applied in this
+bounded trigger-only task. Another remote run requires authorization.
+
 Historical feasibility notes stay in `sec-08-09-isolation-plan.md`. This file
 is the implementation contract. It is not production approval, not SEC-09, and
 not acceptance of residual CVEs.
@@ -239,3 +336,22 @@ The result record in this section is a local unstaged documentation addition
 after the successful run; no second commit or push was made. Before rollout,
 the remaining artifact audit, production prerequisite/budget decisions and
 SEC-09 scope still require their own acceptance.
+
+## Same-artifact acceptance attempt — 2026-10-04: BLOCKED (job skipped)
+
+Commit `1f128acfc4498d5083d2838c9719686c4508acd9` pushed once to
+`codex/security-sec-08-media-executor`. Push-event run
+[37225778248](https://github.com/DmitriiSeitsman/FetchNow/actions/runs/37225778248)
+attempt 1 concluded `skipped`: the `native` job `if` compared
+`github.event.head_commit.message` for exact equality to
+`feat(security): SEC-08 same-artifact pcre2 fix [native-once-20261004b]`, but
+the published commit message included an automatic
+`Co-authored-by: Cursor <cursoragent@cursor.com>` trailer, so the gate did not
+start.
+
+No native acceptance and no same-artifact Trivy audit ran for this image fix.
+No second push, dispatch, or rerun was performed. Prior native PASS
+`37224290556` on `be254879…` remains a separate successful result and is not
+reused for the fixed image. Local offline same-artifact regressions passed
+before the push; this section is a local documentation addition after the
+skipped run.

@@ -1,0 +1,54 @@
+# SEC-09 network media executor: yt-dlp only, no ffmpeg, no DB/secrets.
+# Opt-in Compose profile only. Not started by production compose.yaml.
+FROM python:3.14.7-slim-trixie AS launcher-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev
+COPY src/fetchnow/media_executor/sec08-launch.c /build/sec08-launch.c
+RUN gcc -O2 -Wall -Wextra -Werror -o /build/sec08-launch /build/sec08-launch.c
+
+FROM python:3.14.7-slim-trixie AS deps
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /uvx /bin/
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+# Lock freshness only; do not install the full fetchnow project into the image.
+RUN uv lock --check \
+    && uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python --exact 'yt-dlp==2026.7.4' \
+    && /opt/venv/bin/yt-dlp --version | grep -E '2026\.07\.04|2026\.7\.4'
+
+FROM python:3.14.7-slim-trixie
+# No ffmpeg/aria2c/curl intentionally — PATH helpers stay unavailable.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libssl3t64=3.5.7-1~deb13u3 openssl=3.5.7-1~deb13u3 \
+        openssl-provider-legacy=3.5.7-1~deb13u3 \
+        libpcre2-8-0=10.46-1~deb13u3 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.14/ensurepip
+
+WORKDIR /opt/fetchnow
+COPY --from=deps /opt/venv /opt/venv
+COPY src/fetchnow/__init__.py /opt/fetchnow/src/fetchnow/__init__.py
+COPY src/fetchnow/media_executor/*.py /opt/fetchnow/src/fetchnow/media_executor/
+RUN printf '%s\n' '"""Network executor package marker."""' \
+      > /opt/fetchnow/src/fetchnow/media_executor/__init__.py
+COPY --from=launcher-build /build/sec08-launch /usr/local/bin/sec08-launch
+
+ENV PYTHONPATH=/opt/fetchnow/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MEDIA_EXECUTOR_PROFILE=network \
+    MEDIA_EXECUTOR_LAUNCHER=/usr/local/bin/sec08-launch \
+    MEDIA_EXECUTOR_RO_ROOTS=/opt/venv \
+    MEDIA_NET_YTDLP_PATH=/opt/venv/bin/yt-dlp \
+    MEDIA_NET_PROXY_URL=http://egress-proxy:8888
+
+USER 0
+ENTRYPOINT ["python", "-m", "fetchnow.media_executor"]

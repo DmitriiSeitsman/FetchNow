@@ -8,6 +8,7 @@ import socket
 import sys
 from pathlib import Path
 
+from fetchnow.media_executor.constants import PROFILE_NETWORK, PROFILE_OFFLINE
 from fetchnow.media_executor.layout import (
     bind_socket_as_executor,
     make_job_directory,
@@ -65,26 +66,55 @@ def preflight(launcher: Path) -> LandlockRunner:
 
 def main() -> int:
     try:
+        profile = os.environ.get("MEDIA_EXECUTOR_PROFILE", PROFILE_OFFLINE).strip()
+        if profile not in {PROFILE_OFFLINE, PROFILE_NETWORK}:
+            raise OSError("MEDIA_EXECUTOR_PROFILE invalid")
         launcher = _required_path("MEDIA_EXECUTOR_LAUNCHER")
         work_root = _required_path("MEDIA_EXECUTOR_WORK_ROOT")
         socket_path = _required_path("MEDIA_EXECUTOR_SOCKET")
-        ffmpeg = str(_required_path("MEDIA_MUXING_FFMPEG_PATH"))
-        ffprobe = str(_required_path("MEDIA_MUXING_FFPROBE_PATH"))
         runner = preflight(launcher)
         sweep_own_cgroups()
         make_work_root(work_root)
         make_socket_directory(socket_path.parent)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         bind_socket_as_executor(sock, socket_path)
-        app = ExecutorApp(
-            work_root=work_root,
-            runner=runner,
-            ffmpeg=ffmpeg,
-            ffprobe=ffprobe,
-            socket_dir=socket_path.parent,
-            make_job=make_job_directory,
-            remove_job=remove_job_directory,
-        )
+        if profile == PROFILE_OFFLINE:
+            app = ExecutorApp(
+                work_root=work_root,
+                runner=runner,
+                profile=PROFILE_OFFLINE,
+                ffmpeg=str(_required_path("MEDIA_MUXING_FFMPEG_PATH")),
+                ffprobe=str(_required_path("MEDIA_MUXING_FFPROBE_PATH")),
+                socket_dir=socket_path.parent,
+                make_job=make_job_directory,
+                remove_job=remove_job_directory,
+            )
+        else:
+            proxy = os.environ.get("MEDIA_NET_PROXY_URL", "").strip()
+            if not proxy:
+                raise OSError("MEDIA_NET_PROXY_URL required")
+            app = ExecutorApp(
+                work_root=work_root,
+                runner=runner,
+                profile=PROFILE_NETWORK,
+                ytdlp=str(_required_path("MEDIA_NET_YTDLP_PATH")),
+                proxy_url=proxy,
+                download_timeout_seconds=float(
+                    os.environ.get("MEDIA_NET_DOWNLOAD_TIMEOUT_SECONDS", "300")
+                ),
+                inspect_timeout_seconds=float(
+                    os.environ.get("MEDIA_NET_INSPECT_TIMEOUT_SECONDS", "30")
+                ),
+                socket_timeout_seconds=int(
+                    os.environ.get("MEDIA_NET_SOCKET_TIMEOUT_SECONDS", "30")
+                ),
+                max_filesize_bytes=int(
+                    os.environ.get("MEDIA_NET_MAX_FILESIZE_BYTES", "3221225472")
+                ),
+                socket_dir=socket_path.parent,
+                make_job=make_job_directory,
+                remove_job=remove_job_directory,
+            )
         app.serve(sock)
     except OSError as exc:
         print(f"media executor preflight failed: {exc}", file=sys.stderr)

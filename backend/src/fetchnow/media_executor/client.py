@@ -76,10 +76,92 @@ class UnixExecutorClient:
         )
 
     async def release(self, *, job_id: str, attempt: int, fence: int) -> None:
-        await self._call(
+        payload = await self._call(
             {"op": "release", "job_id": job_id, "attempt": attempt, "fence": fence},
-            timeout_seconds=2,
+            timeout_seconds=5,
         )
+        if payload.get("ok") is not True:
+            code = payload.get("code")
+            raise ExecutorCallError(code if isinstance(code, str) else "protocol")
+
+    async def inspect_metadata(
+        self,
+        *,
+        job_id: str,
+        attempt: int,
+        fence: int,
+        url: str,
+        provider_id: str,
+        timeout_seconds: float,
+    ) -> ProcessResult:
+        payload = await self._call(
+            {
+                "op": "inspect_metadata",
+                "job_id": job_id,
+                "attempt": attempt,
+                "fence": fence,
+                "url": url,
+                "provider_id": provider_id,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return _process_result(payload)
+
+    async def download(
+        self,
+        *,
+        op: str,
+        job_id: str,
+        attempt: int,
+        fence: int,
+        url: str,
+        provider_id: str,
+        format_token: str,
+        timeout_seconds: float,
+        max_bytes: int,
+        min_free_bytes: int,
+    ) -> dict[str, object]:
+        if op not in {
+            "download_progressive",
+            "download_video",
+            "download_audio",
+        }:
+            raise ExecutorCallError("protocol")
+        if type(max_bytes) is not int or max_bytes < 1:
+            raise ExecutorCallError("protocol")
+        if type(min_free_bytes) is not int or min_free_bytes < 0:
+            raise ExecutorCallError("protocol")
+        payload = await self._call(
+            {
+                "op": op,
+                "job_id": job_id,
+                "attempt": attempt,
+                "fence": fence,
+                "url": url,
+                "provider_id": provider_id,
+                "format_token": format_token,
+                "max_bytes": max_bytes,
+                "min_free_bytes": min_free_bytes,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if payload.get("ok") is not True:
+            # Still return payload so callers can map timeout/cancel codes.
+            result = _process_result(payload)
+            return {"result": result, "payload": payload}
+        result = _process_result(payload)
+        name = payload.get("artifact_name")
+        size = payload.get("artifact_bytes")
+        if not isinstance(name, str) or type(size) is not int or size < 0:
+            raise ExecutorCallError("protocol")
+        if "/" in name or name.startswith(".") or ".." in name:
+            raise ExecutorCallError("protocol")
+        return {
+            "result": result,
+            "payload": payload,
+            "artifact_name": name,
+            "artifact_bytes": size,
+        }
 
     async def _call(
         self,

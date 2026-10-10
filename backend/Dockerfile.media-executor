@@ -20,14 +20,18 @@ RUN python -m pip uninstall -y pip \
 
 WORKDIR /opt/fetchnow
 # Explicit runtime modules only — no C source, no __pycache__ from the context.
+# Package __init__ files are empty markers (no app import graph).
 COPY src/fetchnow/__init__.py /opt/fetchnow/src/fetchnow/__init__.py
 COPY src/fetchnow/media_executor/*.py /opt/fetchnow/src/fetchnow/media_executor/
+RUN printf '%s\n' '"""Offline executor package marker."""' \
+      > /opt/fetchnow/src/fetchnow/media_executor/__init__.py
 
 COPY --from=launcher-build /build/sec08-launch /usr/local/bin/sec08-launch
 
 ENV PYTHONPATH=/opt/fetchnow/src \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    MEDIA_EXECUTOR_PROFILE=offline \
     MEDIA_EXECUTOR_LAUNCHER=/usr/local/bin/sec08-launch \
     MEDIA_MUXING_FFMPEG_PATH=/usr/bin/ffmpeg \
     MEDIA_MUXING_FFPROBE_PATH=/usr/bin/ffprobe

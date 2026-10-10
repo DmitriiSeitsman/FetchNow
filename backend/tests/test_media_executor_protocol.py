@@ -129,6 +129,8 @@ def test_cancel_stops_one_job_and_overflow_rejects_a_third(tmp_path: Path) -> No
             timeout_seconds: float,
             cancel: threading.Event,
             protected: list[str],
+            max_output_bytes: int | None = None,
+            min_free_bytes: int | None = None,
         ) -> ToolOutcome:
             del attempt, argv, timeout_seconds, protected
             flag = threading.Event()
@@ -242,6 +244,8 @@ def test_restart_drops_memory_cache(tmp_path: Path) -> None:
             timeout_seconds: float,
             cancel: threading.Event,
             protected: list[str],
+            max_output_bytes: int | None = None,
+            min_free_bytes: int | None = None,
         ) -> ToolOutcome:
             del attempt, argv, timeout_seconds, cancel, protected
             return ToolOutcome(0, b"{}", b"", False, False)

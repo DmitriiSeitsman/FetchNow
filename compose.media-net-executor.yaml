@@ -1,0 +1,97 @@
+# Opt-in SEC-09 network media executor + egress proxy.
+# Not loaded by `docker compose up` unless this file is passed explicitly:
+#   docker compose -f compose.yaml -f compose.media-executor.yaml \
+#     -f compose.media-net-executor.yaml --profile media-executor \
+#     --profile media-net-executor up
+# MEDIA_NET_EXECUTOR_ENABLED stays false until an operator sets it true.
+# Fail closed: no in-worker yt-dlp fallback when the flag is on.
+# media-net is internal; route proofs belong to the native Compose gate.
+
+networks:
+  media-net:
+    driver: bridge
+    internal: true
+
+services:
+  egress-proxy:
+    profiles: ["media-net-executor"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.media-egress-proxy
+    image: fetchnow-media-egress-proxy:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    # Joins media-net (tool side) and fetchnow-external path via default bridge
+    # attachment below. No host ports published.
+    networks:
+      media-net:
+        aliases: [egress-proxy]
+      fetchnow: {}
+    environment:
+      EGRESS_LISTEN_HOST: "0.0.0.0"
+      EGRESS_LISTEN_PORT: "8888"
+      # Production must populate infrastructure denies before enabling the mode.
+      # Comma-separated CIDRs / IPs (Docker bridge, host, app VIPs, etc.).
+      EGRESS_DENY_CIDRS: ${EGRESS_DENY_CIDRS:-}
+      EGRESS_DENY_IPS: ${EGRESS_DENY_IPS:-}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+
+  media-net-executor:
+    profiles: ["media-net-executor"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.media-net-executor
+    image: fetchnow-media-net-executor:${FETCHNOW_RELEASE_REVISION:-local}
+    restart: unless-stopped
+    networks:
+      media-net: {}
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - SETPCAP
+    security_opt:
+      - no-new-privileges:true
+      - writable-cgroups=true
+    cgroup: private
+    cgroup_parent: fetchnow-media-executor.slice
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=67108864
+    volumes:
+      - media-net-ipc:/run/fetchnow-media-net
+      - media-net-work:/var/lib/fetchnow/media-net
+    environment:
+      MEDIA_EXECUTOR_PROFILE: network
+      MEDIA_EXECUTOR_SOCKET: /run/fetchnow-media-net/ctrl/worker.sock
+      MEDIA_EXECUTOR_WORK_ROOT: /var/lib/fetchnow/media-net
+      MEDIA_EXECUTOR_LAUNCHER: /usr/local/bin/sec08-launch
+      MEDIA_EXECUTOR_RO_ROOTS: /opt/venv
+      MEDIA_NET_YTDLP_PATH: /opt/venv/bin/yt-dlp
+      MEDIA_NET_PROXY_URL: http://egress-proxy:8888
+    pids_limit: 128
+    mem_limit: 1536m
+    depends_on:
+      - egress-proxy
+
+  worker:
+    environment:
+      MEDIA_NET_EXECUTOR_ENABLED: ${MEDIA_NET_EXECUTOR_ENABLED:-false}
+      MEDIA_NET_EXECUTOR_SOCKET: /run/fetchnow-media-net/ctrl/worker.sock
+      MEDIA_NET_EXECUTOR_WORK_ROOT: /var/lib/fetchnow/media-net
+    volumes:
+      - media-net-ipc:/run/fetchnow-media-net
+      - media-net-work:/var/lib/fetchnow/media-net
+
+volumes:
+  media-net-ipc:
+  media-net-work:

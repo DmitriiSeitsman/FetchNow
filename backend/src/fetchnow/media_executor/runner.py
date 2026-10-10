@@ -40,6 +40,8 @@ class ToolRunner:
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
+        max_output_bytes: int | None = None,
+        min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         raise NotImplementedError
 
@@ -54,6 +56,28 @@ def _kill_group(pid: int) -> None:
             return
 
 
+def _tree_bytes(root: Path) -> int:
+    """LocalRunner helper: fail closed on walk/stat errors (not production DAC)."""
+    total = 0
+
+    def onerror(err: OSError) -> None:
+        raise err
+
+    for dirpath, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=onerror
+    ):
+        # Do not descend through symlinks.
+        dirnames[:] = [
+            name for name in dirnames if not Path(dirpath, name).is_symlink()
+        ]
+        for name in filenames:
+            path = Path(dirpath, name)
+            if path.is_symlink():
+                continue
+            total += path.stat().st_size
+    return total
+
+
 class LocalRunner(ToolRunner):
     """In-process fallback is not used in production. Tests use this runner."""
 
@@ -65,6 +89,8 @@ class LocalRunner(ToolRunner):
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
+        max_output_bytes: int | None = None,
+        min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         del protected
         proc = subprocess.Popen(
@@ -79,6 +105,7 @@ class LocalRunner(ToolRunner):
         deadline = time.monotonic() + timeout_seconds
         timed_out = False
         cancelled = False
+        limit_hit = False
         while proc.poll() is None:
             if cancel.is_set():
                 cancelled = True
@@ -88,10 +115,29 @@ class LocalRunner(ToolRunner):
                 timed_out = True
                 _kill_group(proc.pid)
                 break
+            try:
+                if (
+                    max_output_bytes is not None
+                    and _tree_bytes(attempt) > max_output_bytes
+                ):
+                    limit_hit = True
+                    _kill_group(proc.pid)
+                    break
+                if min_free_bytes is not None:
+                    import shutil
+
+                    if shutil.disk_usage(attempt).free < min_free_bytes:
+                        limit_hit = True
+                        _kill_group(proc.pid)
+                        break
+            except OSError:
+                limit_hit = True
+                _kill_group(proc.pid)
+                break
             time.sleep(0.02)
         stdout, stderr = proc.communicate(timeout=5)
         return ToolOutcome(
-            exit_code=proc.returncode,
+            exit_code=1 if limit_hit else proc.returncode,
             stdout=stdout,
             stderr=stderr,
             timed_out=timed_out,
@@ -168,10 +214,19 @@ class LandlockRunner(ToolRunner):
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
+        max_output_bytes: int | None = None,
+        min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         read_only = ["/usr", "/bin", "/lib", "/lib64"]
-        read_only = [item for item in read_only if os.path.isdir(item)]
-        if layout_rejection(read_only, protected + [str(attempt)]):
+        for item in os.environ.get("MEDIA_EXECUTOR_RO_ROOTS", "").split(":"):
+            root = item.strip()
+            if root and (os.path.isdir(root) or os.path.isfile(root)):
+                read_only.append(root)
+        read_only = [
+            item for item in read_only if os.path.isdir(item) or os.path.isfile(item)
+        ]
+        dir_roots = [item for item in read_only if os.path.isdir(item)]
+        if layout_rejection(dir_roots, protected + [str(attempt)]):
             raise OSError("ro root covers a protected path")
         token = os.urandom(8).hex()
         cgroup = self._cgroup_root / f"fn-{token}"
@@ -184,6 +239,8 @@ class LandlockRunner(ToolRunner):
             "--cgroup-procs",
             str(cgroup / "cgroup.procs"),
         ]
+        if os.environ.get("MEDIA_EXECUTOR_PROFILE", "").strip() == "network":
+            command.append("--allow-net-resolver")
         for root in read_only:
             command.extend(["--ro", root])
         for secret in protected:
@@ -203,6 +260,9 @@ class LandlockRunner(ToolRunner):
                     str(cgroup),
                     str(read_fd),
                     str(timeout_seconds),
+                    str(max_output_bytes or 0),
+                    str(min_free_bytes or 0),
+                    str(attempt),
                     *command,
                 ],
                 cwd="/",

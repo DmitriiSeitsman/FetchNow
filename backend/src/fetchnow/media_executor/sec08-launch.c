@@ -212,8 +212,31 @@ static void become_tool(void) {
     }
 }
 
+static int add_ro_file(int ruleset, const char *path) {
+    if (access(path, F_OK) != 0) {
+        return 0;
+    }
+    if (add_path(ruleset, path, LANDLOCK_ACCESS_FS_READ_FILE) != 0) {
+        perror(path);
+        return -1;
+    }
+    return 0;
+}
+
+static int add_ro_dir(int ruleset, const char *path) {
+    if (access(path, F_OK) != 0) {
+        return 0;
+    }
+    if (add_path(ruleset, path,
+                 LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR) != 0) {
+        perror(path);
+        return -1;
+    }
+    return 0;
+}
+
 static int apply_domain(int abi, const char *attempt, const char **ro, int nro,
-                        const char **prot, int nprot) {
+                        const char **prot, int nprot, int allow_net_resolver) {
     if (abi < MIN_ABI) {
         fprintf(stderr, "landlock abi %d below required %d\n", abi, MIN_ABI);
         return -1;
@@ -277,6 +300,20 @@ static int apply_domain(int abi, const char *attempt, const char **ro, int nro,
         close(ruleset);
         return -1;
     }
+    if (allow_net_resolver) {
+        /* Network profile only: glibc resolver + OpenSSL trust store. */
+        if (add_ro_file(ruleset, "/etc/resolv.conf") != 0 ||
+            add_ro_file(ruleset, "/etc/nsswitch.conf") != 0 ||
+            add_ro_file(ruleset, "/etc/hosts") != 0 ||
+            add_ro_file(ruleset, "/etc/protocols") != 0 ||
+            add_ro_file(ruleset, "/etc/services") != 0 ||
+            add_ro_file(ruleset, "/etc/ssl/openssl.cnf") != 0 ||
+            add_ro_file(ruleset, "/etc/ssl/certs/ca-certificates.crt") != 0 ||
+            add_ro_dir(ruleset, "/etc/ssl/certs") != 0) {
+            close(ruleset);
+            return -1;
+        }
+    }
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         perror("PR_SET_NO_NEW_PRIVS");
         close(ruleset);
@@ -302,10 +339,11 @@ static int cmd_identity(void) {
 static int cmd_launch(int argc, char **argv) {
     const char *attempt = NULL;
     const char *cgroup_procs = NULL;
-    const char *ro[8];
+    const char *ro[16];
     const char *prot[12];
     int nro = 0;
     int nprot = 0;
+    int allow_net_resolver = 0;
     int argi = 2;
     while (argi < argc) {
         if (strcmp(argv[argi], "--") == 0) {
@@ -316,7 +354,9 @@ static int cmd_launch(int argc, char **argv) {
             attempt = argv[++argi];
         } else if (strcmp(argv[argi], "--cgroup-procs") == 0 && argi + 1 < argc) {
             cgroup_procs = argv[++argi];
-        } else if (strcmp(argv[argi], "--ro") == 0 && argi + 1 < argc && nro < 8) {
+        } else if (strcmp(argv[argi], "--allow-net-resolver") == 0) {
+            allow_net_resolver = 1;
+        } else if (strcmp(argv[argi], "--ro") == 0 && argi + 1 < argc && nro < 16) {
             ro[nro++] = argv[++argi];
         } else if (strcmp(argv[argi], "--protect") == 0 && argi + 1 < argc && nprot < 12) {
             prot[nprot++] = argv[++argi];
@@ -355,7 +395,7 @@ static int cmd_launch(int argc, char **argv) {
         perror("setresgid worker");
         return 82;
     }
-    int applied = apply_domain(abi, attempt, ro, nro, prot, nprot);
+    int applied = apply_domain(abi, attempt, ro, nro, prot, nprot, allow_net_resolver);
     if (applied == -2) {
         return 93;
     }

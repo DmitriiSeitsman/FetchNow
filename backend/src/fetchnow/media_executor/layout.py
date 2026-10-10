@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,7 @@ def job_directory(root: Path, request: Request) -> Path:
 
 
 def covers(root: str, child: str) -> bool:
-    """True when ``root`` is ``child`` or a filesystem prefix of it."""
+    """True when ``root`` is ``child`` or a filesystem prefix of ``child``."""
     root_real = os.path.realpath(root)
     child_real = os.path.realpath(child)
     if root_real == "/":
@@ -118,11 +119,54 @@ def remove_job_directory(path: Path) -> None:
         [sys.executable, "-m", __name__, "remove", str(path)],
         cwd="/",
         capture_output=True,
-        timeout=5,
+        timeout=30,
         check=False,
     )
     if result.returncode:
         raise IdentityError("directory cleanup failed")
+
+
+def measure_tree_bytes(path: Path) -> int:
+    """Measure attempt tree as TOOL_UID:WORKER_GID in a helper process.
+
+    Enumeration/stat failures fail closed (non-zero helper exit). Never treats
+    an inaccessible tree as size 0.
+    """
+    if os.geteuid() != 0:
+        return measure_tree_bytes_as_identity(path)
+    result = subprocess.run(
+        [sys.executable, "-m", __name__, "du", str(path)],
+        cwd="/",
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError("tree_bytes_failed")
+    text = result.stdout.decode("ascii", errors="strict").strip()
+    if not text.isdigit():
+        raise OSError("tree_bytes_malformed")
+    return int(text)
+
+
+def artifact_stat(path: Path) -> tuple[str, int]:
+    """Discover the single output artifact as TOOL_UID:WORKER_GID."""
+    if os.geteuid() != 0:
+        return find_single_artifact(path)
+    result = subprocess.run(
+        [sys.executable, "-m", __name__, "artifact-stat", str(path)],
+        cwd="/",
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError("artifact_stat_failed")
+    text = result.stdout.decode("ascii", errors="strict").strip()
+    name, sep, size_text = text.partition("\t")
+    if not sep or not name or not size_text.isdigit():
+        raise OSError("artifact_stat_malformed")
+    return name, int(size_text)
 
 
 def make_work_root(path: Path) -> None:
@@ -172,6 +216,99 @@ def bind_socket_as_executor(sock: object, path: Path) -> None:
         os.umask(previous)
 
 
+def measure_tree_bytes_as_identity(root: Path) -> int:
+    """Walk *root* with current effective credentials; fail closed on errors."""
+    if root.is_symlink() or not root.is_dir():
+        raise OSError("root")
+    total = 0
+
+    def onerror(err: OSError) -> None:
+        raise err
+
+    for dirpath, dirnames, filenames in os.walk(
+        root, topdown=True, followlinks=False, onerror=onerror
+    ):
+        base = Path(dirpath)
+        try:
+            st_base = os.lstat(base)
+        except OSError as exc:
+            raise OSError(f"stat_failed:{base}") from exc
+        if stat.S_ISLNK(st_base.st_mode):
+            raise OSError(f"symlink_dir:{base}")
+        keep: list[str] = []
+        for name in dirnames:
+            child = base / name
+            try:
+                st = os.lstat(child)
+            except OSError as exc:
+                raise OSError(f"stat_failed:{child}") from exc
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+                continue
+            try:
+                os.listdir(child)
+            except OSError as exc:
+                raise OSError(f"list_failed:{child}") from exc
+            keep.append(name)
+        dirnames[:] = keep
+        for name in filenames:
+            child = base / name
+            try:
+                st = os.lstat(child)
+            except OSError as exc:
+                raise OSError(f"stat_failed:{child}") from exc
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+            total += int(st.st_size)
+    if total < 0:
+        raise OSError("overflow")
+    return total
+
+
+def find_single_artifact(job_dir: Path) -> tuple[str, int]:
+    """Discover the single output-artifact.* using current credentials."""
+    if job_dir.is_symlink() or not job_dir.is_dir():
+        raise OSError("job_dir")
+    try:
+        names = sorted(os.listdir(job_dir))
+    except OSError as exc:
+        raise OSError("list_failed") from exc
+    found: list[tuple[str, int]] = []
+    for name in names:
+        if not name.startswith("output-artifact."):
+            continue
+        path = job_dir / name
+        try:
+            st = os.lstat(path)
+        except OSError as exc:
+            raise OSError(f"stat_failed:{name}") from exc
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            continue
+        found.append((name, int(st.st_size)))
+    if len(found) != 1:
+        raise OSError("artifact_count")
+    return found[0]
+
+
+def _remove_tree_fd(dir_fd: int) -> None:
+    """Bounded fd-relative cleanup. Symlinks are unlinked, never followed."""
+    for name in os.listdir(dir_fd):
+        try:
+            st = os.lstat(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+            child = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd
+            )
+            try:
+                _remove_tree_fd(child)
+            finally:
+                os.close(child)
+            os.rmdir(name, dir_fd=dir_fd)
+        else:
+            os.unlink(name, dir_fd=dir_fd)
+
+
 if __name__ == "__main__":
     # This helper has no RPC entrypoint. All arguments come from the supervisor.
     action, target, *ids = sys.argv[1:]
@@ -182,7 +319,7 @@ if __name__ == "__main__":
         os.setgid(gid)
         os.setuid(uid)
         os.umask(0)
-        directory.mkdir(mode=mode)
+        directory.mkdir(mode=mode, exist_ok=True)
         directory.chmod(mode)
     elif action == "remove":
         os.setgid(WORKER_GID)
@@ -190,13 +327,22 @@ if __name__ == "__main__":
         if directory.is_symlink():
             raise IdentityError("job directory symlink")
         if directory.exists():
-            # fd-relative unlink cannot follow a tool-created link outside the job.
             fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
-                for name in os.listdir(fd):
-                    os.unlink(name, dir_fd=fd)
+                _remove_tree_fd(fd)
             finally:
                 os.close(fd)
             directory.rmdir()
+    elif action == "du":
+        # Drop to attempt identity so measurement matches production DAC.
+        os.setgid(WORKER_GID)
+        os.setuid(TOOL_UID)
+        total = measure_tree_bytes_as_identity(directory)
+        sys.stdout.write(f"{total}\n")
+    elif action == "artifact-stat":
+        os.setgid(WORKER_GID)
+        os.setuid(TOOL_UID)
+        name, size = find_single_artifact(directory)
+        sys.stdout.write(f"{name}\t{size}\n")
     else:
         raise IdentityError("unknown helper operation")

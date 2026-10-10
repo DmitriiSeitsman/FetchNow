@@ -197,7 +197,8 @@ class MediaJobWorkerRunner:
             "Media job worker started env=%s poll_interval=%s "
             "inspection_concurrency=%s download_concurrency=%s "
             "media_jobs_enabled=%s media_inspection_enabled=%s "
-            "media_downloads_enabled=%s",
+            "media_downloads_enabled=%s media_executor_enabled=%s "
+            "media_net_executor_enabled=%s",
             self._settings.app_env,
             self._settings.worker_poll_interval_seconds,
             self._settings.worker_concurrency,
@@ -205,6 +206,8 @@ class MediaJobWorkerRunner:
             self._settings.media_jobs_enabled,
             self._settings.media_inspection_enabled,
             self._settings.media_downloads_enabled,
+            self._settings.media_executor_enabled,
+            self._settings.media_net_executor_enabled,
         )
         try:
             while not self._stop_event.is_set():
@@ -667,7 +670,12 @@ class MediaJobWorkerRunner:
             provider_registry=self._providers,
             validator=self._validator,
         )
-        metadata = await self._inspection.inspect(resolution)
+        metadata = await self._inspection.inspect(
+            resolution,
+            job_id=str(snap.job_id),
+            attempt=snap.attempt_count,
+            fence=snap.fence,
+        )
         return media_metadata_to_jsonable(
             metadata,
             max_bytes=self._settings.media_job_result_max_bytes,

@@ -33,9 +33,18 @@ class MediaInspectionService:
         self._settings = settings
         self._registry = registry
 
-    async def inspect(self, resolution: ResolutionResult) -> MediaMetadata:
+    async def inspect(
+        self,
+        resolution: ResolutionResult,
+        *,
+        job_id: str | None = None,
+        attempt: int | None = None,
+        fence: int | None = None,
+    ) -> MediaMetadata:
         """Inspect media metadata for a previously resolved provider URL."""
-        draft = await self.inspect_draft(resolution)
+        draft = await self.inspect_draft(
+            resolution, job_id=job_id, attempt=attempt, fence=fence
+        )
         target_canonical = draft.canonical_provider_url
         return project_metadata(
             draft,
@@ -45,7 +54,14 @@ class MediaInspectionService:
             trusted_provider_id=draft.provider_id,
         )
 
-    async def inspect_draft(self, resolution: ResolutionResult) -> ExtractedMediaDraft:
+    async def inspect_draft(
+        self,
+        resolution: ResolutionResult,
+        *,
+        job_id: str | None = None,
+        attempt: int | None = None,
+        fence: int | None = None,
+    ) -> ExtractedMediaDraft:
         """Run the same binding/validation as inspect, returning the draft.
 
         Used by download execution to build an ephemeral
@@ -72,7 +88,12 @@ class MediaInspectionService:
         binding = self._registry.resolve(
             provider_id=target.provider_id, hostname=target.hostname
         )
-        draft = await binding.extractor.extract(target)
+        draft = await binding.extractor.extract(
+            target,
+            job_id=job_id,
+            attempt=attempt,
+            fence=fence,
+        )
 
         if draft.provider_id != target.provider_id:
             raise_inspection_error(

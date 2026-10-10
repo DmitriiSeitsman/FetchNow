@@ -59,6 +59,7 @@ from fetchnow.media_executor.client import ExecutorCallError, UnixExecutorClient
 from fetchnow.media_executor.constants import INPUT_AUDIO, INPUT_VIDEO, OUTPUT_MUX
 from fetchnow.media_executor.handoff import HandoffError, copy_regular
 from fetchnow.media_executor.layout import job_directory
+from fetchnow.media_executor.net_client import run_download_to_dir
 from fetchnow.media_executor.protocol import Request
 from fetchnow.media_inspection.errors import InspectionError
 from fetchnow.media_inspection.models import MediaKind
@@ -77,6 +78,15 @@ def offline_mux_backend(settings: Settings) -> str:
     if settings.media_executor_enabled:
         return "executor"
     return "inprocess"
+
+
+def network_download_op(output_template: str) -> str:
+    """Map worker output layout to SEC-09 network RPC op names."""
+    if output_template.startswith("video/"):
+        return "download_video"
+    if output_template.startswith("audio/"):
+        return "download_audio"
+    return "download_progressive"
 
 
 _OUTPUT_TEMPLATE = "output/artifact.%(ext)s"
@@ -455,7 +465,12 @@ class DownloadExecutor:
                 else MediaOperation.DOWNLOAD_VIDEO
             ),
         )
-        draft = await self._inspection.inspect_draft(resolution)
+        draft = await self._inspection.inspect_draft(
+            resolution,
+            job_id=str(snap.job_id),
+            attempt=snap.attempt_count,
+            fence=snap.fence,
+        )
         if (
             draft.provider_id != snap.provider_id
             or draft.media_id != snap.media_id
@@ -641,8 +656,10 @@ class DownloadExecutor:
         self,
         snap: DownloadClaimSnapshot,
         factory: Any,
+        *,
+        client: UnixExecutorClient | None = None,
     ) -> ProcessResult:
-        client = await self._executor_client_for()
+        active = client if client is not None else await self._executor_client_for()
         started = asyncio.Event()
 
         async def _go() -> ProcessResult:
@@ -664,7 +681,7 @@ class DownloadExecutor:
                 # A lost/expired RPC must not leave the remote tool running until
                 # its independent operation deadline. Cancellation is not a retry.
                 with contextlib.suppress(ExecutorCallError):
-                    await client.cancel(
+                    await active.cancel(
                         job_id=str(snap.job_id),
                         attempt=snap.attempt_count,
                         fence=snap.fence,
@@ -672,7 +689,7 @@ class DownloadExecutor:
                 raise
             except asyncio.CancelledError:
                 with contextlib.suppress(ExecutorCallError):
-                    await client.cancel(
+                    await active.cancel(
                         job_id=str(snap.job_id),
                         attempt=snap.attempt_count,
                         fence=snap.fence,
@@ -955,6 +972,99 @@ class DownloadExecutor:
             self._settings.media_download_min_free_bytes + remaining
         )
 
+    async def _net_executor_client_for(self) -> UnixExecutorClient:
+        return UnixExecutorClient(Path(self._settings.media_net_executor_socket))
+
+    async def _run_exact_ytdlp_via_net(
+        self,
+        snap: DownloadClaimSnapshot,
+        *,
+        token: str,
+        output_template: str,
+        output_dir: str,
+        max_bytes: int,
+        min_free_headroom: int,
+        expected_bytes: int | None,
+        media_kind: MediaKind,
+    ) -> None:
+        """SEC-09 network executor path. Unavailable executor fails closed."""
+        settings = self._settings
+        self._store.ensure_min_free(
+            settings.media_download_min_free_bytes + max(0, int(min_free_headroom))
+        )
+        started, completed, failed, progress = _ytdlp_stage(
+            output_template, media_kind=media_kind
+        )
+        emit_stage_event(
+            started,
+            download_job_id=str(snap.job_id),
+            attempt_count=snap.attempt_count,
+            fence_token=snap.fence,
+            stage=progress.value,
+        )
+        await self._advance_progress(snap, progress)
+        client = await self._net_executor_client_for()
+        op = network_download_op(output_template)
+        try:
+            result = await self._call_executor(
+                snap,
+                lambda: run_download_to_dir(
+                    client=client,
+                    work_root=Path(settings.media_net_executor_work_root),
+                    dest_dir=Path(output_dir),
+                    op=op,
+                    job_id=str(snap.job_id),
+                    attempt=snap.attempt_count,
+                    fence=snap.fence,
+                    url=snap.canonical_provider_url,
+                    provider_id=snap.provider_id,
+                    format_token=token,
+                    timeout_seconds=settings.media_download_timeout_seconds,
+                    max_bytes=max_bytes,
+                    min_free_bytes=(
+                        settings.media_download_min_free_bytes
+                        + max(0, int(min_free_headroom))
+                        + max_bytes  # headroom for executor→worker handoff copy
+                    ),
+                ),
+                client=client,
+            )
+        except ExecutorCallError as exc:
+            reason = (
+                "NET_EXECUTOR_UNAVAILABLE"
+                if exc.code == "unavailable"
+                else "NET_EXECUTOR_PROTOCOL"
+            )
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+                internal_reason=reason,
+            )
+        except HandoffError:
+            raise_download_error(
+                DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+                internal_reason="NET_EXECUTOR_HANDOFF",
+            )
+        try:
+            final_bytes = ArtifactStore.output_tree_byte_size(Path(output_dir))
+            if expected_bytes is not None and final_bytes > max_bytes:
+                raise_download_error(
+                    DownloadErrorCode.DOWNLOAD_TOO_LARGE,
+                    internal_reason="NET_OUTPUT_OVER_CAP",
+                )
+        except DownloadError:
+            raise
+        except Exception:
+            logger.info("download_progress_final_flush_failed outcome=transient")
+        self._finish_tool_stage(
+            snap,
+            result,
+            completed=completed,
+            failed=failed,
+            stage=progress.value,
+            timeout_code=DownloadErrorCode.DOWNLOAD_TIMEOUT,
+            nonzero_code=DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
+        )
+
     async def _run_exact_ytdlp(
         self,
         snap: DownloadClaimSnapshot,
@@ -975,6 +1085,18 @@ class DownloadExecutor:
                 DownloadErrorCode.DOWNLOAD_TOO_LARGE,
                 internal_reason="STAGE_CAP_INVALID",
             )
+        if settings.media_net_executor_enabled:
+            await self._run_exact_ytdlp_via_net(
+                snap,
+                token=token,
+                output_template=output_template,
+                output_dir=output_dir,
+                max_bytes=cap,
+                min_free_headroom=min_free_headroom,
+                expected_bytes=expected_bytes,
+                media_kind=media_kind,
+            )
+            return
         try:
             executable = validate_ytdlp_executable(settings.media_inspection_ytdlp_path)
         except InspectionError:

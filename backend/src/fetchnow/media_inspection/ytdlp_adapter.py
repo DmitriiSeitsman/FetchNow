@@ -186,13 +186,105 @@ class YtDlpMetadataExtractor:
     def extractor_id(self) -> str:
         return self._extractor_id
 
-    async def extract(self, target: InspectionTarget) -> ExtractedMediaDraft:
+    async def extract(
+        self,
+        target: InspectionTarget,
+        *,
+        job_id: str | None = None,
+        attempt: int | None = None,
+        fence: int | None = None,
+    ) -> ExtractedMediaDraft:
         settings = self._settings
         if not settings.media_inspection_enabled:
             raise_inspection_error(
                 InspectionErrorKind.INSPECTION_TOOL_UNAVAILABLE,
                 internal_reason="INSPECTION_DISABLED",
             )
+        if settings.media_net_executor_enabled:
+            return await self._extract_via_net(
+                target, job_id=job_id, attempt=attempt, fence=fence
+            )
+        return await self._extract_local(target)
+
+    async def _extract_via_net(
+        self,
+        target: InspectionTarget,
+        *,
+        job_id: str | None,
+        attempt: int | None,
+        fence: int | None,
+    ) -> ExtractedMediaDraft:
+        from pathlib import Path
+
+        from fetchnow.media_executor.client import ExecutorCallError, UnixExecutorClient
+        from fetchnow.media_executor.net_client import run_inspect_metadata
+
+        settings = self._settings
+        if (
+            not isinstance(job_id, str)
+            or type(attempt) is not int
+            or type(fence) is not int
+        ):
+            raise_inspection_error(
+                InspectionErrorKind.INTERNAL_INSPECTION_ERROR,
+                internal_reason="NET_EXECUTOR_CONTEXT_REQUIRED",
+            )
+        client = UnixExecutorClient(Path(settings.media_net_executor_socket))
+        try:
+            result = await run_inspect_metadata(
+                client=client,
+                work_root=Path(settings.media_net_executor_work_root),
+                job_id=job_id,
+                attempt=attempt,
+                fence=fence,
+                url=target.tool_url,
+                provider_id=target.provider_id,
+                timeout_seconds=settings.media_inspection_timeout_seconds,
+            )
+        except ExecutorCallError as exc:
+            reason = (
+                "NET_EXECUTOR_UNAVAILABLE"
+                if exc.code == "unavailable"
+                else "NET_EXECUTOR_PROTOCOL"
+            )
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_TOOL_UNAVAILABLE,
+                internal_reason=reason,
+            )
+        if result.timed_out:
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_TIMEOUT,
+                internal_reason="PROCESS_TIMEOUT",
+            )
+        if result.cancelled:
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_CANCELLED,
+                internal_reason="PROCESS_CANCELLED",
+            )
+        if result.exit_code != 0:
+            raise_inspection_error(
+                InspectionErrorKind.INSPECTION_MEDIA_UNAVAILABLE,
+                internal_reason="PROCESS_NONZERO",
+            )
+        return parse_ytdlp_json(
+            result.stdout,
+            expected_provider_id=target.provider_id,
+            expected_canonical_url=target.canonical_provider_url,
+            expected_media_id=target.media_id,
+            allowed_extractor_keys=self._allowed_extractor_keys,
+            allowed_hostnames=target.allowed_hostnames,
+            max_height=settings.media_inspection_max_height,
+            max_width=settings.media_inspection_max_width,
+            max_bytes=settings.max_source_file_bytes,
+            max_duration=settings.max_source_duration_seconds,
+            tool_version=self._tool_version,
+            max_json_depth=settings.media_inspection_json_max_depth,
+            max_json_nodes=settings.media_inspection_json_max_nodes,
+            max_format_entries=settings.media_inspection_max_format_entries,
+        )
+
+    async def _extract_local(self, target: InspectionTarget) -> ExtractedMediaDraft:
+        settings = self._settings
         executable = validate_ytdlp_executable(
             settings.media_inspection_ytdlp_path
         )

@@ -48,7 +48,15 @@ class _StubExtractor:
     def extractor_id(self) -> str:
         return "stub"
 
-    async def extract(self, target: InspectionTarget) -> ExtractedMediaDraft:
+    async def extract(
+        self,
+        target: InspectionTarget,
+        *,
+        job_id: str | None = None,
+        attempt: int | None = None,
+        fence: int | None = None,
+    ) -> ExtractedMediaDraft:
+        del job_id, attempt, fence
         self.calls.append(target)
         self.mutable_hosts.add("evil.example")
         return self._draft

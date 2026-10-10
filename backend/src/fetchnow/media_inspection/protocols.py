@@ -41,7 +41,14 @@ class MediaExtractor(Protocol):
     def extractor_id(self) -> str:
         """Stable extractor adapter id (token-shaped)."""
 
-    async def extract(self, target: InspectionTarget) -> ExtractedMediaDraft:
+    async def extract(
+        self,
+        target: InspectionTarget,
+        *,
+        job_id: str | None = None,
+        attempt: int | None = None,
+        fence: int | None = None,
+    ) -> ExtractedMediaDraft:
         """Extract bounded metadata for a validated provider target."""
 
 

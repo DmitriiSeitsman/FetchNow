@@ -1,0 +1,29 @@
+# SEC-09 egress CONNECT proxy. Stdlib only. Opt-in Compose profile.
+FROM python:3.14.7-slim-trixie
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libssl3t64=3.5.7-1~deb13u3 openssl=3.5.7-1~deb13u3 \
+        openssl-provider-legacy=3.5.7-1~deb13u3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.14/ensurepip
+
+WORKDIR /opt/fetchnow
+COPY src/fetchnow/__init__.py /opt/fetchnow/src/fetchnow/__init__.py
+RUN mkdir -p /opt/fetchnow/src/fetchnow/url
+COPY src/fetchnow/url/destination.py /opt/fetchnow/src/fetchnow/url/destination.py
+RUN printf '%s\n' '"""URL helpers for egress-proxy image."""' \
+      > /opt/fetchnow/src/fetchnow/url/__init__.py
+COPY src/fetchnow/media_egress_proxy /opt/fetchnow/src/fetchnow/media_egress_proxy
+RUN printf '%s\n' '"""Egress proxy package marker."""' \
+      > /opt/fetchnow/src/fetchnow/media_egress_proxy/__init__.py
+
+ENV PYTHONPATH=/opt/fetchnow/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    EGRESS_LISTEN_HOST=0.0.0.0 \
+    EGRESS_LISTEN_PORT=8888
+
+# No published host ports in Compose. Listen only on media-net.
+USER 65534:65534
+ENTRYPOINT ["python", "-m", "fetchnow.media_egress_proxy"]

@@ -1,0 +1,77 @@
+name: SEC-09 media-net executor
+
+# Prepared native Compose gate. Does NOT run on ordinary push.
+# One authorized exact-commit push (or workflow_dispatch) is required separately.
+# Reruns are disabled. Same-artifact Trivy shares Image IDs from one build.
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+    paths: [.github/workflows/sec09-media-net-executor.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    if: >-
+      github.run_attempt == 1 &&
+      (github.event_name == 'workflow_dispatch' ||
+       startsWith(github.event.head_commit.message, 'feat(security): SEC-09 native compose [native-once-'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+      - name: Install Trivy 0.74.0 (checksum-pinned)
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset=trivy_0.74.0_Linux-64bit.tar.gz
+              want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+              ;;
+            aarch64|arm64)
+              asset=trivy_0.74.0_Linux-ARM64.tar.gz
+              want=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5
+              ;;
+            *)
+              echo "unsupported architecture $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
+      - name: Same-artifact native Compose acceptance
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" python3 backend/tests/media_executor/network_acceptance.py \
+            --output "$RUNNER_TEMP/sec09-media-net" \
+            --trivy-bin "$RUNNER_TEMP/trivy-bin/trivy"
+      - name: Cleanup disposable resources
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo python3 backend/tests/media_executor/network_acceptance.py \
+            --output "$RUNNER_TEMP/sec09-media-net" \
+            --cleanup
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec09-media-net-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sec09-media-net/
+          if-no-files-found: error

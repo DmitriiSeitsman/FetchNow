@@ -1,7 +1,5 @@
-"""Isolated offline media executor (SEC-08). Default off in the worker."""
+"""Isolated media executor (SEC-08 offline / SEC-09 network). Default off."""
 
 from __future__ import annotations
 
-from fetchnow.media_executor.server import ExecutorApp
-
-__all__ = ["ExecutorApp"]
+__all__: list[str] = []

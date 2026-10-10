@@ -583,6 +583,20 @@ class Settings(BaseSettings):
         default="",
         alias="MEDIA_EXECUTOR_WORK_ROOT",
     )
+    # SEC-09 network executor. Default off. When true, yt-dlp inspection and
+    # downloads use media-net-executor; failures do not fall back in-process.
+    media_net_executor_enabled: bool = Field(
+        default=False,
+        alias="MEDIA_NET_EXECUTOR_ENABLED",
+    )
+    media_net_executor_socket: str = Field(
+        default="",
+        alias="MEDIA_NET_EXECUTOR_SOCKET",
+    )
+    media_net_executor_work_root: str = Field(
+        default="",
+        alias="MEDIA_NET_EXECUTOR_WORK_ROOT",
+    )
 
     @field_validator("url_allowed_schemes", mode="before")
     @classmethod
@@ -792,6 +806,21 @@ class Settings(BaseSettings):
                 )
             self.media_executor_socket = socket_path
             self.media_executor_work_root = work_root
+        if self.media_net_executor_enabled:
+            net_socket = self.media_net_executor_socket.strip()
+            net_root = self.media_net_executor_work_root.strip()
+            if not net_socket or not os.path.isabs(net_socket):
+                raise ValueError(
+                    "MEDIA_NET_EXECUTOR_SOCKET must be absolute when "
+                    "net executor is enabled"
+                )
+            if not net_root or not os.path.isabs(net_root):
+                raise ValueError(
+                    "MEDIA_NET_EXECUTOR_WORK_ROOT must be absolute when "
+                    "net executor is enabled"
+                )
+            self.media_net_executor_socket = net_socket
+            self.media_net_executor_work_root = net_root
         return self
 
 

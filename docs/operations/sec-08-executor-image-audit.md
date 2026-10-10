@@ -257,3 +257,13 @@ not performed.
 Policy `fail` because of fixable `CVE-2026-103111` on `libpcre2-8-0`. Unfixed
 HIGH/CRITICAL remain, including the seven AFFECTED ffmpeg media IDs. This is
 not rollout permission and not residual acceptance.
+
+## Same-artifact re-audit attempt — 2026-10-04: BLOCKED
+
+Intended follow-up: pin `libpcre2-8-0=10.46-1~deb13u3`, exclude C source /
+`__pycache__` from runtime, and scan the same Image ID that native acceptance
+uses. Commit `1f128acfc4498d5083d2838c9719686c4508acd9` was pushed, but the
+authorized native/audit job was skipped (exact commit-message trigger mismatch
+due to a `Co-authored-by` trailer). No new scan evidence. Previous FINDINGS on
+disposable artifact `f370208c…` remain the last completed audit record and are
+not a same-artifact native+audit result for the fixed Dockerfile.
