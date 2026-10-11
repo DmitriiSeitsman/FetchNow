@@ -86,6 +86,49 @@ def checked(argv: list[str], cwd: Path) -> str:
     return result.stdout_text.strip()
 
 
+def _marker_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
+
+
+def gateway_fail_once(activate_gateway):
+    """Fail the target gateway activation once; later calls stay real.
+
+    Rollback recreates the previous gateway through the same patched symbol.
+    Only the first call is the intended injection. Further calls delegate so
+    rollback can reach rolled_back instead of dying on the same error.
+    """
+    injection: dict[str, object] = {
+        "gateway_injections": 0,
+        "gateway_delegations": 0,
+        "phase": None,
+        "error": "test-only gateway injection",
+    }
+
+    def injected(**kwargs):
+        if _marker_int(injection["gateway_injections"]) == 0:
+            injection["gateway_injections"] = 1
+            injection["phase"] = "activating_gateway"
+            raise ActivateError(str(injection["error"]))
+        injection["gateway_delegations"] = (
+            _marker_int(injection["gateway_delegations"]) + 1
+        )
+        return activate_gateway(**kwargs)
+
+    return injected, injection
+
+
+def intended_gateway_injection_reached(injection: dict[str, object]) -> bool:
+    """True only when the target failed once and rollback delegated afterward."""
+    return (
+        injection.get("gateway_injections") == 1
+        and _marker_int(injection.get("gateway_delegations")) >= 1
+        and injection.get("phase") == "activating_gateway"
+        and injection.get("error") == "test-only gateway injection"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -187,17 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     def fail_gateway_once(revision: str) -> tuple[RolloutResult, dict[str, object]]:
         from fetchnow_release import rollout
 
-        injection: dict[str, object] = {
-            "gateway_injections": 0,
-            "phase": None,
-            "error": "test-only gateway injection",
-        }
-
-        def injected(**kwargs):
-            injection["gateway_injections"] = int(injection["gateway_injections"]) + 1
-            injection["phase"] = "activating_gateway"
-            raise ActivateError(str(injection["error"]))
-
+        injected, injection = gateway_fail_once(rollout.activate_gateway)
         with patch.object(rollout, "activate_gateway", injected):
             result = rollout_release(inp(revision, active=True))
         return result, injection
@@ -362,9 +395,15 @@ def main(argv: list[str] | None = None) -> int:
         record(
             "off-to-on-rollback",
             failed.status == STATUS_ROLLED_BACK
-            and off_injection["gateway_injections"] == 1
-            and off_injection["phase"] == "activating_gateway"
-            and any("test-only gateway injection" in m for m in failed.messages)
+            and intended_gateway_injection_reached(off_injection)
+            and any(
+                "target rollout error: test-only gateway injection" in m
+                for m in failed.messages
+            )
+            and not any(
+                "rollback failed: test-only gateway injection" in m
+                for m in failed.messages
+            )
             and not sidecars()
             and current_path(deploy).read_bytes() == before
             and not media_state().activation,
@@ -402,9 +441,15 @@ def main(argv: list[str] | None = None) -> int:
         record(
             "on-to-on-rollback",
             failed.status == STATUS_ROLLED_BACK
-            and on_injection["gateway_injections"] == 1
-            and on_injection["phase"] == "activating_gateway"
-            and any("test-only gateway injection" in m for m in failed.messages)
+            and intended_gateway_injection_reached(on_injection)
+            and any(
+                "target rollout error: test-only gateway injection" in m
+                for m in failed.messages
+            )
+            and not any(
+                "rollback failed: test-only gateway injection" in m
+                for m in failed.messages
+            )
             and current_path(deploy).read_bytes() == before
             and actual_ids == previous_ids
             and media_state().activation

@@ -21,7 +21,7 @@ WORKFLOW = ROOT / ".github/workflows/sec09-release-media-activation.yml"
 HARNESS = ROOT / "scripts/release_media_activation_integration_test.py"
 EXPECTED_SUBJECT = (
     "test(security): SEC-08/09 native release transaction "
-    "[native-once-20261011-composemem]"
+    "[native-once-20261011-gatewayonce]"
 )
 
 
@@ -75,8 +75,9 @@ def test_workflow_fallback_marks_absent_native_not_pass() -> None:
 def test_workflow_exact_subject_marker_unique() -> None:
     text = _workflow_text()
     assert EXPECTED_SUBJECT in text
-    assert "[native-once-20261011-composemem]" in text
-    # Prior markers must not authorize this compose-memory fix run.
+    assert "[native-once-20261011-gatewayonce]" in text
+    # Prior markers must not authorize this gateway-once injection fix run.
+    assert "[native-once-20261011-composemem]" not in text
     assert "[native-once-20261011-v4overlay]" not in text
     assert "[native-once-20261011-diag]" not in text
     assert "[native-once-20261011-uvpath]" not in text

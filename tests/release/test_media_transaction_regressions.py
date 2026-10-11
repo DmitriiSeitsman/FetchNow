@@ -358,6 +358,31 @@ def test_native_harness_uses_real_bounded_command(tmp_path):
     )
 
 
+def test_gateway_injection_fails_target_once_then_delegates_rollback():
+    import release_media_activation_integration_test as harness
+    from fetchnow_release.activate import ActivateError
+
+    calls: list[str] = []
+
+    def real_gateway(**_kwargs):
+        calls.append("real")
+        return "restored"
+
+    injected, marker = harness.gateway_fail_once(real_gateway)
+    with pytest.raises(ActivateError, match="test-only gateway injection"):
+        injected()
+    assert injected() == "restored"
+    assert calls == ["real"]
+    assert harness.intended_gateway_injection_reached(marker)
+    assert marker["gateway_injections"] == 1
+    assert marker["gateway_delegations"] == 1
+
+    always, poisoned = harness.gateway_fail_once(real_gateway)
+    with pytest.raises(ActivateError):
+        always()
+    assert not harness.intended_gateway_injection_reached(poisoned)
+
+
 def test_active_recovery_requires_budget_and_proxy_target():
     raw = active_plan().to_dict()
     assert media.media_plan_from_journal(raw).resource_budget == raw["resource_budget"]
