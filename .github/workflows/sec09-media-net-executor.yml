@@ -4,6 +4,7 @@ name: SEC-09 media-net executor
 # One authorized exact-commit push (or workflow_dispatch) is required separately.
 # Reruns are disabled. Same-artifact Trivy shares Image IDs from one build.
 # Corrective run records partial matrix verdicts and sanitized RPC stderr.
+# One scoped proxy pcre2 remediation run; earlier artifacts remain separate.
 on:
   workflow_dispatch:
   push:

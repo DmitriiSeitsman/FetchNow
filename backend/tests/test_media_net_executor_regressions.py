@@ -24,6 +24,20 @@ _URL = "https://vk.com/video-1_2"
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_proxy_pcre2_pin_matches_executor_security_fix() -> None:
+    pin = "libpcre2-8-0=10.46-1~deb13u3"
+    for name in (
+        "Dockerfile.media-egress-proxy",
+        "Dockerfile.media-net-executor",
+        "Dockerfile.media-executor",
+    ):
+        text = (ROOT / "backend" / name).read_text()
+        assert pin in text, name
+        assert "--no-install-recommends" in text, name
+    proxy = (ROOT / "backend/Dockerfile.media-egress-proxy").read_text()
+    assert "apt-get upgrade" not in proxy
+
+
 def test_f1_dockerfile_import_closure_markers() -> None:
     offline = (ROOT / "backend/Dockerfile.media-executor").read_text()
     net = (ROOT / "backend/Dockerfile.media-net-executor").read_text()

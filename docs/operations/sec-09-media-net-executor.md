@@ -229,3 +229,67 @@ export regression tests and this document are included. Locks remain unchanged.
 Previous run verdicts above stay separate. No automatic retry, merge, deploy,
 VEX/exception change or residual-risk acceptance is authorized by this step.
 The new remote result is pending; this record does not claim a security PASS.
+
+### Run 38124451577 — native functional PASS / image findings / export PASS
+
+One corrective commit `e7cb87e20861361ab8777aeb022c82c80b979b46`, one push,
+attempt 1, event push. Run:
+https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38124451577
+Job 114425786517: 2026-10-11T08:20:27Z–08:23:05Z, conclusion **failure**.
+No rerun or dispatch. Prior run outcomes above are not superseded.
+
+Native x86_64 / Docker 28.0.4 / systemd driver / cgroup v2. **N1–N12:
+12 PASS**, confirmed from downloaded result bytes (not just CI stdout).
+Import closure checks for all three images also PASS. N11 uses the real worker
+watchdog with simulated repository lease loss; its database READY transaction
+is explicitly NOT_RUN, not full DB publication evidence. This native run is
+not a full backend suite or production acceptance.
+
+Trivy **0.74.0** scanned all three exact functional-test image IDs on
+linux/amd64. Report image ID/platform matched local identity in every scan;
+schema/inventory completeness passed, no technical scanner errors. DB v2
+UpdatedAt `2026-10-11T07:05:14.103977+00:00` (same across scans).
+
+- Network: `sha256:927e0ec87ceb26f0621574a4e24747b6efb27b0844436538dd012ae37e057d5c`;
+  scanned 08:22:16Z; **0 fixable HC**, 44 unfixed HC instances / 8 unique IDs;
+  `needs_owner_decision`, adapter exit 2.
+- Proxy: `sha256:4a9290152270ab808fd45e674ef3a5935f3fa3b4c53604c962335149b877060a`;
+  scanned 08:22:23Z; **1 fixable HIGH**, 44 unfixed HC instances / 8 unique IDs;
+  `fail`, adapter exit 1. Fixable `CVE-2026-103111`, `libpcre2-8-0`
+  `10.46-1~deb13u2` → `10.46-1~deb13u3`, as recorded by the scan. The proxy
+  Dockerfile lacks the existing executor pcre2 pin. Remediation is NOT applied
+  in this one-run export correction; it requires a scoped follow-up build/scan.
+- Offline: `sha256:92628ce72b2f7b5104e0d29a40bd49fa99e3422d41c8dce6409aa60fc148c4d5`;
+  scanned 08:22:30Z; **0 fixable HC**, 216 unfixed HC instances / 50 unique IDs;
+  `needs_owner_decision`, adapter exit 2.
+
+N13 policy verdict remains **FAIL**, overall exit 1. Counts are this dated scan,
+not proof that prior residuals were fixed or that reachability classification
+is unchanged. No VEX/exception or residual acceptance was applied.
+
+Cleanup, bounded evidence export and upload all **PASS**; `cleanup_errors=[]`.
+Artifact `sec09-media-net-38124451577-1`, ID 11696925410, ZIP digest:
+`sha256:d9c6612641dea0bdefec0b6a5338991abadb6a71bbe55587d30129de635db4c2`.
+Downloaded `result.json` SHA-256 (matches `hashes.json` exactly):
+`656c0a87570d70cb9de2f54257b0edfdcae745606ace4afd101f1fee83116b9d`.
+Local evidence: `/tmp/fetchnow-sec09-native-38124451577.vLADq6/` (temporary;
+GitHub run/artifact is the independent reference, no raw scanner cache in git).
+
+This result record is a local unstaged append after the single authorized push.
+Staging empty. No PR creation, merge, SSH, deploy, production/TEST/LIVE/SEO change.
+**SEC-09 — NATIVE FUNCTIONAL ACCEPTANCE PASS / SAME-ARTIFACT AUDIT FINDINGS /
+EVIDENCE EXPORT VERIFIED; NOT READY FOR SECURITY ACCEPTANCE OR ROLLOUT.**
+
+### Scoped proxy pcre2 remediation — 2026-10-11
+
+Owner requested continuation after run 38124451577. Apply only the existing
+executor pin `libpcre2-8-0=10.46-1~deb13u3` to the proxy runtime apt install;
+no blanket upgrade, app lock change, policy relaxation or residual acceptance.
+A regression checks the identical security pin across the three Dockerfiles.
+One new corrective commit/push and native same-artifact run are planned. The
+prior finding remains the prior artifact's verdict until a new scan proves the
+fix on a new image ID. Native and image-risk verdicts remain separate.
+
+Fresh local regression: **183 passed**, no skips (diagnostic Python 3.12.13 /
+pytest 8.4.1, not a full frozen backend suite). Ruff, actionlint and
+`git diff --check` PASS. The three dependency artifact hashes remain unchanged.
