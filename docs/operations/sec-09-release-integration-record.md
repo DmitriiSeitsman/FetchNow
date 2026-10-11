@@ -1,9 +1,24 @@
 # SEC-08/09 Release Integration — Implementation Record
 
-Status: **NATIVE ACCEPTANCE IN PROGRESS** (local gates green; one native push run)  
-Not READY FOR PRODUCTION / ROLLOUT. Residual acceptance / VEX unchanged.  
-Date: 2026-10-11. Worktree `/Users/dina/projects/FetchNow-sec09`.  
-Baseline HEAD before this commit: `e69b5d3a9ff4c779bacbf22f125d21eb90c362c6`.
+Status: **NATIVE ACCEPTANCE RETRY** (workflow bootstrap fix after run 38146059444)
+Not READY FOR PRODUCTION / ROLLOUT. Residual acceptance / VEX unchanged.
+Date: 2026-10-11. Worktree `/Users/dina/projects/FetchNow-sec09`.
+
+### Prior native attempt (retained)
+
+- Run: https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38146059444
+- Verdict: **workflow bootstrap FAIL; native matrix NOT_RUN**
+- Cause: same-step `uv --version` after `$GITHUB_PATH` append (exit 127)
+- SHA: `a9c67492eb34eee867172ad0f9d92d6e309f592b`
+- New run does not rewrite this result.
+
+### Bootstrap fix (this commit)
+
+- Absolute `"$RUNNER_TEMP/${asset%.tar.gz}/uv"` in the install step; `$GITHUB_PATH` kept for later steps.
+- Matrix step no longer pre-creates the evidence leaf; harness `exist_ok=False` retained.
+- Missing `result.json` fallback creates the directory only then, writes FAIL/`native_result=absent`, preserves original exit code.
+- Exact-subject marker: `[native-once-20261011-uvpath]`.
+- Offline tests: `tests/release/test_sec09_release_workflow_bootstrap.py`.
 
 ## Contracts implemented
 
@@ -157,7 +172,8 @@ Total pending manifest: 41 paths, including preserved earlier dirty docs.
 - media_state.py: `e09d5aa2060b38d7c8e43ec55e22fea4f298d5466666c0821de706b5a71cdbfd`
 - resource_budget.py: `f8dfe0d6cdb837589fcfa986c1c9faf8ba93ba6b8949bd6c40814651f2f28649`
 - release_media_activation_integration_test.py: `cb713c4ecf9a586f855e1988996478ff9d3798b727ccd05035079db967e5bfa6`
-- sec09-release-media-activation.yml: `0e6fb3bc891359d29420741cb5e59e278e2ed00538478abbe19df7b6a5a8c5ee`
+- sec09-release-media-activation.yml: `bc8b4597e1d288ca1c41ce86267491685313d729b82634351586ab7ff91ebbe8`
+- test_sec09_release_workflow_bootstrap.py: `c70f791f065bc217717ccd17e336f36e6748b20929cc0fd3fe2884c8e980cc78`
 - test_media_transaction_regressions.py: `dd3bef8a58350443d7167f34545427f9a79160fab083db1566b07120911be0ef`
 
 **STOP:** local corrective evidence only. Native release acceptance, current
