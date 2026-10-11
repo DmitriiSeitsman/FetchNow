@@ -106,6 +106,39 @@ RUNTIME_WIRING: dict[str, tuple[str, ...]] = {
     "MEDIA_MUXING_ENABLED": ("worker",),
 }
 
+# SEC-08/09 infrastructure activation keys. Classified and documented, but
+# never allowlisted for config-only rollout — enabling them changes compose
+# topology (images/overlays/prerequisites) and requires media_activation.
+INFRASTRUCTURE_ACTIVATION_WIRING: dict[str, tuple[str, ...]] = {
+    "MEDIA_EXECUTOR_ENABLED": ("worker",),
+    "MEDIA_EXECUTOR_MAX_JOBS": ("media-executor", "media-net-executor"),
+    "MEDIA_EXECUTOR_SOCKET": ("worker",),
+    "MEDIA_EXECUTOR_WORK_ROOT": ("worker",),
+    "MEDIA_NET_EXECUTOR_ENABLED": ("worker",),
+    "MEDIA_NET_EXECUTOR_SOCKET": ("worker",),
+    "MEDIA_NET_EXECUTOR_WORK_ROOT": ("worker",),
+    "EGRESS_DENY_CIDRS": ("egress-proxy",),
+    "EGRESS_DENY_IPS": ("egress-proxy",),
+}
+
+
+def assert_infrastructure_activation_not_config_rollout(
+    changed_keys: tuple[str, ...] | set[str],
+) -> None:
+    """Config-only rollout must never toggle SEC-08/09 infrastructure keys."""
+    banned = sorted(set(changed_keys) & set(INFRASTRUCTURE_ACTIVATION_WIRING))
+    if banned:
+        raise ConfigContractError(
+            "infrastructure activation keys cannot change via config-only "
+            f"rollout: {banned}; use explicit media_activation"
+        )
+    overlap = set(INFRASTRUCTURE_ACTIVATION_WIRING) & set(RUNTIME_CONFIG_ALLOWLIST)
+    if overlap:
+        raise ConfigContractError(
+            "INFRASTRUCTURE_ACTIVATION_WIRING leaked into allowlist: "
+            + ", ".join(sorted(overlap))
+        )
+
 
 def _normalize_boolean(value: object, *, key: str) -> str:
     if not isinstance(value, str):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -65,7 +66,9 @@ from .journal_io import atomic_write_json, read_json
 from .revision import validate_full_sha
 
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_DEPLOYMENT_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_DEPLOYMENT_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class JournalError(ValueError):
@@ -140,6 +143,94 @@ def validate_image_id_map(ids: dict[str, str]) -> dict[str, str]:
     return dict(ids)
 
 
+def _parse_optional_media_plan(raw: object) -> dict[str, Any] | None:
+    """Additive media plan block. Absent on legacy plans (= source-only)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise JournalError("plan.media must be an object when present")
+    try:
+        activation = bool(raw["activation"])
+        if type(raw["activation"]) is not bool:
+            raise JournalError("plan.media.activation must be boolean")
+        release_mode = str(raw["release_mode"])
+        overlays = tuple(str(x) for x in raw.get("overlays") or ())
+        profiles = tuple(str(x) for x in raw.get("profiles") or ())
+        media_ids_raw = raw.get("media_image_ids") or {}
+        prev_media_ids_raw = raw.get("previous_media_image_ids")
+        settings = raw.get("executor_settings") or {}
+        prev_settings = raw.get("previous_executor_settings")
+        required_cidrs = tuple(str(x) for x in raw.get("required_deny_cidrs") or ())
+        required_ips = tuple(str(x) for x in raw.get("required_deny_ips") or ())
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JournalError(f"plan.media invalid: {exc}") from exc
+    if release_mode not in {"canonical", "media"}:
+        raise JournalError(f"plan.media.release_mode invalid: {release_mode!r}")
+    if not isinstance(media_ids_raw, dict) or not isinstance(settings, dict):
+        raise JournalError("plan.media image/settings maps invalid")
+    media_ids = {str(k): str(v) for k, v in media_ids_raw.items()}
+    for key, value in media_ids.items():
+        if not _IMAGE_ID_RE.fullmatch(value):
+            raise JournalError(f"plan.media malformed image id for {key}")
+    # Secrets must never appear in the journal media block.
+    blob = json.dumps(raw, sort_keys=True).lower()
+    for banned in ("password", "secret", "token", "postgres_password"):
+        if banned in blob:
+            raise JournalError("plan.media must not contain secret-like fields")
+    out: dict[str, Any] = {
+        "activation": activation,
+        "release_mode": release_mode,
+        "overlays": list(overlays),
+        "profiles": list(profiles),
+        "media_image_ids": media_ids,
+        "executor_settings": {str(k): str(v) for k, v in settings.items()},
+        "required_deny_cidrs": list(required_cidrs),
+        "required_deny_ips": list(required_ips),
+    }
+    if prev_media_ids_raw is not None:
+        if not isinstance(prev_media_ids_raw, dict):
+            raise JournalError("previous_media_image_ids must be object")
+        out["previous_media_image_ids"] = {
+            str(k): str(v) for k, v in prev_media_ids_raw.items()
+        }
+    if prev_settings is not None:
+        if not isinstance(prev_settings, dict):
+            raise JournalError("previous_executor_settings must be object")
+        out["previous_executor_settings"] = {
+            str(k): str(v) for k, v in prev_settings.items()
+        }
+    if "previous_activation" in raw:
+        if type(raw["previous_activation"]) is not bool:
+            raise JournalError("previous_activation must be boolean")
+        out["previous_activation"] = raw["previous_activation"]
+    if "previous_release_mode" in raw:
+        out["previous_release_mode"] = str(raw["previous_release_mode"])
+    if "previous_overlays" in raw:
+        out["previous_overlays"] = [str(x) for x in raw["previous_overlays"]]
+    if "previous_profiles" in raw:
+        out["previous_profiles"] = [str(x) for x in raw["previous_profiles"]]
+    for key in (
+        "resource_budget",
+        "slice_unit",
+        "denied_host",
+        "previous_resource_budget",
+        "previous_slice_unit",
+        "previous_denied_host",
+        "previous_current_state",
+    ):
+        if key in raw:
+            out[key] = raw[key]
+    if out.get("resource_budget") is not None:
+        from .resource_budget import parse_resource_budget
+
+        out["resource_budget"] = parse_resource_budget(out["resource_budget"]).to_dict()
+    if out.get("previous_current_state") is not None:
+        from .current_state import parse_current_state_v2
+
+        parse_current_state_v2(out["previous_current_state"])
+    return out
+
+
 @dataclass(frozen=True)
 class PlanDocument:
     schema_version: int
@@ -153,9 +244,10 @@ class PlanDocument:
     database_heads: tuple[str, ...]
     created_at_utc: str
     project_name: str
+    media: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "schema_version": self.schema_version,
             "deployment_id": self.deployment_id,
             "target_revision": self.target_revision,
@@ -172,6 +264,9 @@ class PlanDocument:
             "created_at_utc": self.created_at_utc,
             "project_name": self.project_name,
         }
+        if self.media is not None:
+            data["media"] = dict(self.media)
+        return data
 
 
 def parse_plan(raw: dict[str, Any]) -> PlanDocument:
@@ -197,6 +292,7 @@ def parse_plan(raw: dict[str, Any]) -> PlanDocument:
         heads = tuple(str(x) for x in raw["database_heads"])
         created = str(raw["created_at_utc"])
         project = str(raw["project_name"])
+        media = _parse_optional_media_plan(raw.get("media"))
     except (KeyError, TypeError, ValueError) as exc:
         raise JournalError(f"invalid plan.json: {exc}") from exc
     if schema != PLAN_SCHEMA_VERSION:
@@ -223,6 +319,7 @@ def parse_plan(raw: dict[str, Any]) -> PlanDocument:
         database_heads=heads,
         created_at_utc=created,
         project_name=project,
+        media=media,
     )
 
 
@@ -241,7 +338,11 @@ def load_plan(dep_dir: Path) -> PlanDocument:
 
 
 def append_event(
-    dep_dir: Path, status: str, detail: str = "", *, legal: dict[str, frozenset[str]] | None = None
+    dep_dir: Path,
+    status: str,
+    detail: str = "",
+    *,
+    legal: dict[str, frozenset[str]] | None = None,
 ) -> int:
     transitions = LEGAL_TRANSITIONS if legal is None else legal
     events = dep_dir / EVENTS_DIRNAME
@@ -253,7 +354,9 @@ def append_event(
         prev_status = str(last.get("status") or "")
         allowed = transitions.get(prev_status)
         if allowed is None or status not in allowed:
-            raise JournalError(f"illegal journal transition {prev_status!r} -> {status!r}")
+            raise JournalError(
+                f"illegal journal transition {prev_status!r} -> {status!r}"
+            )
     elif status != STATUS_PLANNED:
         raise JournalError(
             f"first journal event must be {STATUS_PLANNED!r}, got {status!r}"
@@ -330,7 +433,9 @@ def validate_bootstrap_failed_result(
     if not plan.bootstrap:
         raise JournalError("bootstrap failed result requires bootstrap plan")
     if plan.previous_revision is not None or plan.previous_image_ids is not None:
-        raise JournalError("bootstrap failed result must not reference previous release")
+        raise JournalError(
+            "bootstrap failed result must not reference previous release"
+        )
     if not any(str(m).startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX) for m in messages):
         raise JournalError("bootstrap failed result missing cleanup audit")
 
@@ -357,7 +462,9 @@ def publish_bootstrap_failed_after_cleanup(
 
 def begin_bootstrap_cleanup_event(dep_dir: Path, detail: str = "") -> int:
     return append_bootstrap_failure_event(
-        dep_dir, STATUS_BOOTSTRAP_CLEANUP_STARTED, detail or "ownership-verified cleanup"
+        dep_dir,
+        STATUS_BOOTSTRAP_CLEANUP_STARTED,
+        detail or "ownership-verified cleanup",
     )
 
 

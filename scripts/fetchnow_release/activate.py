@@ -122,6 +122,111 @@ def activate_gateway(
     )
 
 
+def activate_media_sidecars(
+    *,
+    project_name: str,
+    env_file: Path,
+    compose_files: tuple[Path, ...],
+    cwd: Path,
+    profiles: tuple[str, ...] = ("media-executor", "media-net-executor"),
+    services: tuple[str, ...] = (
+        "egress-proxy",
+        "media-executor",
+        "media-net-executor",
+    ),
+) -> None:
+    """Start media sidecars with explicit profiles before worker flag flip.
+
+    Uses ``--no-deps`` and an ordered per-service up so Compose ``depends_on``
+    / profiles cannot recreate worker early. Does not mutate postgres.
+    """
+    forbidden = {"postgres", "api", "worker", "delivery", "web", "gateway"}
+    bad = set(services) & forbidden
+    if bad:
+        raise ActivateError(f"media activation refuses services: {sorted(bad)}")
+    if not profiles:
+        raise ActivateError("media activation requires compose profiles")
+    for service in services:
+        argv = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(env_file),
+            "--project-name",
+            project_name,
+        ]
+        for path in compose_files:
+            argv.extend(["-f", str(path)])
+        for profile in profiles:
+            argv.extend(["--profile", profile])
+        argv.extend(
+            [
+                "up",
+                "-d",
+                "--no-build",
+                "--no-deps",
+                "--pull",
+                "never",
+                service,
+            ]
+        )
+        if "postgres" in argv:
+            raise ActivateError("media sidecar argv must not include postgres")
+        proc = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise ActivateError(
+                f"media sidecar up failed for {service}: "
+                + redact(proc.stderr.strip() or proc.stdout.strip())
+            )
+
+
+def stop_media_sidecars(
+    *,
+    project_name: str,
+    env_file: Path,
+    compose_files: tuple[Path, ...],
+    cwd: Path,
+    profiles: tuple[str, ...] = ("media-executor", "media-net-executor"),
+    services: tuple[str, ...] = (
+        "media-net-executor",
+        "media-executor",
+        "egress-proxy",
+    ),
+) -> None:
+    """Stop media sidecars started by this project (no global prune)."""
+    argv = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_file),
+        "--project-name",
+        project_name,
+    ]
+    for path in compose_files:
+        argv.extend(["-f", str(path)])
+    for profile in profiles:
+        argv.extend(["--profile", profile])
+    argv.extend(["stop", *services])
+    proc = subprocess.run(
+        argv,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ActivateError(
+            "media sidecar stop failed: "
+            + redact(proc.stderr.strip() or proc.stdout.strip())
+        )
+
+
 def build_storage_init_argv(
     *,
     project_name: str,

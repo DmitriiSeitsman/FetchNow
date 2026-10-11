@@ -20,6 +20,12 @@ from . import OCI_REVISION_LABEL
 from .c2_constants import APPLICATION_BUILD_SERVICES, BUILD_PROJECT_NAME
 from .manifest import ImageRecord
 from .redact import redact
+from .release_mode import (
+    RELEASE_MODE_CANONICAL,
+    build_services_for_mode,
+    image_reference_for_service,
+    target_image_refs_for_mode,
+)
 from .revision import validate_full_sha
 
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -148,13 +154,11 @@ def image_exists(reference: str) -> bool:
     return result.returncode == 0 and bool(result.stdout_text.strip())
 
 
-def target_image_refs(revision: str) -> tuple[str, ...]:
+def target_image_refs(
+    revision: str, *, release_mode: str = RELEASE_MODE_CANONICAL
+) -> tuple[str, ...]:
     rev = validate_full_sha(revision)
-    return (
-        f"fetchnow-api:{rev}",
-        f"fetchnow-web:{rev}",
-        f"fetchnow-gateway:{rev}",
-    )
+    return target_image_refs_for_mode(rev, release_mode)
 
 
 def containers_using_image(reference: str) -> list[str]:
@@ -223,7 +227,10 @@ def containers_using_image(reference: str) -> list[str]:
 
 
 def assert_tag_collision_safe(
-    revision: str, *, allow_unused_retag: bool = True
+    revision: str,
+    *,
+    allow_unused_retag: bool = True,
+    release_mode: str = RELEASE_MODE_CANONICAL,
 ) -> list[str]:
     """Refuse overwrite of tags used by running containers.
 
@@ -237,7 +244,7 @@ def assert_tag_collision_safe(
     """
     rev = validate_full_sha(revision)
     warnings: list[str] = []
-    for name in target_image_refs(rev):
+    for name in target_image_refs(rev, release_mode=release_mode):
         if not image_exists(name):
             continue
         users = containers_using_image(name)
@@ -258,8 +265,14 @@ def assert_tag_collision_safe(
     return warnings
 
 
-def _report_unmanaged_tags(revision: str, cause: str) -> str:
-    present = [ref for ref in target_image_refs(revision) if image_exists(ref)]
+def _report_unmanaged_tags(
+    revision: str, cause: str, *, release_mode: str = RELEASE_MODE_CANONICAL
+) -> str:
+    present = [
+        ref
+        for ref in target_image_refs(revision, release_mode=release_mode)
+        if image_exists(ref)
+    ]
     if not present:
         return cause
     return (
@@ -275,11 +288,31 @@ def build_application_images(
     env_file: Path,
     revision: str,
     compose_files: tuple[str, ...],
+    release_mode: str = RELEASE_MODE_CANONICAL,
 ) -> BuiltImages:
     rev = validate_full_sha(revision)
-    warnings = list(assert_tag_collision_safe(rev, allow_unused_retag=True))
+    services = build_services_for_mode(release_mode)
+    warnings = list(
+        assert_tag_collision_safe(
+            rev, allow_unused_retag=True, release_mode=release_mode
+        )
+    )
     # Recheck immediately before retarget/build (host-level race window).
-    warnings = list(assert_tag_collision_safe(rev, allow_unused_retag=True))
+    warnings = list(
+        assert_tag_collision_safe(
+            rev, allow_unused_retag=True, release_mode=release_mode
+        )
+    )
+
+    # Media builds need media overlays present so compose knows the services.
+    build_files = list(compose_files)
+    if release_mode != RELEASE_MODE_CANONICAL:
+        for rel in (
+            "compose.media-executor.yaml",
+            "compose.media-net-executor.yaml",
+        ):
+            if rel not in build_files:
+                build_files.append(rel)
 
     argv = [
         "docker",
@@ -289,12 +322,14 @@ def build_application_images(
         "--project-name",
         BUILD_PROJECT_NAME,
     ]
-    for rel in compose_files:
+    for rel in build_files:
         path = source_dir / rel
         if not path.is_file() or path.is_symlink():
             raise ImageBuildError(f"compose file missing or unsafe in snapshot: {rel}")
         argv.extend(["-f", str(path.resolve())])
-    argv.extend(["build", *APPLICATION_BUILD_SERVICES])
+    # Profiles keep media services inert at runtime; build still needs them
+    # addressable. Compose build accepts service names regardless of profile.
+    argv.extend(["build", *services])
 
     env = _compose_build_env(rev)
     proc = subprocess.run(
@@ -311,18 +346,15 @@ def build_application_images(
                 rev,
                 "compose build failed: "
                 + redact(proc.stderr.strip() or proc.stdout.strip()),
+                release_mode=release_mode,
             )
         )
 
     records: list[ImageRecord] = []
     platform = "unknown"
     try:
-        for svc in APPLICATION_BUILD_SERVICES:
-            ref = {
-                "api": f"fetchnow-api:{rev}",
-                "web": f"fetchnow-web:{rev}",
-                "gateway": f"fetchnow-gateway:{rev}",
-            }[svc]
+        for svc in services:
+            ref = image_reference_for_service(svc, rev)
             info = inspect_image(ref)
             image_id = str(info.get("Id") or "")
             labels = (info.get("Config") or {}).get("Labels") or {}
@@ -352,7 +384,13 @@ def build_application_images(
         api_id = next(r.image_id for r in records if r.service == "api")
         if worker_id != api_id:
             raise ImageBuildError("api and worker image IDs diverge after build")
+        # Canonical trio must always be present even in media mode.
+        for required in APPLICATION_BUILD_SERVICES:
+            if not any(r.service == required for r in records):
+                raise ImageBuildError(f"missing required build service: {required}")
     except ImageBuildError as exc:
-        raise ImageBuildError(_report_unmanaged_tags(rev, str(exc))) from exc
+        raise ImageBuildError(
+            _report_unmanaged_tags(rev, str(exc), release_mode=release_mode)
+        ) from exc
 
     return BuiltImages(images=tuple(records), warnings=tuple(warnings))

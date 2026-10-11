@@ -12,9 +12,9 @@ from .bounded_subprocess import (
     run_docker_probe,
 )
 from .c3_constants import (
-    RUNTIME_APPLICATION_SERVICES,
     LABEL_DEPLOYMENT_ID,
     LABEL_RELEASE_REVISION,
+    RUNTIME_APPLICATION_SERVICES,
 )
 from .redact import redact
 
@@ -50,7 +50,7 @@ def _compose_ps_json(
     ]
     for path in compose_files:
         argv.extend(["-f", str(path)])
-    argv.extend(["ps", "--format", "json"])
+    argv.extend(["ps", "--all", "--format", "json"])
     try:
         result = run_docker_probe(argv, cwd=cwd)
     except (BoundedTimeoutError, BoundedCancelledError) as exc:
@@ -61,9 +61,7 @@ def _compose_ps_json(
         raise BootstrapCleanupError(
             "compose ps failed: "
             + redact(
-                result.stderr_text.strip()
-                or result.stdout_text.strip()
-                or "unknown"
+                result.stderr_text.strip() or result.stdout_text.strip() or "unknown"
             )
         )
     rows: list[dict[str, object]] = []
@@ -99,9 +97,7 @@ def _inspect_labels(container_id: str) -> dict[str, str]:
         raise BootstrapCleanupError(
             "docker inspect failed: "
             + redact(
-                result.stderr_text.strip()
-                or result.stdout_text.strip()
-                or container_id
+                result.stderr_text.strip() or result.stdout_text.strip() or container_id
             )
         )
     try:
@@ -121,6 +117,7 @@ def discover_owned_bootstrap_containers(
     cwd: Path,
     deployment_id: str,
     release_revision: str,
+    allowed_services: tuple[str, ...] = RUNTIME_APPLICATION_SERVICES,
 ) -> list[RemovedBootstrapContainer]:
     """Return owned application containers for this bootstrap transaction."""
     owned: list[RemovedBootstrapContainer] = []
@@ -131,7 +128,7 @@ def discover_owned_bootstrap_containers(
         cwd=cwd,
     ):
         svc = str(row.get("Service") or row.get("service") or "")
-        if svc not in RUNTIME_APPLICATION_SERVICES:
+        if svc not in allowed_services:
             continue
         cid = str(row.get("ID") or row.get("Id") or "").strip()
         if not cid:
@@ -162,6 +159,7 @@ def remove_owned_bootstrap_containers(
     deployment_id: str,
     release_revision: str,
     expected_container_ids: list[str] | None = None,
+    allowed_services: tuple[str, ...] = RUNTIME_APPLICATION_SERVICES,
 ) -> tuple[RemovedBootstrapContainer, ...]:
     """Remove only containers labeled for this bootstrap deployment."""
     discovered = discover_owned_bootstrap_containers(
@@ -171,6 +169,11 @@ def remove_owned_bootstrap_containers(
         cwd=cwd,
         deployment_id=deployment_id,
         release_revision=release_revision,
+        **(
+            {"allowed_services": allowed_services}
+            if allowed_services != RUNTIME_APPLICATION_SERVICES
+            else {}
+        ),
     )
     if expected_container_ids is not None:
         expected = set(expected_container_ids)

@@ -83,6 +83,7 @@ def main() -> int:
                 work_root=work_root,
                 runner=runner,
                 profile=PROFILE_OFFLINE,
+                max_jobs=int(os.environ.get("MEDIA_EXECUTOR_MAX_JOBS", "2")),
                 ffmpeg=str(_required_path("MEDIA_MUXING_FFMPEG_PATH")),
                 ffprobe=str(_required_path("MEDIA_MUXING_FFPROBE_PATH")),
                 socket_dir=socket_path.parent,
@@ -97,6 +98,7 @@ def main() -> int:
                 work_root=work_root,
                 runner=runner,
                 profile=PROFILE_NETWORK,
+                max_jobs=int(os.environ.get("MEDIA_EXECUTOR_MAX_JOBS", "2")),
                 ytdlp=str(_required_path("MEDIA_NET_YTDLP_PATH")),
                 proxy_url=proxy,
                 download_timeout_seconds=float(
@@ -116,7 +118,7 @@ def main() -> int:
                 remove_job=remove_job_directory,
             )
         app.serve(sock)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(f"media executor preflight failed: {exc}", file=sys.stderr)
         return 1
     return 0

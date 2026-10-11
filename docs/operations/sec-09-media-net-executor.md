@@ -293,3 +293,50 @@ fix on a new image ID. Native and image-risk verdicts remain separate.
 Fresh local regression: **183 passed**, no skips (diagnostic Python 3.12.13 /
 pytest 8.4.1, not a full frozen backend suite). Ruff, actionlint and
 `git diff --check` PASS. The three dependency artifact hashes remain unchanged.
+
+### Run 38124838023 — proxy fix verified / residual decision pending
+
+Commit `e69b5d3a9ff4c779bacbf22f125d21eb90c362c6`; one push, attempt 1,
+event push. Run:
+https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38124838023
+Job 114426946322: 2026-10-11T08:27:04Z–08:29:44Z. No retry/dispatch.
+
+Native x86_64, Docker 28.0.4, systemd cgroup driver, cgroup v2. Downloaded
+result confirms **N1–N12: 12 PASS**. N11 retains its simulated repository
+lease-loss / database READY transaction NOT_RUN limitation from the prior
+record. No full backend suite or production acceptance is claimed.
+
+Trivy 0.74.0 scanned the three exact tested image IDs on linux/amd64. All
+identity/platform/schema/inventory checks passed; no technical scanner errors.
+Same DB v2 UpdatedAt `2026-10-11T07:05:14.103977+00:00` as run 38124451577.
+
+- Network: `sha256:5f1f28596664f3cb0af260d62df62b2706c747852ca78ec0939ff890afa1d11d`;
+  scanned 08:28:51Z; **0 fixable HC**, 44 unfixed instances / 8 unique IDs.
+- Proxy: `sha256:819c6d3ce138ae62fd55730cbe34fcca7f1504d93dc1cc04919f7aafaa307f70`;
+  scanned 08:28:58Z; **0 fixable HC**, 44 unfixed instances / 8 unique IDs.
+  `CVE-2026-103111` absent; the exact runtime apt pin is in this source commit.
+  The prior proxy finding is cleared on this new artifact, not overwritten.
+- Offline: `sha256:3bf0d6e9a5239f889513e95d2a943b8908a896e031eed160285622c94ac05643`;
+  scanned 08:29:07Z; **0 fixable HC**, 216 unfixed instances / 50 unique IDs.
+
+All three audit adapters return `needs_owner_decision` / exit 2. The native
+harness policy intentionally keeps N13 false and overall **FAIL / exit 1**
+until those residuals are handled; this is not infrastructure failure or
+SECURITY PASS. Unfixed HC rows reconciled against run 38124451577: the exact
+multiset of advisory ID, package, installed version, package type and severity
+is unchanged for each image (44/44/216), not merely matching counts. This does
+not update applicability/reachability or grant risk acceptance.
+
+Cleanup, bounded export and upload PASS, `cleanup_errors=[]`.
+Artifact `sec09-media-net-38124838023-1`, ID 11697005863, ZIP digest:
+`sha256:be17a5603f9bb1e05b460684985b77eace625da7b32d57c7e29129e7a3da419c`.
+Downloaded `result.json` SHA-256 (matches hashes.json):
+`2ea664aa58306be2d0b5b240c3af5ee5b120171ccdfe5c5e4825cd70eb07f26a`.
+Local evidence: `/tmp/fetchnow-sec09-native-38124838023.zsCqXW/`; independent
+reference is the GitHub run/artifact. No raw scanner cache committed.
+
+This post-run note is local/unstaged after the single corrective push.
+Staging empty. Production/permissions/TEST/LIVE/SEO, VEX/exceptions and residual
+acceptance unchanged; no SSH, PR creation, merge or deploy.
+**SEC-09 — NATIVE FUNCTIONAL PASS / FIXABLE HC CLEARED ON SAME ARTIFACTS /
+UNFIXED RESIDUAL DECISION REQUIRED BEFORE SECURITY ACCEPTANCE OR ROLLOUT.**

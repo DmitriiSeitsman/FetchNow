@@ -38,3 +38,7 @@ ENV PYTHONPATH=/opt/fetchnow/src \
 
 USER 0
 ENTRYPOINT ["python", "-m", "fetchnow.media_executor"]
+
+# Late ARG so revision changes cannot reuse a stale LABEL from an earlier layer.
+ARG FETCHNOW_RELEASE_REVISION=local
+LABEL org.opencontainers.image.revision="${FETCHNOW_RELEASE_REVISION}"

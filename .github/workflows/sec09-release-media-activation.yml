@@ -1,0 +1,141 @@
+name: SEC-08/09 native release transaction
+
+# Disposable media release matrix only. Does not replace SEC-09 network
+# acceptance (sec09-media-net-executor.yml). Push-only; no workflow_dispatch.
+# Exact first-line commit subject required. Reruns (run_attempt != 1) skip.
+on:
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    if: >-
+      github.run_attempt == 1 &&
+      github.ref == 'refs/heads/codex/security-sec-09-network-isolation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      allowed: ${{ steps.subject.outputs.allowed }}
+    steps:
+      - name: Match exact commit subject (first line only; trailers ignored)
+        id: subject
+        env:
+          EXPECTED_SUBJECT: >-
+            test(security): SEC-08/09 native release transaction [native-once-20261011]
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          message = (event.get("head_commit") or {}).get("message", "")
+          subject = message.splitlines()[0] if isinstance(message, str) and message else ""
+          expected = os.environ["EXPECTED_SUBJECT"].strip()
+          allowed = (
+              os.environ["GITHUB_EVENT_NAME"] == "push" and subject == expected
+          )
+          print(f"subject={subject!r}")
+          print(f"expected={expected!r}")
+          print(f"allowed={allowed}")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"allowed={str(allowed).lower()}\n")
+          PY
+
+  native:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Host prerequisites (rootful Docker, cgroup v2/systemd, Landlock)
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          docker version
+          docker info --format '{{.CgroupDriver}} {{.CgroupVersion}}' | tee "$RUNNER_TEMP/docker-cgroup.txt"
+          grep -E 'systemd (2|v2)' "$RUNNER_TEMP/docker-cgroup.txt"
+          # Landlock ABI >= 6 via create_ruleset version probe (x86_64 NR=444).
+          python3 - <<'PY'
+          import ctypes, ctypes.util, platform, sys
+          if platform.machine() not in {"x86_64", "amd64"}:
+              sys.exit("unsupported machine")
+          libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+          abi = libc.syscall(444, None, 0, 1)
+          print(f"landlock_abi={abi}")
+          if abi < 6:
+              raise SystemExit(f"Landlock ABI {abi} < 6")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv 0.12.19 (checksum-pinned)
+        run: |
+          set -euo pipefail
+          asset=uv-x86_64-unknown-linux-gnu.tar.gz
+          want=23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/astral-sh/uv/releases/download/0.12.19/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/${asset%.tar.gz}" >> "$GITHUB_PATH"
+          uv --version | tee "$RUNNER_TEMP/uv-version.txt"
+          grep -q '0.12.19' "$RUNNER_TEMP/uv-version.txt"
+
+      - name: Create off-checkout venv (stdlib release tooling only)
+        run: |
+          set -euo pipefail
+          # Harness uses fetchnow_release + Docker only; no app dependency install.
+          # Frozen hashed pytest closure is available for local gates, not required
+          # for this native matrix runner. Keep venv and evidence outside checkout.
+          uv venv "$RUNNER_TEMP/media-release-venv" --python 3.12
+          "$RUNNER_TEMP/media-release-venv/bin/python" -c "import sys; print(sys.version)"
+
+      - name: Native media release transaction matrix
+        id: matrix
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/media-release-evidence"
+          # Root required for temporary /run systemd slice + Landlock/cgroup probes.
+          # Do not use continue-on-error; NOT_RUN/FAIL must stay non-zero.
+          set +e
+          sudo --preserve-env=PATH \
+            env PYTHONPATH=scripts \
+            "$RUNNER_TEMP/media-release-venv/bin/python" \
+            scripts/release_media_activation_integration_test.py \
+            --evidence-dir "$RUNNER_TEMP/media-release-evidence"
+          rc=$?
+          set -e
+          echo "matrix_rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "matrix exit=$rc"
+          if [[ ! -f "$RUNNER_TEMP/media-release-evidence/result.json" ]]; then
+            echo '{"status":"FAIL","error":"missing result.json","security_residual_acceptance":false}' \
+              > "$RUNNER_TEMP/media-release-evidence/result.json"
+          fi
+          # Preserve original exit code (NOT_RUN=2, FAIL=1, PASS=0).
+          exit "$rc"
+
+      - name: Upload sanitized evidence (does not hide matrix exit)
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec09-release-media-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/media-release-evidence/
+          if-no-files-found: warn
+
+      - name: Upload evidence on success
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec09-release-media-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/media-release-evidence/
+          if-no-files-found: error

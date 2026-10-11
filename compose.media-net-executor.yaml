@@ -18,6 +18,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.media-egress-proxy
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
     image: fetchnow-media-egress-proxy:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     # Joins media-net (tool side) and fetchnow-external path via default bridge
@@ -48,6 +50,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.media-net-executor
+      args:
+        FETCHNOW_RELEASE_REVISION: ${FETCHNOW_RELEASE_REVISION:-local}
     image: fetchnow-media-net-executor:${FETCHNOW_RELEASE_REVISION:-local}
     restart: unless-stopped
     networks:

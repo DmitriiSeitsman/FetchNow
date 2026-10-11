@@ -6,14 +6,17 @@ from .c2_constants import (
     CONTRACT_HASH_FILES_V1,
     CONTRACT_HASH_FILES_V2,
     CONTRACT_HASH_FILES_V3,
+    CONTRACT_HASH_FILES_V4,
     CURRENT_PREPARE_SOURCE_CONTRACT_VERSION,
     DEPLOY_PLAN_MIN_SOURCE_CONTRACT_VERSION,
     REQUIRED_SOURCE_FILES_V1,
     REQUIRED_SOURCE_FILES_V2,
     REQUIRED_SOURCE_FILES_V3,
+    REQUIRED_SOURCE_FILES_V4,
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_CONTRACT_VERSION_V2,
     SOURCE_CONTRACT_VERSION_V3,
+    SOURCE_CONTRACT_VERSION_V4,
     SUPPORTED_SOURCE_CONTRACT_VERSIONS,
 )
 
@@ -26,6 +29,8 @@ def required_source_files_for_version(source_contract_version: int) -> tuple[str
         return REQUIRED_SOURCE_FILES_V2
     if source_contract_version == SOURCE_CONTRACT_VERSION_V3:
         return REQUIRED_SOURCE_FILES_V3
+    if source_contract_version == SOURCE_CONTRACT_VERSION_V4:
+        return REQUIRED_SOURCE_FILES_V4
     raise ValueError(
         f"unsupported source_contract_version: {source_contract_version!r}"
     )
@@ -39,6 +44,8 @@ def contract_hash_files_for_version(source_contract_version: int) -> tuple[str, 
         return CONTRACT_HASH_FILES_V2
     if source_contract_version == SOURCE_CONTRACT_VERSION_V3:
         return CONTRACT_HASH_FILES_V3
+    if source_contract_version == SOURCE_CONTRACT_VERSION_V4:
+        return CONTRACT_HASH_FILES_V4
     raise ValueError(
         f"unsupported source_contract_version: {source_contract_version!r}"
     )

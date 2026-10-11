@@ -78,12 +78,16 @@ class ExecutorApp:
         inspect_timeout_seconds: float = 30.0,
         socket_timeout_seconds: int = 30,
         max_filesize_bytes: int = 3_221_225_472,
+        max_jobs: int = MAX_JOBS,
         make_job: Callable[[Path], None] | None = None,
         remove_job: Callable[[Path], None] | None = None,
         peer_lookup: Callable[[socket.socket], int] | None = None,
     ) -> None:
         if profile not in {PROFILE_OFFLINE, PROFILE_NETWORK}:
             raise ValueError("profile")
+        if type(max_jobs) is not int or not 1 <= max_jobs <= MAX_JOBS:
+            raise ValueError("max_jobs")
+        self.max_jobs = max_jobs
         self.profile = profile
         self.work_root = work_root
         self.runner = runner
@@ -214,7 +218,7 @@ class ExecutorApp:
                 and current.result is not None
             ):
                 return current.result
-            if running >= MAX_JOBS:
+            if running >= self.max_jobs:
                 return {"ok": False, "code": "overflow"}
             if current is None or current.state not in {"reserved", "done"}:
                 return {"ok": False, "code": "not_reserved"}

@@ -22,9 +22,11 @@ from fetchnow_release.c2_constants import (  # noqa: E402
     REQUIRED_SOURCE_FILES_V1,
     REQUIRED_SOURCE_FILES_V2,
     REQUIRED_SOURCE_FILES_V3,
+    REQUIRED_SOURCE_FILES_V4,
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_CONTRACT_VERSION_V2,
     SOURCE_CONTRACT_VERSION_V3,
+    SOURCE_CONTRACT_VERSION_V4,
 )
 from fetchnow_release.manifest import (  # noqa: E402
     ImageRecord,
@@ -212,8 +214,8 @@ def test_source_contract_version_string_rejected() -> None:
         parse_source_contract_version("2")
 
 
-def test_new_prepare_emits_v3_contract() -> None:
-    assert prepare_source_contract_version() == SOURCE_CONTRACT_VERSION_V3
+def test_new_prepare_emits_v4_contract() -> None:
+    assert prepare_source_contract_version() == SOURCE_CONTRACT_VERSION_V4
 
 
 def test_v3_requires_and_hashes_production_overlay(tmp_path: Path) -> None:
@@ -289,13 +291,28 @@ def test_tampered_v3_production_overlay_fails_verify(tmp_path: Path) -> None:
     assert "hash" in result.messages[0]
 
 
-def test_unknown_future_contract_v4_rejected() -> None:
+def test_v4_requires_media_contract_files(tmp_path: Path) -> None:
+    src = tmp_path / "source"
+    _write_tree(src, REQUIRED_SOURCE_FILES_V3)
+    with pytest.raises(ArchiveError, match="required source path missing"):
+        verify_required_files(src, source_contract_version=SOURCE_CONTRACT_VERSION_V4)
+    _write_tree(src, REQUIRED_SOURCE_FILES_V4)
+    hashes = verify_required_files(
+        src, source_contract_version=SOURCE_CONTRACT_VERSION_V4
+    )
+    assert "compose.media-executor.yaml" in hashes
+    assert "backend/Dockerfile.media-egress-proxy" in hashes
+    assert "compose.media-executor.yaml" in contract_hash_files_for_version(4)
+    assert "compose.media-executor.yaml" not in contract_hash_files_for_version(3)
+
+
+def test_unknown_future_contract_v5_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported"):
-        required_source_files_for_version(4)
+        required_source_files_for_version(5)
     with pytest.raises(ValueError, match="unsupported"):
-        contract_hash_files_for_version(4)
+        contract_hash_files_for_version(5)
     with pytest.raises(ManifestError, match="unsupported source_contract_version"):
-        parse_source_contract_version(4)
+        parse_source_contract_version(5)
 
 
 def test_deploy_plan_rejects_v1_target() -> None:

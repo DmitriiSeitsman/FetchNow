@@ -104,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Wait for exclusive release-root lock (default: fail immediately)",
     )
+    prep.add_argument(
+        "--release-mode",
+        choices=("canonical", "media"),
+        default="canonical",
+        help=(
+            "Image set to build: canonical (api/web/gateway) or media "
+            "(canonical + media-executor/media-net-executor/egress-proxy). "
+            "Default canonical; never inferred from file presence."
+        ),
+    )
 
     ver = sub.add_parser(
         "verify-release",
@@ -149,6 +159,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--wait-lock",
         action="store_true",
         help="Wait for exclusive rollout lock (default: fail immediately)",
+    )
+    roll.add_argument(
+        "--media-activation",
+        action="store_true",
+        help=(
+            "Explicit SEC-08/09 media activation (sidecars + executor flags). "
+            "Default off = source-only canonical rollout."
+        ),
+    )
+    roll.add_argument(
+        "--media-budget-json",
+        type=Path,
+        default=None,
+        help="Path to approved resource_budget JSON (required with --media-activation)",
+    )
+    roll.add_argument(
+        "--required-deny-cidr",
+        action="append",
+        default=[],
+        dest="required_deny_cidrs",
+        help="Required EGRESS_DENY_CIDRS coverage target (repeatable)",
+    )
+    roll.add_argument(
+        "--required-deny-ip",
+        action="append",
+        default=[],
+        dest="required_deny_ips",
+        help="Required EGRESS_DENY_IPS coverage target (repeatable)",
+    )
+    roll.add_argument(
+        "--media-denied-host",
+        default="",
+        help="Host used for proxy deny proof CONNECT (required with --media-activation)",
     )
 
     config_roll = sub.add_parser(
@@ -325,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=repo,
                 deploy_root=args.deploy_root.expanduser().resolve(),
                 wait_lock=bool(args.wait_lock),
+                release_mode=str(args.release_mode),
             )
         )
         for line in result.messages:
@@ -370,6 +414,12 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print("ERROR: --gateway-base-url must be loopback-only", file=sys.stderr)
             return 1
+        budget = None
+        if args.media_budget_json is not None:
+            import json
+
+            budget_path = args.media_budget_json.expanduser().resolve()
+            budget = json.loads(budget_path.read_text(encoding="utf-8"))
         result = rollout_release(
             RolloutInput(
                 project_name=args.project_name,
@@ -380,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
                 gateway_base_url=base,
                 bootstrap=bool(args.bootstrap),
                 wait_lock=bool(args.wait_lock),
+                media_activation=bool(args.media_activation),
+                resource_budget=budget,
+                required_deny_cidrs=tuple(args.required_deny_cidrs or ()),
+                required_deny_ips=tuple(args.required_deny_ips or ()),
+                media_denied_host=str(args.media_denied_host or ""),
             )
         )
         for line in result.messages:

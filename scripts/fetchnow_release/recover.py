@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,15 +36,19 @@ from .current_state import (
     load_and_resolve_current_state,
     next_database_state_after_app_commit,
 )
-from .db_heads import assert_heads_equal, database_heads_via_postgres, target_heads_from_release_source
+from .db_heads import (
+    assert_heads_equal,
+    database_heads_via_postgres,
+    target_heads_from_release_source,
+)
 from .deploy_root import release_dir, validate_deploy_root
 from .env_file import load_env_file
-from .health import HealthInput
 from .environment import (
     assert_real_environment_bundle,
     real_identity,
     snapshot_compose_files_for_release,
 )
+from .health import HealthInput
 from .image_identity import assert_release_images_present
 from .journal import (
     JournalError,
@@ -72,6 +77,12 @@ from .journal import (
     write_result,
 )
 from .manifest import load_manifest, manifest_path
+from .media_activation import compose_for_media_plan
+from .media_rollout import (
+    commit_media_state,
+    media_plan_from_journal,
+    verify_media_plan,
+)
 from .override import (
     compose_files_include_delivery,
     compose_files_include_storage_init,
@@ -211,10 +222,18 @@ def _execute_accept_target(
         include_storage_init=compose_files_include_storage_init(
             _release_compose_files(release, project_name=inp.project_name)
         ),
+        media_image_ids=(plan.media or {}).get("media_image_ids")
+        if (plan.media or {}).get("activation")
+        else None,
     )
     compose_files = _compose_with_override(
         release, override, project_name=inp.project_name
     )
+    media_plan = media_plan_from_journal(plan.media or {})
+    if plan.media is not None:
+        compose_files = compose_for_media_plan(
+            release, base_compose=compose_files, plan=media_plan
+        )
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -225,6 +244,14 @@ def _execute_accept_target(
         expected_image_ids=plan.target_image_ids,
     )
     stabilize_full_health(health_inp, policy=inp.policy)
+    if plan.media is not None:
+        verify_media_plan(
+            plan=media_plan,
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=compose_files,
+            cwd=cwd,
+        )
     write_current_state(
         deploy,
         build_committed_current_state(
@@ -238,6 +265,13 @@ def _execute_accept_target(
             updated_at_utc=utc_now(),
         ),
     )
+    if plan.media is not None:
+        commit_media_state(
+            deploy_root=deploy,
+            revision=plan.target_revision,
+            plan=media_plan,
+            updated_at_utc=utc_now(),
+        )
     return plan.target_revision
 
 
@@ -270,9 +304,7 @@ def _execute_rollback(
             )
     # Compatibility gate before any container mutation.
     pre_heads = target_heads_from_release_source(prev_release)
-    pre_compose = _release_compose_files(
-        prev_release, project_name=inp.project_name
-    )
+    pre_compose = _release_compose_files(prev_release, project_name=inp.project_name)
     pre_live = database_heads_via_postgres(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -293,6 +325,9 @@ def _execute_rollback(
         target_source_heads=pre_heads,
         database=pre_current.database,
     )
+    previous_media_ids = None
+    if getattr(plan, "media", None) and plan.media.get("previous_activation"):
+        previous_media_ids = dict(plan.media.get("previous_media_image_ids") or {})
     override = write_images_override(
         compose_override_dir,
         plan.previous_image_ids,
@@ -304,12 +339,30 @@ def _execute_rollback(
         include_storage_init=compose_files_include_storage_init(
             _release_compose_files(prev_release, project_name=inp.project_name)
         ),
+        media_image_ids=previous_media_ids,
     )
     compose_files = _compose_with_override(
         prev_release, override, project_name=inp.project_name
     )
     cwd = prev_release / SOURCE_DIRNAME
-    if compose_files_include_storage_init(_release_compose_files(prev_release, project_name=inp.project_name)):
+    from .media_rollout import restore_previous_media
+
+    compose_files = restore_previous_media(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        previous_release=prev_release,
+        base_compose=compose_files,
+        cwd=cwd,
+        plan_media=getattr(plan, "media", None),
+        deploy_root=deploy,
+        previous_revision=prev,
+        updated_at_utc=utc_now(),
+        failed_release=release_dir(deploy, plan.target_revision),
+        deployment_id=plan.deployment_id,
+    )
+    if compose_files_include_storage_init(
+        _release_compose_files(prev_release, project_name=inp.project_name)
+    ):
         run_storage_init(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -346,6 +399,21 @@ def _execute_rollback(
         expected_image_ids=plan.previous_image_ids,
     )
     stabilize_full_health(health_inp, policy=inp.policy)
+    if plan.media is not None:
+        previous_media_plan = media_plan_from_journal(plan.media, previous=True)
+        verify_media_plan(
+            plan=previous_media_plan,
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=compose_files,
+            cwd=cwd,
+        )
+        commit_media_state(
+            deploy_root=deploy,
+            revision=prev,
+            plan=previous_media_plan,
+            updated_at_utc=utc_now(),
+        )
     prev_heads = target_heads_from_release_source(prev_release)
     base_compose = _release_compose_files(prev_release, project_name=inp.project_name)
     live_heads = database_heads_via_postgres(
@@ -368,7 +436,12 @@ def _execute_rollback(
         target_source_heads=prev_heads,
         database=current.database,
     )
-    if current.revision != prev:
+    snapshot = (plan.media or {}).get("previous_current_state")
+    if snapshot is not None:
+        from .current_state import parse_current_state_v2
+
+        write_current_state(deploy, parse_current_state_v2(snapshot))
+    elif current.revision != prev:
         write_current_state(
             deploy,
             build_committed_current_state(
@@ -460,7 +533,9 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
                 )
                 append_recovery_event(rec_dir, STATUS_PLANNED, f"recover {inp.action}")
                 try:
-                    append_recovery_event(rec_dir, STATUS_STABILIZING, f"recover {inp.action}")
+                    append_recovery_event(
+                        rec_dir, STATUS_STABILIZING, f"recover {inp.action}"
+                    )
                     final_rev = (
                         _execute_accept_target(
                             inp=inp,
@@ -487,7 +562,9 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
                         if inp.action == "accept-target"
                         else STATUS_ROLLED_BACK
                     )
-                    append_recovery_event(rec_dir, status, f"recover {inp.action} succeeded")
+                    append_recovery_event(
+                        rec_dir, status, f"recover {inp.action} succeeded"
+                    )
                     write_recovery_result(
                         rec_dir,
                         recovery_id=recovery_id,
@@ -530,10 +607,8 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
 
             phase = latest_event_status(dep_dir)
             if phase != STATUS_STABILIZING:
-                try:
+                with suppress(JournalError):
                     append_event(dep_dir, STATUS_STABILIZING, f"recover {inp.action}")
-                except JournalError:
-                    pass
             final_rev = (
                 _execute_accept_target(
                     inp=inp,
@@ -551,7 +626,9 @@ def recover_deployment(inp: RecoverInput) -> RecoverResult:
                 )
             )
             status = (
-                STATUS_COMMITTED if inp.action == "accept-target" else STATUS_ROLLED_BACK
+                STATUS_COMMITTED
+                if inp.action == "accept-target"
+                else STATUS_ROLLED_BACK
             )
             append_event(dep_dir, status, f"recover {inp.action} completed")
             write_result(

@@ -50,6 +50,31 @@ def _app(tmp_path: Path, runner: ToolRunner | None = None) -> ExecutorApp:
     )
 
 
+@pytest.mark.parametrize("limit", [0, 3, True, "1"])
+def test_concurrency_budget_cannot_expand_compiled_ceiling(tmp_path, limit):
+    with pytest.raises(ValueError, match="max_jobs"):
+        ExecutorApp(
+            work_root=tmp_path,
+            runner=LocalRunner(),
+            socket_dir=tmp_path / "sock",
+            max_jobs=limit,
+        )
+
+
+def test_concurrency_budget_of_one_rejects_second_tool(tmp_path):
+    from types import SimpleNamespace
+
+    app = ExecutorApp(
+        work_root=tmp_path,
+        runner=LocalRunner(),
+        socket_dir=tmp_path / "sock",
+        max_jobs=1,
+    )
+    app._jobs[("other", 1, 1)] = SimpleNamespace(state="running")
+    result = app.handle(_request("mux_copy", container="mp4"), peer_uid=WORKER_UID)
+    assert json.loads(result)["code"] == "overflow"
+
+
 def test_malformed_oversized_unknown_and_network_ops() -> None:
     with pytest.raises(ProtocolError) as malformed:
         parse_request(b"{}")

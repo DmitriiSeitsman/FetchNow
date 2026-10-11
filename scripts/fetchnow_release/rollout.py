@@ -12,8 +12,6 @@ from .activate import (
     activate_gateway,
     run_storage_init,
 )
-from .bootstrap_cleanup import BootstrapCleanupError, remove_owned_bootstrap_containers
-from .c2_constants import SOURCE_DIRNAME
 from .application_compatibility import (
     CompatibilityError,
     DatabaseDriftError,
@@ -21,13 +19,16 @@ from .application_compatibility import (
     assert_live_matches_saved_database_heads,
     assert_resolved_application_compatible,
 )
+from .bootstrap_cleanup import BootstrapCleanupError, remove_owned_bootstrap_containers
+from .c2_constants import SOURCE_DIRNAME
 from .c3_constants import (
     APP_SERVICES_BEFORE_GATEWAY,
-    RUNTIME_APPLICATION_SERVICES,
     OVERRIDES_DIRNAME,
     PLAN_SCHEMA_VERSION,
+    RUNTIME_APPLICATION_SERVICES,
     STATUS_ACTIVATING_APP,
     STATUS_ACTIVATING_GATEWAY,
+    STATUS_ACTIVATING_MEDIA,
     STATUS_APP_HEALTHY,
     STATUS_COMMITTED,
     STATUS_FAILED,
@@ -54,7 +55,6 @@ from .db_heads import (
     target_heads_from_release_source,
 )
 from .deploy_root import release_dir, validate_deploy_root
-from .health import HealthInput
 from .env_file import load_env_file
 from .environment import (
     PRODUCTION,
@@ -63,6 +63,7 @@ from .environment import (
     real_identity,
     snapshot_compose_files_for_release,
 )
+from .health import HealthInput
 from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import (
     JournalError,
@@ -81,10 +82,25 @@ from .journal import (
     write_result,
 )
 from .manifest import ManifestError, load_manifest, manifest_path
+from .media_activation import assert_executor_flags_off, compose_for_media_plan
+from .media_rollout import (
+    MediaRolloutError,
+    activate_media_before_worker,
+    commit_media_state,
+    journal_media_block,
+    media_plan_from_journal,
+    previous_media_for_journal,
+    remove_failed_bootstrap_authority,
+    resolve_media_plan_for_rollout,
+    restore_previous_media,
+    verify_media_plan,
+)
+from .media_state import load_media_activation_state
 from .override import (
     OverrideError,
     compose_files_include_delivery,
     compose_files_include_storage_init,
+    media_image_ids_from_manifest,
     write_images_override,
 )
 from .redact import redact
@@ -115,6 +131,14 @@ class RolloutInput:
     wait_lock: bool = False
     wait_lock_seconds: float | None = 30.0
     policy: StabilizationPolicy | None = None
+    # Explicit media activation (default OFF = source-only).
+    media_activation: bool = False
+    resource_budget: object | None = None
+    required_deny_cidrs: tuple[str, ...] = ()
+    required_deny_ips: tuple[str, ...] = ()
+    media_denied_host: str = ""
+    landlock_probe_command: list[str] | None = None
+    media_slice_unit: str = "fetchnow-media-executor.slice"
 
 
 @dataclass(frozen=True)
@@ -163,10 +187,9 @@ def _app_containers_present(
     for row in rows:
         svc = str(row.get("Service") or row.get("service") or "")
         state = str(row.get("State") or "").lower()
-        if svc in app and state not in {"", "exited", "dead"}:
+        if svc in app and state in {"running", "created", "restarting", "paused"}:
             # Treat created/running as present.
-            if state in {"running", "created", "restarting", "paused"}:
-                return True
+            return True
     return False
 
 
@@ -230,7 +253,9 @@ def _perform_rollback(
             raise RolloutError(
                 "automatic rollback requires resolved current.json with database state"
             )
-        base_compose = _release_compose_files(prev_release, project_name=inp.project_name)
+        base_compose = _release_compose_files(
+            prev_release, project_name=inp.project_name
+        )
         live_heads = database_heads_via_postgres(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -249,6 +274,14 @@ def _perform_rollback(
         )
         messages.append("OK: rollback previous release compatible with database state")
 
+        from .journal import load_plan
+
+        plan_doc = load_plan(dep_dir)
+        previous_media_ids = None
+        if plan_doc.media and plan_doc.media.get("previous_activation"):
+            previous_media_ids = dict(
+                plan_doc.media.get("previous_media_image_ids") or {}
+            )
         override = write_images_override(
             dep_dir / OVERRIDES_DIRNAME,
             previous_ids,
@@ -260,10 +293,28 @@ def _perform_rollback(
             include_storage_init=compose_files_include_storage_init(
                 _release_compose_files(prev_release, project_name=inp.project_name)
             ),
+            media_image_ids=previous_media_ids,
         )
-        compose_files = _compose_with_override(prev_release, override, project_name=inp.project_name)
+        compose_files = _compose_with_override(
+            prev_release, override, project_name=inp.project_name
+        )
         cwd = prev_release / SOURCE_DIRNAME
-        if compose_files_include_storage_init(_release_compose_files(prev_release, project_name=inp.project_name)):
+        compose_files = restore_previous_media(
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            previous_release=prev_release,
+            base_compose=compose_files,
+            cwd=cwd,
+            plan_media=plan_doc.media,
+            deploy_root=inp.deploy_root,
+            previous_revision=previous_revision,
+            updated_at_utc=utc_now(),
+            failed_release=release_dir(inp.deploy_root, plan_doc.target_revision),
+            deployment_id=deployment_id,
+        )
+        if compose_files_include_storage_init(
+            _release_compose_files(prev_release, project_name=inp.project_name)
+        ):
             run_storage_init(
                 project_name=inp.project_name,
                 env_file=inp.env_file,
@@ -300,6 +351,28 @@ def _perform_rollback(
             expected_image_ids=previous_ids,
         )
         stabilize_full_health(health_inp, policy=inp.policy)
+        if plan_doc.media is not None:
+            previous_plan = media_plan_from_journal(plan_doc.media, previous=True)
+            verify_media_plan(
+                plan=previous_plan,
+                project_name=inp.project_name,
+                env_file=inp.env_file,
+                compose_files=compose_files,
+                cwd=cwd,
+            )
+            commit_media_state(
+                deploy_root=inp.deploy_root,
+                revision=previous_revision,
+                plan=previous_plan,
+                updated_at_utc=utc_now(),
+            )
+            # Publication can fail after current.json was already replaced.
+            # Restore the journaled authority, not merely the containers.
+            snapshot = plan_doc.media.get("previous_current_state")
+            if snapshot is not None:
+                from .current_state import parse_current_state_v2
+
+                write_current_state(inp.deploy_root, parse_current_state_v2(snapshot))
         append_event(dep_dir, STATUS_ROLLED_BACK, "previous release restored")
         write_result(
             dep_dir,
@@ -307,7 +380,8 @@ def _perform_rollback(
             status=STATUS_ROLLED_BACK,
             messages=tuple(messages) + ("OK: rolled_back",),
         )
-        # current.json must remain on previous — do not rewrite.
+        # Legacy journals never publish before failure; new journals restore
+        # their exact previous application/database authority above.
         return RolloutResult(
             ok=False,
             already_active=False,
@@ -352,6 +426,7 @@ def _verify_already_active(
     deploy: Path,
     rev: str,
     current: ResolvedCurrentState,
+    media_plan=None,
 ) -> RolloutResult:
     """Idempotent path: dual-state drift + compatibility + health."""
     target_release = release_dir(deploy, rev)
@@ -399,7 +474,13 @@ def _verify_already_active(
                 _release_compose_files(target_release, project_name=inp.project_name)
             ),
         )
-    compose_files = _compose_with_override(target_release, override, project_name=inp.project_name)
+    compose_files = _compose_with_override(
+        target_release, override, project_name=inp.project_name
+    )
+    if media_plan is not None:
+        compose_files = compose_for_media_plan(
+            target_release, base_compose=compose_files, plan=media_plan
+        )
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -438,7 +519,10 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 DeployPlanProjectError,
                 assert_deploy_plan_project,
             )
-            from .migration_project import MigrationProjectError, assert_migration_project
+            from .migration_project import (
+                MigrationProjectError,
+                assert_migration_project,
+            )
             from .rollout_project import RolloutProjectError, assert_rollout_project
 
             for checker in (
@@ -534,19 +618,109 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
 
             # Re-check current under lock for races.
             current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
+            media_state = load_media_activation_state(deploy)
+            if (
+                media_state is not None
+                and media_state.activation
+                and not inp.media_activation
+            ):
+                raise RolloutError(
+                    "source-only rollout cannot deactivate an active media deployment"
+                )
+            if media_state is not None and media_state.activation and current is None:
+                raise RolloutError(
+                    "active media authority without current.json blocks bootstrap"
+                )
+            if (
+                media_state is not None
+                and current is not None
+                and media_state.revision != current.revision
+            ):
+                raise RolloutError(
+                    "media/application authority revision mismatch; recover before rollout"
+                )
             if current is not None and current.revision == rev:
-                return _verify_already_active(inp, deploy, rev, current)
+                active = media_state is not None and media_state.activation
+                if active != inp.media_activation:
+                    if active:
+                        raise RolloutError(
+                            "active media requires explicit media activation; "
+                            "source-only cannot silently deactivate"
+                        )
+                    # OFF→ON of the same source SHA is a new transaction.
+                else:
+                    if active:
+                        assert media_state is not None
+                        # Do not reuse the canonical already-active health path.
+                        target_manifest = load_manifest(manifest_path(target_release))
+                        requested, _ = resolve_media_plan_for_rollout(
+                            media_activation=True,
+                            target_manifest=target_manifest,
+                            env_file=inp.env_file,
+                            required_deny_cidrs=inp.required_deny_cidrs,
+                            required_deny_ips=inp.required_deny_ips,
+                            budget_raw=inp.resource_budget,
+                            landlock_probe_command=inp.landlock_probe_command,
+                            slice_unit=inp.media_slice_unit,
+                            denied_host=inp.media_denied_host,
+                        )
+                        if (
+                            requested.resource_budget != media_state.resource_budget
+                            or requested.executor_settings
+                            != media_state.executor_settings
+                            or requested.media_image_ids != media_state.media_image_ids
+                            or requested.slice_unit != media_state.slice_unit
+                        ):
+                            raise RolloutError(
+                                "same-revision media settings differ; "
+                                "a new source revision is required"
+                            )
+                        files = _release_compose_files(
+                            target_release, project_name=inp.project_name
+                        )
+                        override = write_images_override(
+                            deployment_dir(deploy, current.deployment_id)
+                            / OVERRIDES_DIRNAME,
+                            current.image_ids,
+                            media_image_ids=requested.media_image_ids,
+                            include_delivery=compose_files_include_delivery(files),
+                            include_storage_init=compose_files_include_storage_init(
+                                files
+                            ),
+                        )
+                        files = compose_for_media_plan(
+                            target_release,
+                            base_compose=(*files, override),
+                            plan=requested,
+                        )
+                        verify_media_plan(
+                            plan=requested,
+                            project_name=inp.project_name,
+                            env_file=inp.env_file,
+                            compose_files=files,
+                            cwd=target_release / SOURCE_DIRNAME,
+                        )
+                    if active:
+                        return _verify_already_active(
+                            inp, deploy, rev, current, media_plan=requested
+                        )
+                    assert_executor_flags_off(load_env_file(inp.env_file))
+                    return _verify_already_active(inp, deploy, rev, current)
 
             target_manifest = load_manifest(manifest_path(target_release))
             target_ids = assert_release_images_present(target_manifest)
             man_hash = sha256_file(manifest_path(target_release))
 
-            base_compose = _release_compose_files(target_release, project_name=inp.project_name)
+            base_compose = _release_compose_files(
+                target_release, project_name=inp.project_name
+            )
             cwd = target_release / SOURCE_DIRNAME
 
             if inp.bootstrap:
                 if current is not None:
-                    raise RolloutError("--bootstrap refused: current.json already exists")
+                    raise RolloutError(
+                        "--bootstrap refused: current.json already exists"
+                    )
                 if _app_containers_present(
                     project_name=inp.project_name,
                     env_file=inp.env_file,
@@ -592,10 +766,31 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
             previous_ids = None if current is None else dict(current.image_ids)
             if current is not None:
                 assert_release_images_present(
-                    load_manifest(
-                        manifest_path(release_dir(deploy, current.revision))
-                    )
+                    load_manifest(manifest_path(release_dir(deploy, current.revision)))
                 )
+
+            media_plan, _media_dict = resolve_media_plan_for_rollout(
+                media_activation=inp.media_activation,
+                target_manifest=target_manifest,
+                env_file=inp.env_file,
+                required_deny_cidrs=inp.required_deny_cidrs,
+                required_deny_ips=inp.required_deny_ips,
+                budget_raw=inp.resource_budget,
+                landlock_probe_command=inp.landlock_probe_command,
+                slice_unit=inp.media_slice_unit,
+                denied_host=inp.media_denied_host,
+            )
+            previous_media = previous_media_for_journal(deploy)
+            media_journal = journal_media_block(
+                target=media_plan, previous=previous_media
+            )
+            media_journal["previous_current_state"] = (
+                None if current is None else current.to_v2().to_dict()
+            )
+            if media_journal.get("previous_activation"):
+                # A target must not mutate containers if its rollback authority
+                # lacks the approved budget/settings needed to restore them.
+                media_plan_from_journal(media_journal, previous=True)
 
             deployment_id = new_deployment_id()
             dep_dir = deployment_dir(deploy, deployment_id)
@@ -611,27 +806,48 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 database_heads=tuple(sorted(db_heads)),
                 created_at_utc=utc_now(),
                 project_name=inp.project_name,
+                media=media_journal,
             )
             write_plan(dep_dir, plan)
             append_event(dep_dir, STATUS_PLANNED, "plan published")
+            media_override_ids = (
+                media_image_ids_from_manifest(target_manifest)
+                if media_plan.activation
+                else None
+            )
             override = write_images_override(
                 dep_dir / OVERRIDES_DIRNAME,
                 target_ids,
                 deployment_id=deployment_id,
                 release_revision=rev,
                 include_delivery=compose_files_include_delivery(
-                    _release_compose_files(target_release, project_name=inp.project_name)
+                    _release_compose_files(
+                        target_release, project_name=inp.project_name
+                    )
                 ),
                 include_storage_init=compose_files_include_storage_init(
-                    _release_compose_files(target_release, project_name=inp.project_name)
+                    _release_compose_files(
+                        target_release, project_name=inp.project_name
+                    )
                 ),
+                media_image_ids=media_override_ids,
             )
-            compose_files = _compose_with_override(target_release, override, project_name=inp.project_name)
+            compose_files = _compose_with_override(
+                target_release, override, project_name=inp.project_name
+            )
+            compose_files = compose_for_media_plan(
+                target_release, base_compose=compose_files, plan=media_plan
+            )
             messages.append(f"OK: plan published deployment_id={deployment_id}")
+            messages.append(
+                "OK: media_activation=" + ("true" if media_plan.activation else "false")
+            )
 
             try:
                 if compose_files_include_storage_init(
-                    _release_compose_files(target_release, project_name=inp.project_name)
+                    _release_compose_files(
+                        target_release, project_name=inp.project_name
+                    )
                 ):
                     append_event(
                         dep_dir,
@@ -645,6 +861,28 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                         cwd=cwd,
                     )
                     messages.append("OK: storage-init completed")
+                if media_plan.activation:
+                    if not inp.media_denied_host:
+                        raise RolloutError(
+                            "media activation requires media_denied_host "
+                            "for proxy deny proof"
+                        )
+                    append_event(
+                        dep_dir,
+                        STATUS_ACTIVATING_MEDIA,
+                        "activate media sidecars before worker",
+                    )
+                    mutation_began = True
+                    compose_files = activate_media_before_worker(
+                        project_name=inp.project_name,
+                        env_file=inp.env_file,
+                        release_directory=target_release,
+                        base_compose=compose_files,
+                        cwd=cwd,
+                        plan=media_plan,
+                        denied_host=inp.media_denied_host,
+                    )
+                    messages.append("OK: media sidecars healthy before worker")
                 append_event(
                     dep_dir,
                     STATUS_ACTIVATING_APP,
@@ -666,9 +904,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     policy=inp.policy or StabilizationPolicy(),
                 )
                 append_event(dep_dir, STATUS_APP_HEALTHY, "app tier healthy")
-                append_event(
-                    dep_dir, STATUS_ACTIVATING_GATEWAY, "activate gateway"
-                )
+                append_event(dep_dir, STATUS_ACTIVATING_GATEWAY, "activate gateway")
                 activate_gateway(
                     project_name=inp.project_name,
                     env_file=inp.env_file,
@@ -686,8 +922,31 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     expected_image_ids=target_ids,
                 )
                 stabilize_full_health(health_inp, policy=inp.policy)
+                if media_plan.activation:
+                    from .media_health import run_media_health
+
+                    media_health = run_media_health(
+                        project_name=inp.project_name,
+                        env_file=inp.env_file,
+                        compose_files=compose_files,
+                        cwd=cwd,
+                        executor_socket=media_plan.executor_settings[
+                            "MEDIA_EXECUTOR_SOCKET"
+                        ],
+                        net_socket=media_plan.executor_settings[
+                            "MEDIA_NET_EXECUTOR_SOCKET"
+                        ],
+                        expect_flags_enabled=True,
+                        denied_host=inp.media_denied_host,
+                        media_image_ids=media_plan.media_image_ids,
+                        check_worker_flags=True,
+                    )
+                    if not media_health.ok:
+                        raise RolloutError(media_health.messages[0])
+                    messages.extend(media_health.messages)
 
                 # Atomic current.json (schema v2) only after stabilized success.
+                committed_at = utc_now()
                 application = ApplicationState(
                     revision=rev,
                     release_manifest_sha256=man_hash,
@@ -710,8 +969,14 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     build_committed_current_state(
                         application=application,
                         database=database,
-                        updated_at_utc=utc_now(),
+                        updated_at_utc=committed_at,
                     ),
+                )
+                commit_media_state(
+                    deploy_root=deploy,
+                    revision=rev,
+                    plan=media_plan,
+                    updated_at_utc=committed_at,
                 )
                 append_event(dep_dir, STATUS_COMMITTED, "current.json published")
                 write_result(
@@ -744,6 +1009,18 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                             cwd=cwd,
                             deployment_id=deployment_id,
                             release_revision=rev,
+                            **(
+                                {
+                                    "allowed_services": (
+                                        *RUNTIME_APPLICATION_SERVICES,
+                                        "media-executor",
+                                        "media-net-executor",
+                                        "egress-proxy",
+                                    )
+                                }
+                                if media_plan.activation
+                                else {}
+                            ),
                         )
                         removed = remove_owned_bootstrap_containers(
                             project_name=inp.project_name,
@@ -755,6 +1032,18 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                             expected_container_ids=[
                                 item.container_id for item in owned
                             ],
+                            **(
+                                {
+                                    "allowed_services": (
+                                        *RUNTIME_APPLICATION_SERVICES,
+                                        "media-executor",
+                                        "media-net-executor",
+                                        "egress-proxy",
+                                    )
+                                }
+                                if media_plan.activation
+                                else {}
+                            ),
                         )
                         if not removed:
                             raise BootstrapCleanupError(
@@ -782,6 +1071,9 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                         messages.append(
                             "OK: bootstrap cleanup audit="
                             + json.dumps(audit_payload, sort_keys=True)
+                        )
+                        remove_failed_bootstrap_authority(
+                            deploy, deployment_id=deployment_id, revision=rev
                         )
                         publish_bootstrap_failed_after_cleanup(
                             dep_dir,
@@ -826,7 +1118,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     raise RolloutError(
                         "post-mutation failure must enter rollback or bootstrap "
                         "cleanup; refusing to publish terminal failed"
-                    )
+                    ) from exc
                 append_event(dep_dir, STATUS_FAILED, detail)
                 write_result(
                     dep_dir,
@@ -843,6 +1135,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 )
     except (
         RolloutError,
+        MediaRolloutError,
         JournalError,
         ManifestError,
         OverrideError,

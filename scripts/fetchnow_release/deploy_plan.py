@@ -320,6 +320,10 @@ def run_deploy_plan(inp: DeployPlanInput) -> DeployPlanResult:
             "previous_application_rollback_allowed": previous_application_rollback_allowed,
             "database_downgrade_allowed": False,
             "application_rollout_required": application_rollout_required,
+            # Media activation is never implied by deploy-plan; require an
+            # explicit rollout --media-activation with prerequisites.
+            "media_activation": False,
+            "release_mode": getattr(target_manifest, "release_mode", "canonical"),
         }
         plan_json = _canonical_plan(plan)
         diagnostics.append("OK: deploy plan computed")
@@ -462,6 +466,8 @@ def _plan_initial_bootstrap(
         "previous_application_rollback_allowed": False,
         "database_downgrade_allowed": False,
         "application_rollout_required": True,
+        "media_activation": False,
+        "release_mode": getattr(target_manifest, "release_mode", "canonical"),
     }
     plan_json = _canonical_plan(plan)
     diagnostics.append("OK: deploy plan computed")

@@ -11,6 +11,13 @@ LOCK_FILENAME = ".lock"
 SOURCE_DIRNAME = "source"
 
 APPLICATION_BUILD_SERVICES = ("api", "web", "gateway")
+# Opt-in media sidecars. Never append these to APPLICATION_BUILD_SERVICES —
+# image set is selected by explicit release_mode (see release_mode.py).
+MEDIA_BUILD_SERVICES = (
+    "media-executor",
+    "media-net-executor",
+    "egress-proxy",
+)
 
 # Pinned PRD1C2/PRD1C3A legacy source contract (immutable — do not extend).
 SOURCE_CONTRACT_VERSION_V1 = 1
@@ -39,14 +46,27 @@ REQUIRED_SOURCE_FILES_V3 = REQUIRED_SOURCE_FILES_V2 + (
     "compose.production.yaml",
 )
 
+# SEC-08/09 media overlays + Dockerfiles (new prepares only).
+# Presence of these files does not activate sidecars; release_mode does.
+SOURCE_CONTRACT_VERSION_V4 = 4
+REQUIRED_SOURCE_FILES_V4 = REQUIRED_SOURCE_FILES_V3 + (
+    "compose.media-executor.yaml",
+    "compose.media-net-executor.yaml",
+    "backend/Dockerfile.media-executor",
+    "backend/Dockerfile.media-net-executor",
+    "backend/Dockerfile.media-egress-proxy",
+    "deploy/systemd/fetchnow-media-executor.slice",
+)
+
 SUPPORTED_SOURCE_CONTRACT_VERSIONS = frozenset(
     {
         SOURCE_CONTRACT_VERSION_V1,
         SOURCE_CONTRACT_VERSION_V2,
         SOURCE_CONTRACT_VERSION_V3,
+        SOURCE_CONTRACT_VERSION_V4,
     }
 )
-CURRENT_PREPARE_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V3
+CURRENT_PREPARE_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V4
 DEPLOY_PLAN_MIN_SOURCE_CONTRACT_VERSION = SOURCE_CONTRACT_VERSION_V2
 
 # Pinned v1/v2 hash set. Do not treat this as "current prepare contract".
@@ -59,6 +79,13 @@ CONTRACT_HASH_FILES_V1 = (
 )
 CONTRACT_HASH_FILES_V2 = CONTRACT_HASH_FILES_V1
 CONTRACT_HASH_FILES_V3 = CONTRACT_HASH_FILES_V2 + ("compose.production.yaml",)
+CONTRACT_HASH_FILES_V4 = CONTRACT_HASH_FILES_V3 + (
+    "compose.media-executor.yaml",
+    "compose.media-net-executor.yaml",
+    "backend/Dockerfile.media-executor",
+    "backend/Dockerfile.media-net-executor",
+    "backend/Dockerfile.media-egress-proxy",
+)
 
 # Backward-compatible aliases (legacy v2 prepare contract).
 REQUIRED_SOURCE_FILES = REQUIRED_SOURCE_FILES_V2

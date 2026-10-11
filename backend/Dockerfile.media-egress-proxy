@@ -28,3 +28,7 @@ ENV PYTHONPATH=/opt/fetchnow/src \
 # No published host ports in Compose. Listen only on media-net.
 USER 65534:65534
 ENTRYPOINT ["python", "-m", "fetchnow.media_egress_proxy"]
+
+# Late ARG so revision changes cannot reuse a stale LABEL from an earlier layer.
+ARG FETCHNOW_RELEASE_REVISION=local
+LABEL org.opencontainers.image.revision="${FETCHNOW_RELEASE_REVISION}"

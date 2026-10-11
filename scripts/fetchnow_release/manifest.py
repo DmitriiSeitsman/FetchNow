@@ -1,4 +1,4 @@
-"""Immutable release.json schema (PRD1C2)."""
+"""Immutable release.json schema (PRD1C2 + SEC-08/09 release_mode)."""
 
 from __future__ import annotations
 
@@ -10,13 +10,20 @@ from pathlib import Path
 from typing import Any
 
 from .c2_constants import (
-    APPLICATION_BUILD_SERVICES,
     RELEASE_MANIFEST_NAME,
     RELEASE_SCHEMA_VERSION,
     RELEASE_STATUS_PREPARED,
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_CONTRACT_VERSION_V3,
+    SOURCE_CONTRACT_VERSION_V4,
     SUPPORTED_SOURCE_CONTRACT_VERSIONS,
+)
+from .release_mode import (
+    RELEASE_MODE_CANONICAL,
+    ReleaseModeError,
+    expected_image_services,
+    image_reference_for_service,
+    parse_release_mode,
 )
 from .revision import validate_full_sha
 
@@ -100,12 +107,20 @@ class ReleaseManifest:
     tool_version: str
     status: str
     compose_overlay: str | None = None
+    release_mode: str = RELEASE_MODE_CANONICAL
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["images"] = [asdict(img) for img in self.images]
         if data.get("compose_overlay") is None:
             data.pop("compose_overlay", None)
+        # Legacy v1–v3 manifests omit release_mode; keep bytes stable for
+        # non-v4 documents when mode is the canonical default.
+        if (
+            self.source_contract_version < SOURCE_CONTRACT_VERSION_V4
+            and self.release_mode == RELEASE_MODE_CANONICAL
+        ):
+            data.pop("release_mode", None)
         return data
 
 
@@ -161,6 +176,13 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         raw.get("compose_overlay"),
         source_contract_version=source_contract_version,
     )
+    try:
+        release_mode = parse_release_mode(
+            raw.get("release_mode"),
+            source_contract_version=source_contract_version,
+        )
+    except ReleaseModeError as exc:
+        raise ManifestError(str(exc)) from exc
     if schema != RELEASE_SCHEMA_VERSION:
         raise ManifestError(f"unsupported schema_version: {schema}")
     if status != RELEASE_STATUS_PREPARED:
@@ -206,6 +228,7 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         tool_version=tool_ver,
         status=status,
         compose_overlay=compose_overlay,
+        release_mode=release_mode,
     )
     validate_manifest(manifest)
     return manifest
@@ -226,8 +249,18 @@ def validate_manifest(manifest: ReleaseManifest) -> None:
         manifest.compose_overlay,
         source_contract_version=manifest.source_contract_version,
     )
+    try:
+        mode = parse_release_mode(
+            manifest.release_mode,
+            source_contract_version=manifest.source_contract_version,
+            required=manifest.source_contract_version >= SOURCE_CONTRACT_VERSION_V4,
+        )
+    except ReleaseModeError as exc:
+        raise ManifestError(str(exc)) from exc
+    if mode != manifest.release_mode:
+        raise ManifestError("release_mode normalization mismatch")
     services = {img.service for img in manifest.images}
-    expected = set(APPLICATION_BUILD_SERVICES)
+    expected = expected_image_services(mode)
     if services != expected:
         raise ManifestError(f"images services {sorted(services)} != {sorted(expected)}")
     for img in manifest.images:
@@ -237,11 +270,7 @@ def validate_manifest(manifest: ReleaseManifest) -> None:
             raise ManifestError(
                 f"{img.service} OCI revision {img.oci_revision!r} != {rev}"
             )
-        expected_ref = {
-            "api": f"fetchnow-api:{rev}",
-            "web": f"fetchnow-web:{rev}",
-            "gateway": f"fetchnow-gateway:{rev}",
-        }[img.service]
+        expected_ref = image_reference_for_service(img.service, rev)
         if img.reference != expected_ref:
             raise ManifestError(
                 f"{img.service} reference {img.reference!r} != {expected_ref!r}"

@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .archive import resolve_tree_oid, verify_required_files
-from .c2_constants import APPLICATION_BUILD_SERVICES, SOURCE_DIRNAME
+from .c2_constants import SOURCE_DIRNAME
 from .image_build import image_exists, inspect_image
 from .manifest import ManifestError, load_manifest, manifest_path, validate_manifest
 from .redact import redact
+from .release_mode import build_services_for_mode
 from .revision import RevisionError, validate_full_sha
 
 
@@ -80,7 +81,7 @@ def verify_prepared_release(
                     f"Git tree OID drift: repo {tree} != manifest {manifest.tree_oid}"
                 )
 
-        for svc in APPLICATION_BUILD_SERVICES:
+        for svc in build_services_for_mode(manifest.release_mode):
             rec = next(i for i in manifest.images if i.service == svc)
             if not image_exists(rec.reference):
                 raise ReleaseVerifyError(f"missing image tag {rec.reference}")
@@ -102,6 +103,7 @@ def verify_prepared_release(
 
         messages.append("OK: release verification passed")
         messages.append(f"revision={rev}")
+        messages.append(f"release_mode={manifest.release_mode}")
         messages.append(f"path={release_directory}")
         return VerifyResult(ok=True, messages=tuple(messages))
     except (

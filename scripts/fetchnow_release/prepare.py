@@ -35,12 +35,14 @@ from .locking import ReleaseLockError, ReleaseRootLock, assert_same_filesystem
 from .manifest import (
     ManifestError,
     ReleaseManifest,
+    load_manifest,
     manifest_path,
     write_manifest,
 )
 from .preflight import PreflightInput, run_preflight
 from .redact import redact
 from .revision import RevisionError, validate_full_sha
+from .release_mode import RELEASE_MODE_CANONICAL, parse_release_mode
 from .source_contract import prepare_source_contract_version
 from .verify_release import ReleaseVerifyError, verify_prepared_release
 
@@ -58,6 +60,7 @@ class PrepareInput:
     repo_root: Path
     deploy_root: Path
     wait_lock: bool = False
+    release_mode: str = RELEASE_MODE_CANONICAL
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,12 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
     try:
         rev = validate_full_sha(inp.expected_revision)
         deploy = validate_deploy_root(inp.deploy_root, repo_root=inp.repo_root)
+        contract_version = prepare_source_contract_version()
+        release_mode = parse_release_mode(
+            inp.release_mode,
+            source_contract_version=contract_version,
+            required=True,
+        )
 
         pre = run_preflight(
             PreflightInput(
@@ -145,6 +154,14 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
             releases, _locks = ensure_deploy_layout(deploy)
             final = release_dir(deploy, rev)
             if final.exists():
+                existing = load_manifest(manifest_path(final))
+                if existing.release_mode != release_mode:
+                    raise PrepareError(
+                        f"release already prepared with release_mode="
+                        f"{existing.release_mode!r}; requested {release_mode!r}. "
+                        "A rebuild creates a new artifact and must not reuse "
+                        "prior native/Trivy PASS evidence."
+                    )
                 return _idempotent_success(final, rev)
 
             incomplete = deploy / f".incomplete-{rev}-{uuid.uuid4().hex}"
@@ -156,7 +173,7 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                     repo=inp.repo_root,
                     revision=rev,
                     incomplete_dir=incomplete,
-                    source_contract_version=prepare_source_contract_version(),
+                    source_contract_version=contract_version,
                 )
                 messages.append(f"OK: source materialized tree={source.tree_oid}")
 
@@ -166,10 +183,14 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                     env_file=inp.env_file,
                     revision=rev,
                     compose_files=("compose.yaml", overlay),
+                    release_mode=release_mode,
                 )
                 for w in built.warnings:
                     messages.append(f"NOTE: {w}")
-                messages.append("OK: application images built and inspected")
+                messages.append(
+                    f"OK: application images built and inspected "
+                    f"(release_mode={release_mode})"
+                )
 
                 if source.archive_path.exists():
                     source.archive_path.unlink()
@@ -177,7 +198,7 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                 now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 manifest = ReleaseManifest(
                     schema_version=1,
-                    source_contract_version=prepare_source_contract_version(),
+                    source_contract_version=contract_version,
                     revision=rev,
                     tree_oid=source.tree_oid,
                     created_at_utc=now,
@@ -193,6 +214,7 @@ def prepare_release(inp: PrepareInput) -> PrepareResult:
                     tool_version=__version__,
                     status=RELEASE_STATUS_PREPARED,
                     compose_overlay=overlay,
+                    release_mode=release_mode,
                 )
                 write_manifest(manifest_path(incomplete), manifest)
                 _chmod_tree_readonly(incomplete / SOURCE_DIRNAME)
