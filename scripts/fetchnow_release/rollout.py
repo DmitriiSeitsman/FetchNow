@@ -82,7 +82,12 @@ from .journal import (
     write_result,
 )
 from .manifest import ManifestError, load_manifest, manifest_path
-from .media_activation import assert_executor_flags_off, compose_for_media_plan
+from .media_activation import (
+    MediaActivationError,
+    assert_executor_flags_off,
+    assert_media_compose_config,
+    compose_for_media_plan,
+)
 from .media_rollout import (
     MediaRolloutError,
     activate_media_before_worker,
@@ -481,6 +486,17 @@ def _verify_already_active(
         compose_files = compose_for_media_plan(
             target_release, base_compose=compose_files, plan=media_plan
         )
+        try:
+            assert_media_compose_config(
+                project_name=inp.project_name,
+                env_file=inp.env_file,
+                compose_files=compose_files,
+                cwd=cwd,
+                plan=media_plan,
+                phase="media_compose_validate",
+            )
+        except MediaActivationError as exc:
+            raise RolloutError(str(exc)) from exc
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -693,6 +709,17 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                             base_compose=(*files, override),
                             plan=requested,
                         )
+                        try:
+                            assert_media_compose_config(
+                                project_name=inp.project_name,
+                                env_file=inp.env_file,
+                                compose_files=files,
+                                cwd=target_release / SOURCE_DIRNAME,
+                                plan=requested,
+                                phase="media_compose_validate",
+                            )
+                        except MediaActivationError as exc:
+                            raise RolloutError(str(exc)) from exc
                         verify_media_plan(
                             plan=requested,
                             project_name=inp.project_name,
@@ -838,10 +865,22 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
             compose_files = compose_for_media_plan(
                 target_release, base_compose=compose_files, plan=media_plan
             )
+            try:
+                assert_media_compose_config(
+                    project_name=inp.project_name,
+                    env_file=inp.env_file,
+                    compose_files=compose_files,
+                    cwd=cwd,
+                    plan=media_plan,
+                    phase="media_compose_validate",
+                )
+            except MediaActivationError as exc:
+                raise RolloutError(str(exc)) from exc
             messages.append(f"OK: plan published deployment_id={deployment_id}")
             messages.append(
                 "OK: media_activation=" + ("true" if media_plan.activation else "false")
             )
+            messages.append("OK: media compose config validated")
 
             try:
                 if compose_files_include_storage_init(

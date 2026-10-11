@@ -77,7 +77,11 @@ from .journal import (
     write_result,
 )
 from .manifest import load_manifest, manifest_path
-from .media_activation import compose_for_media_plan
+from .media_activation import (
+    MediaActivationError,
+    assert_media_compose_config,
+    compose_for_media_plan,
+)
 from .media_rollout import (
     commit_media_state,
     media_plan_from_journal,
@@ -234,6 +238,17 @@ def _execute_accept_target(
         compose_files = compose_for_media_plan(
             release, base_compose=compose_files, plan=media_plan
         )
+        try:
+            assert_media_compose_config(
+                project_name=inp.project_name,
+                env_file=inp.env_file,
+                compose_files=compose_files,
+                cwd=cwd,
+                plan=media_plan,
+                phase="recover_media_compose_validate",
+            )
+        except MediaActivationError as exc:
+            raise RecoverError(str(exc)) from exc
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,

@@ -4,8 +4,9 @@ name: SEC-08/09 native release transaction
 # acceptance (sec09-media-net-executor.yml). Push-only; no workflow_dispatch.
 # Exact first-line commit subject required. Reruns (run_attempt != 1) skip.
 #
-# Prior run 38146059444: workflow bootstrap FAIL; native matrix NOT_RUN.
-# That result is retained; this workflow fix uses a new exact-subject marker.
+# Prior: 38146059444 bootstrap FAIL; 38148607608 source-only-off PASS,
+# off-to-on-rollback FAIL (Compose limits.memory must be a string).
+# Retained; this marker authorizes the generated-memory string fix only.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -27,7 +28,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261011-v4overlay]
+            test(security): SEC-08/09 native release transaction [native-once-20261011-composemem]
         run: |
           python3 - <<'PY'
           import json

@@ -6,21 +6,26 @@ import builtins
 import contextlib
 import io
 import json
+import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 
-from fetchnow_release import media_activation as activation
-from fetchnow_release import media_health as health
-from fetchnow_release import media_prerequisites as prereq
-from fetchnow_release import media_rollout as media
-from fetchnow_release.bounded_subprocess import BoundedResult
-from fetchnow_release.resource_budget import disposable_test_budget
+from fetchnow_release import media_activation as activation  # noqa: E402
+from fetchnow_release import media_health as health  # noqa: E402
+from fetchnow_release import media_prerequisites as prereq  # noqa: E402
+from fetchnow_release import media_rollout as media  # noqa: E402
+from fetchnow_release.bounded_subprocess import BoundedResult  # noqa: E402
+from fetchnow_release.docker_checks import compose_config_json  # noqa: E402
+from fetchnow_release.override import write_images_override  # noqa: E402
+from fetchnow_release.resource_budget import disposable_test_budget  # noqa: E402
 
 
 def active_plan():
@@ -75,13 +80,37 @@ def test_immutable_override_last_and_settings_explicit(tmp_path):
     payload = json.loads(result[-2].read_text())["services"]
     assert payload["worker"]["environment"] == plan.executor_settings
     for service, memory in plan.resource_budget["per_container_memory_bytes"].items():
-        assert payload[service]["mem_limit"] == memory
+        memory_str = str(memory)
+        assert payload[service]["mem_limit"] == memory_str
+        assert isinstance(payload[service]["mem_limit"], str)
+        limits = payload[service]["deploy"]["resources"]["limits"]
+        assert limits["memory"] == memory_str
+        assert isinstance(limits["memory"], str)
+        assert (
+            payload[service]["pids_limit"]
+            == activation.MEDIA_SIDECAR_PIDS_LIMIT[service]
+        )
+        assert limits["pids"] == activation.MEDIA_SIDECAR_PIDS_LIMIT[service]
         assert payload[service]["cgroup_parent"] == plan.slice_unit
     assert payload["media-executor"]["environment"]["MEDIA_EXECUTOR_MAX_JOBS"] == "1"
+    assert "MEDIA_EXECUTOR_MAX_JOBS" not in payload["egress-proxy"]
     assert (
         activation.compose_for_media_plan(release, base_compose=result, plan=plan)
         == result
     )
+
+
+def test_compose_memory_byte_string_preserves_exact_budget() -> None:
+    budget = disposable_test_budget()
+    for memory in budget.per_container_memory_bytes.values():
+        text = activation.compose_memory_byte_string(memory)
+        assert isinstance(text, str)
+        assert text == str(memory)
+        assert int(text) == memory
+    with pytest.raises(activation.MediaActivationError):
+        activation.compose_memory_byte_string(0)
+    with pytest.raises(activation.MediaActivationError):
+        activation.compose_memory_byte_string(True)  # type: ignore[arg-type]
 
 
 def test_off_plan_overrides_stale_true_env_without_media_services(tmp_path):
@@ -386,6 +415,11 @@ def patch_transaction(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         rollout,
+        "assert_media_compose_config",
+        lambda **k: calls.append("compose-validate") or None,
+    )
+    monkeypatch.setattr(
+        rollout,
         "activate_media_before_worker",
         lambda **k: calls.append("media-before-worker") or k["base_compose"],
     )
@@ -421,7 +455,32 @@ def test_same_revision_off_to_on_is_a_transaction(monkeypatch, tmp_path):
     )
     result = rollout.rollout_release(inp)
     assert result.ok and not result.already_active, result.messages
+    assert calls.index("compose-validate") < calls.index("media-before-worker")
     assert calls.index("media-before-worker") < calls.index("activate")
+
+
+def test_compose_config_validation_failure_prevents_mutation(monkeypatch, tmp_path):
+    rollout, _current, inp, calls = patch_transaction(monkeypatch, tmp_path)
+
+    def boom(**_kwargs):
+        calls.append("compose-validate-fail")
+        raise activation.MediaActivationError(
+            "media_compose_validate: compose config failed: limits.memory must be a string"
+        )
+
+    monkeypatch.setattr(rollout, "assert_media_compose_config", boom)
+    monkeypatch.setattr(
+        rollout,
+        "_verify_already_active",
+        lambda *a, **k: pytest.fail("canonical fast path must not run"),
+    )
+    result = rollout.rollout_release(inp)
+    assert not result.ok
+    assert any("media_compose_validate" in m for m in result.messages)
+    assert "compose-validate-fail" in calls
+    assert "media-before-worker" not in calls
+    assert "activate" not in calls
+    assert "storage-init" not in calls
 
 
 def test_post_current_publication_failure_restores_exact_authority(
@@ -559,6 +618,7 @@ def test_accept_target_requires_media_health_before_publication(
     )
     monkeypatch.setattr(recover, "load_and_resolve_current_state", lambda *a, **k: None)
     monkeypatch.setattr(recover, "stabilize_full_health", lambda *a, **k: None)
+    monkeypatch.setattr(recover, "assert_media_compose_config", lambda **k: None)
     calls = []
 
     def verify(**kwargs):
@@ -602,6 +662,7 @@ def test_off_to_on_cleanup_uses_failed_release_not_legacy(monkeypatch, tmp_path)
         environment, "snapshot_compose_files_for_release", lambda *a, **k: (files[0],)
     )
     monkeypatch.setattr(manifest, "load_manifest", lambda _: object())
+    monkeypatch.setattr(media, "assert_media_compose_config", lambda **k: None)
     monkeypatch.setattr(
         bootstrap_cleanup,
         "remove_owned_bootstrap_containers",
@@ -708,3 +769,202 @@ def test_bootstrap_cleanup_includes_owned_sidecars_only(monkeypatch):
         allowed_services=activation.MEDIA_SIDECAR_START_ORDER,
     )
     assert [row.container_id for row in result] == ["owned"]
+
+
+def _require_compose_cli() -> str:
+    try:
+        version = subprocess.run(
+            ["docker", "compose", "version", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
+        pytest.fail("docker compose CLI required for generated Compose acceptance")
+    if not version:
+        pytest.fail("docker compose version unavailable")
+    return version
+
+
+def _app_image_ids() -> dict[str, str]:
+    return {
+        "api": "sha256:" + ("a" * 64),
+        "worker": "sha256:" + ("a" * 64),
+        "web": "sha256:" + ("b" * 64),
+        "gateway": "sha256:" + ("c" * 64),
+    }
+
+
+def _real_release_tree(tmp_path: Path) -> tuple[Path, Path]:
+    release = tmp_path / ("b" * 40)
+    source = release / "source"
+    source.mkdir(parents=True)
+    for name in ("compose.yaml", *activation.MEDIA_OVERLAYS):
+        shutil.copy2(ROOT / name, source / name)
+    return release, source
+
+
+def _disposable_env(tmp_path: Path) -> Path:
+    env = tmp_path / "compose.env"
+    env.write_text(
+        "POSTGRES_PASSWORD=test-only-not-secret\n"
+        "MEDIA_EXECUTOR_ENABLED=false\n"
+        "MEDIA_NET_EXECUTOR_ENABLED=false\n"
+        "EGRESS_DENY_CIDRS=172.16.0.0/12\n"
+        "EGRESS_DENY_IPS=127.0.0.1\n"
+        "FETCHNOW_RELEASE_REVISION=local\n",
+        encoding="utf-8",
+    )
+    return env
+
+
+def test_real_generated_on_compose_config_accepts_string_memory(tmp_path: Path) -> None:
+    compose_version = _require_compose_cli()
+    release, source = _real_release_tree(tmp_path)
+    env = _disposable_env(tmp_path)
+    plan = active_plan()
+    override = write_images_override(
+        tmp_path / "overrides",
+        _app_image_ids(),
+        include_delivery=True,
+        include_storage_init=True,
+        media_image_ids=plan.media_image_ids,
+    )
+    files = activation.compose_for_media_plan(
+        release, base_compose=(source / "compose.yaml", override), plan=plan
+    )
+    assert [p.name for p in files] == [
+        "compose.yaml",
+        *activation.MEDIA_OVERLAYS,
+        "media-settings.json",
+        "images.yaml",
+    ]
+    settings = json.loads(files[-2].read_text())["services"]
+    budget = plan.resource_budget["per_container_memory_bytes"]
+    for service, memory in budget.items():
+        assert settings[service]["mem_limit"] == str(memory)
+        assert settings[service]["deploy"]["resources"]["limits"]["memory"] == str(
+            memory
+        )
+    activation.assert_media_compose_config(
+        project_name="fetchnow-compose-mem-on",
+        env_file=env,
+        compose_files=files,
+        cwd=source,
+        plan=plan,
+        phase="test_on_compose_validate",
+    )
+    # Recomposition must not duplicate overlays/settings; image override stays last.
+    again = activation.compose_for_media_plan(release, base_compose=files, plan=plan)
+    assert again == files
+    assert again[-1] == override
+    # Keep a non-secret proof that real Compose accepted the file set.
+    print(f"compose_version={compose_version}")
+
+
+def test_real_generated_off_and_previous_on_compose_config(tmp_path: Path) -> None:
+    _require_compose_cli()
+    release, source = _real_release_tree(tmp_path)
+    env = _disposable_env(tmp_path)
+    override = write_images_override(
+        tmp_path / "overrides-off",
+        _app_image_ids(),
+        include_delivery=True,
+        include_storage_init=True,
+    )
+    off = activation.build_source_only_plan(release_mode="canonical")
+    off_files = activation.compose_for_media_plan(
+        release, base_compose=(source / "compose.yaml", override), plan=off
+    )
+    activation.assert_media_compose_config(
+        project_name="fetchnow-compose-mem-off",
+        env_file=env,
+        compose_files=off_files,
+        cwd=source,
+        plan=off,
+        phase="test_off_compose_validate",
+    )
+    on = active_plan()
+    on_override = write_images_override(
+        tmp_path / "overrides-on",
+        _app_image_ids(),
+        include_delivery=True,
+        include_storage_init=True,
+        media_image_ids=on.media_image_ids,
+    )
+    previous_on = activation.compose_for_media_plan(
+        release, base_compose=(source / "compose.yaml", on_override), plan=on
+    )
+    activation.assert_media_compose_config(
+        project_name="fetchnow-compose-mem-prev-on",
+        env_file=env,
+        compose_files=previous_on,
+        cwd=source,
+        plan=on,
+        phase="test_previous_on_compose_validate",
+    )
+
+
+def test_numeric_deploy_memory_rejected_by_real_compose_parser(tmp_path: Path) -> None:
+    _require_compose_cli()
+    base = tmp_path / "compose.yaml"
+    base.write_text("services:\n  web:\n    image: alpine:3.20\n", encoding="utf-8")
+    bad = tmp_path / "media-settings.json"
+    bad.write_text(
+        json.dumps(
+            {
+                "services": {
+                    "web": {
+                        "mem_limit": 67108864,
+                        "deploy": {"resources": {"limits": {"memory": 67108864}}},
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _disposable_env(tmp_path)
+    with pytest.raises(Exception, match="must be a string"):
+        compose_config_json(
+            project_name="fetchnow-compose-mem-numeric",
+            env_file=env,
+            compose_files=(base, bad),
+            repo_root=tmp_path,
+        )
+
+
+def test_compose_config_json_forwards_profiles(tmp_path: Path, monkeypatch) -> None:
+    from fetchnow_release import docker_checks
+
+    env = tmp_path / ".env"
+    env.write_text("X=1\n", encoding="utf-8")
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    fake = SimpleNamespace(returncode=0, stdout_text='{"services":{}}', stderr_text="")
+    captured: list[list[str]] = []
+
+    def probe(argv, **_kwargs):
+        captured.append(list(argv))
+        return fake
+
+    monkeypatch.setattr(docker_checks, "run_docker_probe", probe)
+    compose_config_json(
+        project_name="fetchnow-test",
+        env_file=env,
+        compose_files=(compose,),
+        repo_root=tmp_path,
+        profiles=("media-executor", "media-net-executor"),
+    )
+    argv = captured[0]
+    assert argv.count("--profile") == 2
+    assert "media-executor" in argv
+    assert "media-net-executor" in argv
+    assert "config" in argv
+    for banned in ("up", "down", "build", "pull", "run", "exec", "restart"):
+        assert banned not in argv

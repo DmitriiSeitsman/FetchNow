@@ -41,13 +41,38 @@ def require_compose_v2() -> str:
 def require_docker_daemon() -> None:
     require_docker_cli()
     try:
-        result = run_docker_probe(
-            ["docker", "info", "--format", "{{.ServerVersion}}"]
-        )
+        result = run_docker_probe(["docker", "info", "--format", "{{.ServerVersion}}"])
     except (BoundedTimeoutError, BoundedCancelledError) as exc:
-        raise DockerCheckError("Docker daemon probe timed out or was cancelled") from exc
+        raise DockerCheckError(
+            "Docker daemon probe timed out or was cancelled"
+        ) from exc
     if result.returncode != 0:
         raise DockerCheckError("Docker daemon is not responding")
+
+
+def parse_compose_byte_size(raw: str) -> int:
+    """Parse Compose memory strings (plain bytes or common unit suffixes)."""
+    text = raw.strip().lower()
+    if text.isdigit():
+        return int(text)
+    units = {
+        "b": 1,
+        "k": 1024,
+        "kb": 1024,
+        "m": 1024**2,
+        "mb": 1024**2,
+        "g": 1024**3,
+        "gb": 1024**3,
+    }
+    for suffix, factor in sorted(units.items(), key=lambda item: -len(item[0])):
+        if text.endswith(suffix):
+            number = text[: -len(suffix)].strip()
+            if number.replace(".", "", 1).isdigit():
+                value = float(number) * factor
+                if value != int(value):
+                    raise DockerCheckError(f"non-integral compose byte size: {raw!r}")
+                return int(value)
+    raise DockerCheckError(f"unsupported compose byte size: {raw!r}")
 
 
 def compose_config_json(
@@ -57,6 +82,7 @@ def compose_config_json(
     compose_files: tuple[Path, ...],
     repo_root: Path,
     extra_env: dict[str, str] | None = None,
+    profiles: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     argv = [
         "docker",
@@ -68,6 +94,8 @@ def compose_config_json(
     ]
     for path in compose_files:
         argv.extend(["-f", str(path)])
+    for profile in profiles:
+        argv.extend(["--profile", profile])
     argv.extend(["config", "--format", "json"])
     env = {
         **dict(**{k: v for k, v in __import__("os").environ.items()}),

@@ -18,6 +18,7 @@ from .media_activation import (
     MediaActivationError,
     MediaActivationPlan,
     assert_executor_flags_off,
+    assert_media_compose_config,
     build_activation_plan,
     build_source_only_plan,
     compose_files_for_media,
@@ -169,6 +170,33 @@ def journal_media_block(
     return block
 
 
+def _compose_and_validate_media_plan(
+    release_directory: Path,
+    *,
+    base_compose: tuple[Path, ...],
+    plan: MediaActivationPlan,
+    project_name: str,
+    env_file: Path,
+    cwd: Path,
+    phase: str,
+) -> tuple[Path, ...]:
+    compose_files = compose_for_media_plan(
+        release_directory, base_compose=base_compose, plan=plan
+    )
+    try:
+        assert_media_compose_config(
+            project_name=project_name,
+            env_file=env_file,
+            compose_files=compose_files,
+            cwd=cwd,
+            plan=plan,
+            phase=phase,
+        )
+    except MediaActivationError as exc:
+        raise MediaRolloutError(str(exc)) from exc
+    return compose_files
+
+
 def activate_media_before_worker(
     *,
     project_name: str,
@@ -182,8 +210,14 @@ def activate_media_before_worker(
     """Start sidecars and prove health before any worker recreate."""
     if not plan.activation:
         return base_compose
-    compose_files = compose_for_media_plan(
-        release_directory, base_compose=base_compose, plan=plan
+    compose_files = _compose_and_validate_media_plan(
+        release_directory,
+        base_compose=base_compose,
+        plan=plan,
+        project_name=project_name,
+        env_file=env_file,
+        cwd=cwd,
+        phase="activating_media_compose_validate",
     )
     try:
         activate_media_sidecars(
@@ -314,8 +348,14 @@ def restore_previous_media(
                 ),
             )
         previous = build_source_only_plan(release_mode=RELEASE_MODE_CANONICAL)
-        return compose_for_media_plan(
-            previous_release, base_compose=base_compose, plan=previous
+        return _compose_and_validate_media_plan(
+            previous_release,
+            base_compose=base_compose,
+            plan=previous,
+            project_name=project_name,
+            env_file=env_file,
+            cwd=cwd,
+            phase="rollback_media_compose_validate",
         )
 
     prev_profiles = tuple((plan_media or {}).get("previous_profiles") or ())
@@ -323,8 +363,14 @@ def restore_previous_media(
     check_media_prerequisites(
         budget_raw=previous.resource_budget, slice_unit=previous.slice_unit
     )
-    compose_files = compose_for_media_plan(
-        previous_release, base_compose=base_compose, plan=previous
+    compose_files = _compose_and_validate_media_plan(
+        previous_release,
+        base_compose=base_compose,
+        plan=previous,
+        project_name=project_name,
+        env_file=env_file,
+        cwd=cwd,
+        phase="rollback_media_compose_validate",
     )
     try:
         activate_media_sidecars(

@@ -30,6 +30,13 @@ MEDIA_SIDECAR_START_ORDER = (
     "media-executor",
     "media-net-executor",
 )
+# Compose rejects distinct classic vs deploy pids when deploy.resources.limits
+# is present. Mirror overlay pids_limit values; memory budget is unchanged.
+MEDIA_SIDECAR_PIDS_LIMIT = {
+    "egress-proxy": 64,
+    "media-executor": 128,
+    "media-net-executor": 128,
+}
 
 DEFAULT_EXECUTOR_SOCKET = "/run/fetchnow-executor/ctrl/worker.sock"
 DEFAULT_EXECUTOR_WORK_ROOT = "/var/lib/fetchnow/executor"
@@ -180,6 +187,22 @@ def assert_executor_flags_off(env: dict[str, str]) -> None:
         raise MediaActivationError(f"{key} has non-boolean value: {raw!r}")
 
 
+def compose_memory_byte_string(memory_bytes: int) -> str:
+    """Serialize an exact byte budget for Compose mem_limit / deploy limits.
+
+    Budget math stays numeric in Python; Compose requires string byte-values.
+    """
+    if (
+        type(memory_bytes) is not int
+        or isinstance(memory_bytes, bool)
+        or memory_bytes <= 0
+    ):
+        raise MediaActivationError(
+            f"compose memory limit must be a positive int, got {memory_bytes!r}"
+        )
+    return str(memory_bytes)
+
+
 def write_media_settings_override(directory: Path, plan: MediaActivationPlan) -> Path:
     """Explicit transaction settings; JSON is a YAML subset, no env mutation."""
     services: dict[str, object] = {
@@ -188,10 +211,24 @@ def write_media_settings_override(directory: Path, plan: MediaActivationPlan) ->
     if plan.activation:
         budget = parse_resource_budget(plan.resource_budget)
         for service, memory in budget.per_container_memory_bytes.items():
+            memory_str = compose_memory_byte_string(memory)
+            if service not in MEDIA_SIDECAR_PIDS_LIMIT:
+                raise MediaActivationError(
+                    f"missing compose pids mirror for service {service}"
+                )
+            pids = MEDIA_SIDECAR_PIDS_LIMIT[service]
             config: dict[str, object] = {
-                "mem_limit": memory,
+                "mem_limit": memory_str,
+                "pids_limit": pids,
                 "cgroup_parent": plan.slice_unit,
-                "deploy": {"resources": {"limits": {"memory": memory}}},
+                "deploy": {
+                    "resources": {
+                        "limits": {
+                            "memory": memory_str,
+                            "pids": pids,
+                        }
+                    }
+                },
             }
             if service != "egress-proxy":
                 config["environment"] = {
@@ -226,3 +263,80 @@ def compose_for_media_plan(
         )
     settings = write_media_settings_override(files[-1].parent, plan)
     return (*files[:-1], settings, files[-1])
+
+
+def _rendered_memory_bytes(raw: object, *, phase: str, service: str, label: str) -> int:
+    from .docker_checks import DockerCheckError, parse_compose_byte_size
+
+    if not isinstance(raw, str):
+        raise MediaActivationError(
+            f"{phase}: {service} {label} must be a string after compose config"
+        )
+    try:
+        return parse_compose_byte_size(raw)
+    except DockerCheckError as exc:
+        raise MediaActivationError(
+            f"{phase}: {service} {label} unreadable: {exc}"
+        ) from exc
+
+
+def assert_media_compose_config(
+    *,
+    project_name: str,
+    env_file: Path,
+    compose_files: tuple[Path, ...],
+    cwd: Path,
+    plan: MediaActivationPlan,
+    phase: str = "media_compose_validate",
+) -> None:
+    """Fail-closed ``docker compose config`` before any container mutation.
+
+    Uses the final file set (base + overlays + generated settings + images).
+    Does not start containers. Secrets/env values are never printed.
+    """
+    from .docker_checks import DockerCheckError, compose_config_json
+    from .redact import redact
+
+    profiles = plan.profiles if plan.activation else ()
+    try:
+        rendered = compose_config_json(
+            project_name=project_name,
+            env_file=env_file,
+            compose_files=compose_files,
+            repo_root=cwd,
+            profiles=profiles,
+        )
+    except DockerCheckError as exc:
+        raise MediaActivationError(
+            f"{phase}: compose config failed: {redact(str(exc))}"
+        ) from exc
+    if not plan.activation:
+        return
+    services = rendered.get("services")
+    if not isinstance(services, dict):
+        raise MediaActivationError(f"{phase}: compose config missing services")
+    budget = parse_resource_budget(plan.resource_budget)
+    for service, memory in budget.per_container_memory_bytes.items():
+        cfg = services.get(service)
+        if not isinstance(cfg, dict):
+            raise MediaActivationError(
+                f"{phase}: rendered config missing service {service}"
+            )
+        mem_limit = cfg.get("mem_limit")
+        deploy_mem = (
+            ((cfg.get("deploy") or {}).get("resources") or {})
+            .get("limits", {})
+            .get("memory")
+        )
+        for label, value in (("mem_limit", mem_limit), ("deploy.memory", deploy_mem)):
+            if value is None:
+                raise MediaActivationError(
+                    f"{phase}: {service} missing {label} in rendered config"
+                )
+            actual = _rendered_memory_bytes(
+                value, phase=phase, service=service, label=label
+            )
+            if actual != memory:
+                raise MediaActivationError(
+                    f"{phase}: {service} {label} bytes={actual} != budget {memory}"
+                )

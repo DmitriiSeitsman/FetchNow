@@ -350,9 +350,7 @@ def test_committed_deployment_does_not_block(tmp_path: Path) -> None:
 def test_override_renders_ownership_labels() -> None:
     dep_id = "12345678-1234-1234-1234-123456789abc"
     rev = "a" * 40
-    text = render_images_override(
-        _ids(), deployment_id=dep_id, release_revision=rev
-    )
+    text = render_images_override(_ids(), deployment_id=dep_id, release_revision=rev)
     assert LABEL_DEPLOYMENT_ID in text
     assert LABEL_RELEASE_REVISION in text
     assert dep_id in text
@@ -362,11 +360,7 @@ def test_override_renders_ownership_labels() -> None:
 
 def test_malformed_result_is_unresolved(tmp_path: Path) -> None:
     deploy = tmp_path / "deploy"
-    dep = (
-        deploy
-        / "deployments"
-        / "12345678-1234-1234-1234-123456789abc"
-    )
+    dep = deploy / "deployments" / "12345678-1234-1234-1234-123456789abc"
     dep.mkdir(parents=True)
     (dep / "plan.json").write_text("{}", encoding="utf-8")
     (dep / "result.json").write_text('{"status":"committed"}', encoding="utf-8")
@@ -541,7 +535,10 @@ def test_alembic_branched_heads(tmp_path: Path) -> None:
 
 
 def test_alembic_cycle_fails_closed(tmp_path: Path) -> None:
-    from fetchnow_pg_backup.alembic_graph import AlembicGraphError, discover_alembic_head_revisions
+    from fetchnow_pg_backup.alembic_graph import (
+        AlembicGraphError,
+        discover_alembic_head_revisions,
+    )
 
     versions = tmp_path / "versions"
     versions.mkdir()
@@ -559,11 +556,7 @@ def test_alembic_cycle_fails_closed(tmp_path: Path) -> None:
 
 def test_unresolved_blocks(tmp_path: Path) -> None:
     deploy = tmp_path / "deploy"
-    dep = (
-        deploy
-        / "deployments"
-        / "12345678-1234-1234-1234-123456789abc"
-    )
+    dep = deploy / "deployments" / "12345678-1234-1234-1234-123456789abc"
     dep.mkdir(parents=True)
     (dep / "plan.json").write_text("{}", encoding="utf-8")
     found = find_unresolved_deployments(deploy)
@@ -711,7 +704,9 @@ def test_resolution_is_write_once(tmp_path: Path) -> None:
         write_resolution(dep, resolution)
 
 
-def _bootstrap_plan(dep_id: str = "12345678-1234-1234-1234-123456789abc") -> PlanDocument:
+def _bootstrap_plan(
+    dep_id: str = "12345678-1234-1234-1234-123456789abc",
+) -> PlanDocument:
     return PlanDocument(
         schema_version=1,
         deployment_id=dep_id,
@@ -778,8 +773,7 @@ def test_bootstrap_failed_result_requires_cleanup_audit(tmp_path: Path) -> None:
     with pytest.raises(JournalError, match="cleanup audit"):
         validate_bootstrap_failed_result(plan, ("FAIL: target rollout error",))
     audit = (
-        BOOTSTRAP_CLEANUP_AUDIT_PREFIX
-        + '[{"service":"api","container_id":"abc123"}]'
+        BOOTSTRAP_CLEANUP_AUDIT_PREFIX + '[{"service":"api","container_id":"abc123"}]'
     )
     validate_bootstrap_failed_result(plan, (audit,))
 
@@ -791,8 +785,7 @@ def test_bootstrap_failed_publishes_cleanup_chain_and_result(tmp_path: Path) -> 
     dep.mkdir()
     plan = _seed_post_mutation_journal(dep, STATUS_STABILIZING)
     audit = (
-        BOOTSTRAP_CLEANUP_AUDIT_PREFIX
-        + '[{"service":"api","container_id":"abc123"}]'
+        BOOTSTRAP_CLEANUP_AUDIT_PREFIX + '[{"service":"api","container_id":"abc123"}]'
     )
     begin_bootstrap_cleanup_event(dep)
     publish_bootstrap_failed_after_cleanup(
@@ -821,8 +814,7 @@ def test_bootstrap_partial_activation_uses_same_cleanup_contract(
     dep.mkdir()
     plan = _seed_post_mutation_journal(dep, STATUS_ACTIVATING_APP)
     audit = (
-        BOOTSTRAP_CLEANUP_AUDIT_PREFIX
-        + '[{"service":"api","container_id":"abc123"}]'
+        BOOTSTRAP_CLEANUP_AUDIT_PREFIX + '[{"service":"api","container_id":"abc123"}]'
     )
     begin_bootstrap_cleanup_event(dep)
     publish_bootstrap_failed_after_cleanup(
@@ -873,7 +865,9 @@ def test_bootstrap_cleanup_failure_leaves_unresolved_journal(
     assert find_unresolved_deployments(deploy) == [dep_id]
 
 
-def test_bootstrap_cleanup_rejects_container_id_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bootstrap_cleanup_rejects_container_id_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from fetchnow_release.bootstrap_cleanup import (
         BootstrapCleanupError,
         RemovedBootstrapContainer,
@@ -977,7 +971,9 @@ def test_incompatible_target_rejected_before_activation_and_state_write(
     (target_release / "source").mkdir(parents=True)
     (current_release / "source").mkdir(parents=True)
     for release in (target_release, current_release):
-        (release / "source" / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        (release / "source" / "compose.yaml").write_text(
+            "services: {}\n", encoding="utf-8"
+        )
         (release / "source" / "compose.staging.yaml").write_text(
             "services: {}\n", encoding="utf-8"
         )
@@ -1078,7 +1074,9 @@ def test_incompatible_target_rejected_before_activation_and_state_write(
 
     monkeypatch.setattr("fetchnow_release.rollout.write_plan", _track_plan)
     monkeypatch.setattr("fetchnow_release.rollout.activate_app_tier", _track_activate)
-    monkeypatch.setattr("fetchnow_release.rollout.write_current_state", _track_write_state)
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.write_current_state", _track_write_state
+    )
     monkeypatch.setattr(
         "fetchnow_release.rollout.RolloutLock",
         lambda *a, **k: nullcontext(),
@@ -1115,7 +1113,12 @@ def test_automatic_rollback_checks_compatibility_before_activate(
         DatabaseState,
         ResolvedCurrentState,
     )
-    from fetchnow_release.journal import append_event, deployment_dir, write_plan, PlanDocument
+    from fetchnow_release.journal import (
+        append_event,
+        deployment_dir,
+        write_plan,
+        PlanDocument,
+    )
     from fetchnow_release.rollout import RolloutInput, _perform_rollback
     from fetchnow_release.verify_release import VerifyResult
 
@@ -1128,7 +1131,9 @@ def test_automatic_rollback_checks_compatibility_before_activate(
     target = "b" * 40
     prev_release = deploy / "releases" / prev
     (prev_release / "source").mkdir(parents=True)
-    (prev_release / "source" / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (prev_release / "source" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
     (prev_release / "source" / "compose.staging.yaml").write_text(
         "services: {}\n", encoding="utf-8"
     )
@@ -1339,6 +1344,10 @@ def _patch_bootstrap_rollout(
         "fetchnow_release.rollout.write_current_state",
         lambda *_a, **_k: None,
     )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.assert_media_compose_config",
+        lambda **_k: calls.append("compose-validate") or None,
+    )
 
     def _init(**_k: object) -> None:
         calls.append("storage-init")
@@ -1380,7 +1389,7 @@ def test_storage_init_runs_before_app_activation(
         )
     )
     assert result.ok is True
-    assert calls[:2] == ["storage-init", "activate"]
+    assert calls[:3] == ["compose-validate", "storage-init", "activate"]
     assert calls.count("activate") == 1
     assert calls.count("gateway") == 1
     overrides = list((deploy / "deployments").glob("*/overrides/images.yaml"))
@@ -1426,7 +1435,7 @@ def test_storage_init_failure_prevents_app_mutation(
     )
     assert result.ok is False
     assert result.status == STATUS_FAILED
-    assert calls == ["storage-init"]
+    assert calls == ["compose-validate", "storage-init"]
     assert not any(
         msg.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX) for msg in result.messages
     )
@@ -1617,7 +1626,7 @@ def test_pr8_release_without_storage_init_bootstraps(
     )
     assert result.ok is True
     assert result.status == STATUS_COMMITTED
-    assert calls[0] == "activate"
+    assert calls[:2] == ["compose-validate", "activate"]
     assert "storage-init" not in calls
     overrides = list((deploy / "deployments").glob("*/overrides/images.yaml"))
     assert len(overrides) == 1
@@ -1683,7 +1692,7 @@ def test_post_activation_failure_emits_cleanup_audit(
     )
     assert result.ok is False
     assert result.status == STATUS_FAILED
-    assert calls[:3] == ["storage-init", "activate", "health"]
+    assert calls[:4] == ["compose-validate", "storage-init", "activate", "health"]
     audit_lines = [
         msg for msg in result.messages if msg.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX)
     ]

@@ -21,7 +21,7 @@ WORKFLOW = ROOT / ".github/workflows/sec09-release-media-activation.yml"
 HARNESS = ROOT / "scripts/release_media_activation_integration_test.py"
 EXPECTED_SUBJECT = (
     "test(security): SEC-08/09 native release transaction "
-    "[native-once-20261011-v4overlay]"
+    "[native-once-20261011-composemem]"
 )
 
 
@@ -50,9 +50,10 @@ def test_workflow_does_not_precreate_evidence_leaf_before_harness() -> None:
     matrix = text.split("Native media release transaction matrix", 1)[1].split(
         "Upload sanitized evidence", 1
     )[0]
-    assert "mkdir -p \"$RUNNER_TEMP/media-release-evidence\"" not in matrix.split(
-        "if [[ ! -f", 1
-    )[0]
+    assert (
+        'mkdir -p "$RUNNER_TEMP/media-release-evidence"'
+        not in matrix.split("if [[ ! -f", 1)[0]
+    )
     assert "refusing pre-existing evidence directory" in matrix
     assert "exist_ok=False" in matrix or "exist_ok=False" in _workflow_text()
 
@@ -61,7 +62,7 @@ def test_workflow_fallback_marks_absent_native_not_pass() -> None:
     text = _workflow_text()
     assert "native_result':'absent'" in text or '"native_result":"absent"' in text
     assert "missing result.json" in text
-    assert "exit \"$rc\"" in text
+    assert 'exit "$rc"' in text
     # Forbid real workflow softening; comments may mention the phrases.
     for line in text.splitlines():
         stripped = line.strip()
@@ -74,8 +75,9 @@ def test_workflow_fallback_marks_absent_native_not_pass() -> None:
 def test_workflow_exact_subject_marker_unique() -> None:
     text = _workflow_text()
     assert EXPECTED_SUBJECT in text
-    assert "[native-once-20261011-v4overlay]" in text
-    # Prior markers must not authorize this V4 overlay fix run.
+    assert "[native-once-20261011-composemem]" in text
+    # Prior markers must not authorize this compose-memory fix run.
+    assert "[native-once-20261011-v4overlay]" not in text
     assert "[native-once-20261011-diag]" not in text
     assert "[native-once-20261011-uvpath]" not in text
     assert (
@@ -122,7 +124,9 @@ echo "$RUNNER_TEMP/${{asset%.tar.gz}}" >> "{github_path}"
     grep -q '0.12.19' "$RUNNER_TEMP/uv-version.txt"
     # Absolute path succeeds even when a different uv is already on PATH.
     """
-    subprocess.run(["bash", "-c", script], check=True, env={**os.environ, "PATH": "/usr/bin:/bin"})
+    subprocess.run(
+        ["bash", "-c", script], check=True, env={**os.environ, "PATH": "/usr/bin:/bin"}
+    )
     assert "0.12.19" in (runner_temp / "uv-version.txt").read_text(encoding="utf-8")
     assert github_path.read_text(encoding="utf-8").strip() == str(asset_root)
 

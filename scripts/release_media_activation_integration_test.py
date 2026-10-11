@@ -184,21 +184,23 @@ def main(argv: list[str] | None = None) -> int:
             media_slice_unit=slice_unit,
         )
 
-    def fail_gateway_once(revision: str):
+    def fail_gateway_once(revision: str) -> tuple[RolloutResult, dict[str, object]]:
         from fetchnow_release import rollout
 
-        original = rollout.activate_gateway
-        count = 0
+        injection: dict[str, object] = {
+            "gateway_injections": 0,
+            "phase": None,
+            "error": "test-only gateway injection",
+        }
 
         def injected(**kwargs):
-            nonlocal count
-            count += 1
-            if count == 1:
-                raise ActivateError("test-only gateway injection")
-            return original(**kwargs)
+            injection["gateway_injections"] = int(injection["gateway_injections"]) + 1
+            injection["phase"] = "activating_gateway"
+            raise ActivateError(str(injection["error"]))
 
         with patch.object(rollout, "activate_gateway", injected):
-            return rollout_release(inp(revision, active=True))
+            result = rollout_release(inp(revision, active=True))
+        return result, injection
 
     def project_inspect_rows() -> list[dict[str, Any]]:
         ids = checked(
@@ -356,14 +358,18 @@ def main(argv: list[str] | None = None) -> int:
         source = rollout_release(inp(revision_a, active=False, bootstrap=True))
         assert_source_only_off(source)
         before = current_path(deploy).read_bytes()
-        failed = fail_gateway_once(revision_a)
+        failed, off_injection = fail_gateway_once(revision_a)
         record(
             "off-to-on-rollback",
             failed.status == STATUS_ROLLED_BACK
+            and off_injection["gateway_injections"] == 1
+            and off_injection["phase"] == "activating_gateway"
+            and any("test-only gateway injection" in m for m in failed.messages)
             and not sidecars()
             and current_path(deploy).read_bytes() == before
             and not media_state().activation,
             rollout=rollout_result_snapshot(failed),
+            intended_injection=off_injection,
         )
         on = rollout_release(inp(revision_a, active=True))
         record(
@@ -388,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             row["Config"]["Labels"]["com.docker.compose.service"]: row["Image"]
             for row in sidecars()
         }
-        failed = fail_gateway_once(revision_b)
+        failed, on_injection = fail_gateway_once(revision_b)
         actual_ids = {
             row["Config"]["Labels"]["com.docker.compose.service"]: row["Image"]
             for row in sidecars()
@@ -396,9 +402,15 @@ def main(argv: list[str] | None = None) -> int:
         record(
             "on-to-on-rollback",
             failed.status == STATUS_ROLLED_BACK
+            and on_injection["gateway_injections"] == 1
+            and on_injection["phase"] == "activating_gateway"
+            and any("test-only gateway injection" in m for m in failed.messages)
             and current_path(deploy).read_bytes() == before
-            and actual_ids == previous_ids,
+            and actual_ids == previous_ids
+            and media_state().activation
+            and media_state().revision == revision_a,
             rollout=rollout_result_snapshot(failed),
+            intended_injection=on_injection,
         )
         from fetchnow_release import rollout
 
@@ -457,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
         proxy = next(
             row
             for row in sidecars()
-            if row["Config"]["Labels"].get("com.docker.compose.service") == "egress-proxy"
+            if row["Config"]["Labels"].get("com.docker.compose.service")
+            == "egress-proxy"
         )
         checked(["docker", "stop", proxy["Id"]], ROOT)
         authority_before = current_path(deploy).read_bytes()
@@ -481,7 +494,9 @@ def main(argv: list[str] | None = None) -> int:
                 "error_detail": redact(str(exc)),
             }
         )
-        print(f"FAIL: native media release matrix ({type(exc).__name__}: {redact(str(exc))})")
+        print(
+            f"FAIL: native media release matrix ({type(exc).__name__}: {redact(str(exc))})"
+        )
         if primary_failure is None:
             try:
                 persist_failure_bundle(
