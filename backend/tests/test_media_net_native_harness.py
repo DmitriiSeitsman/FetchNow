@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -376,6 +377,62 @@ def test_matrix_exception_preserves_partial_checks_before_cleanup(
     assert result["checks"]["N13_same_artifact_audit"] == "NOT_RUN"
     assert result["status"] == "FAIL" and cleaned == [True]
     assert harness._EVIDENCE_OUTPUT is None
+
+
+def _export_source(harness, path):  # type: ignore[no-untyped-def]
+    result = {"status": "FAIL", "checks": {"N1_inspect_ok": True}, "audits": {}}
+    harness.save(path / "result.json", result)
+    digest = hashlib.sha256((path / "result.json").read_bytes()).hexdigest()
+    harness.save(path / "hashes.json", {"result.json": digest})
+
+
+def test_evidence_export_does_not_walk_cache_and_preserves_hashes(
+    tmp_path: Path,
+) -> None:
+    harness = load("network_acceptance")
+    _export_source(harness, tmp_path)
+    private = tmp_path / "audit" / "network" / "trivy-cache" / "fanal"
+    private.mkdir(parents=True)
+    (private / "do-not-upload").write_text("private cache")
+    private.chmod(0)
+    try:
+        harness.export_evidence(tmp_path)
+    finally:
+        private.chmod(0o700)
+    public = tmp_path / "public"
+    assert sorted(p.name for p in public.iterdir()) == ["hashes.json", "result.json"]
+    for name in ("hashes.json", "result.json"):
+        assert (public / name).read_bytes() == (tmp_path / name).read_bytes()
+        assert (public / name).stat().st_mode & 0o777 == 0o644
+    assert public.stat().st_mode & 0o777 == 0o755
+
+
+def test_evidence_export_refuses_digest_drift(tmp_path: Path) -> None:
+    harness = load("network_acceptance")
+    _export_source(harness, tmp_path)
+    (tmp_path / "result.json").write_text('{"status":"PASS"}')
+    with pytest.raises(ValueError, match="hash mismatch"):
+        harness.export_evidence(tmp_path)
+    assert not (tmp_path / "public").exists()
+
+
+def test_evidence_export_refuses_symlink_report(tmp_path: Path) -> None:
+    harness = load("network_acceptance")
+    _export_source(harness, tmp_path)
+    (tmp_path / "rpc-diagnostics.jsonl").symlink_to(tmp_path / "result.json")
+    with pytest.raises(OSError):
+        harness.export_evidence(tmp_path)
+    assert not (tmp_path / "public").exists()
+
+
+def test_workflow_uploads_only_bounded_export() -> None:
+    text = (
+        HELPERS.parents[2] / ".github/workflows/sec09-media-net-executor.yml"
+    ).read_text()
+    assert "--export-evidence" in text
+    assert "path: ${{ runner.temp }}/sec09-media-net/public/" in text
+    assert "path: ${{ runner.temp }}/sec09-media-net/\n" not in text
+    assert "continue-on-error" not in text and "|| true" not in text
 
 
 @pytest.mark.parametrize(

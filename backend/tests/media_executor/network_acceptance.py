@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,85 @@ def save(path: Path, payload: object) -> None:
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     temp.chmod(0o644)
     temp.replace(path)
+
+
+def _read_evidence(path: Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("evidence must be regular")
+        data = handle.read(8_000_001)
+    if len(data) > 8_000_000:
+        raise ValueError("evidence size limit")
+    return data
+
+
+def export_evidence(output: Path) -> None:
+    """Export exact reports, not Trivy caches, workspaces or image metadata."""
+    if output.is_symlink():
+        raise ValueError("unsafe evidence directory")
+    names = ["result.json", "hashes.json"]
+    names += [
+        name
+        for name in (
+            "rpc-diagnostics.jsonl",
+            "matrix-progress.json",
+            "worker-fence.json",
+        )
+        if (output / name).exists()
+    ]
+    for path in output.glob("fixture-start-*.json"):
+        if not re.fullmatch(
+            r"fixture-start-[0-9a-f-]{36}_[1-9][0-9]{0,9}\.json", path.name
+        ):
+            raise ValueError("unexpected fixture evidence name")
+        names.append(path.name)
+    data = {name: _read_evidence(output / name) for name in names}
+    digest = hashlib.sha256(data["result.json"]).hexdigest()
+    if json.loads(data["hashes.json"]) != {"result.json": digest}:
+        raise ValueError("evidence hash mismatch")
+    result = json.loads(data["result.json"])
+    audits = result.get("audits", {})
+    audit_brief = {
+        label: {
+            "status": report.get("status"),
+            "scanner_exit_code": report.get("scanner_exit_code"),
+            "error_code": report.get("error_code"),
+            "fixable_instances": report.get("gate_fixable_instances"),
+            "unfixed_instances": report.get("gate_unfixed_instances"),
+            "unfixed_unique_count": len(report.get("gate_unfixed_unique_ids", [])),
+            "identity": report.get("identity"),
+        }
+        for label, report in audits.items()
+        if isinstance(report, dict)
+    }
+    checks = result.get("checks", {})
+    print(
+        json.dumps(
+            {
+                "status": result.get("status"),
+                "native_checks": {
+                    key: checks.get(key)
+                    for key in checks
+                    if re.match(r"N\d+_", key) and not key.endswith("_evidence")
+                },
+                "audits": audit_brief,
+                "cleanup_errors": result.get("cleanup_errors"),
+                "result_sha256": digest,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    # The destination contains only copied regular files with readable modes.
+    # Never recursively chmod or traverse scanner-owned private cache entries.
+    destination = output / "public"
+    destination.mkdir(mode=0o755)
+    destination.chmod(0o755)
+    for name, payload in data.items():
+        path = destination / name
+        path.write_bytes(payload)
+        path.chmod(0o644)
 
 
 def _diagnostic_text(text: str) -> str:
@@ -1492,8 +1572,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cleanup", action="store_true")
+    parser.add_argument("--export-evidence", action="store_true")
     parser.add_argument("--trivy-bin", default="")
     args = parser.parse_args()
+    if args.export_evidence:
+        export_evidence(args.output)
+        raise SystemExit(0)
     if args.cleanup:
         state_path = args.output / "state.json"
         errors = (

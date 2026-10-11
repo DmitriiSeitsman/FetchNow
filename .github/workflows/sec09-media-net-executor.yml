@@ -69,10 +69,17 @@ jobs:
           sudo python3 backend/tests/media_executor/network_acceptance.py \
             --output "$RUNNER_TEMP/sec09-media-net" \
             --cleanup
+      - name: Export bounded evidence (no scanner cache)
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo python3 backend/tests/media_executor/network_acceptance.py \
+            --output "$RUNNER_TEMP/sec09-media-net" \
+            --export-evidence
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sec09-media-net-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/sec09-media-net/
+          path: ${{ runner.temp }}/sec09-media-net/public/
           if-no-files-found: error

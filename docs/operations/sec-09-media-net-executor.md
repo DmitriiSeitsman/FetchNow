@@ -175,3 +175,57 @@ Fresh expanded regression: **178 passed**, no skips in the diagnostic Python
 `git diff --check` pass. Dependency lock hashes remain unchanged. The prior
 run's formerly local record is included in this corrective commit, not rewritten.
 One new native run is authorized for this correction; no automatic rerun.
+
+### Corrective run 38083561995 — native checks PASS in log, evidence export failed
+
+Commit `252d115014c3c773cfaba331e585c5ce9e5d7001`; one push, attempt 1.
+Run: https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38083561995
+Job 114305256631 ran 2026-10-10T20:23:32Z–20:26:22Z, conclusion failure.
+
+CI stdout explicitly recorded **N1–N12: 12 PASS**. N9's stdout/time branches
+did not emit a later FAIL or raise; N10 cancellation/neighbor and N11 worker
+watchdog/restart proof also recorded PASS. This is log-backed native functional
+evidence at the exact commit, not a recovered result.json or full SECURITY PASS.
+The former `fixture tree did not start` error did not recur after the cwd fix.
+
+The log reached same-artifact Trivy at 20:25:25Z, then the main step exited 1.
+Audit status/counts/error fields and image identities were saved only in the
+result, not printed. Upload failed with EACCES while scanning
+`audit/network/trivy-cache/fanal`; the GitHub artifact API confirms **0 artifacts**.
+Therefore the exact Trivy verdict is **UNKNOWN / REPORT UNAVAILABLE**, not clean,
+not attributed to existing residuals, and not described as scan NOT_RUN.
+Cleanup step succeeded. No third native run, workflow rerun or dispatch occurred.
+
+SHA-256 of the `gh run view --log-failed` output (not result.json bytes):
+`b61634b3b124abb7c987b9f814e18a6b2db4138e882a54a36ec35be9d0dd4860`.
+The first run 38082649102 remains FAIL with unrecovered partial matrix evidence.
+
+### Local-only export correction after run 38083561995
+
+The workflow now exports a bounded exact-file report set to `public/` and uploads
+only that directory. Trivy caches/raw image reports/workspaces are not traversed
+or chmodded. The exporter verifies result/hash consistency, refuses symlink and
+non-regular reports, caps each read at 8 MB (three audit summaries), and copies
+reports with directory mode 0755 and file mode 0644. It prints a bounded native/
+audit verdict summary and result digest even when the gate verdict is failure.
+Failed findings, scanner exits and the overall gate remain non-zero/unchanged.
+
+Fresh expanded local regression after export correction: **182 passed**, no skips;
+Ruff, source-resolved mypy and actionlint pass. Four new regressions cover private
+cache exclusion, digest mismatch, symlink rejection and workflow upload scope.
+This fix is **uncommitted and not remotely tested**. No additional dependency,
+privilege, VEX, exception, merge, SSH, production, TEST/LIVE/SEO changes.
+
+Current status: **NATIVE FUNCTIONAL CHECKS PASS (CI LOG) / TRIVY VERDICT UNKNOWN /
+BOUNDED EXPORT FIX LOCAL PASS — NOT READY FOR SECURITY ACCEPTANCE OR ROLLOUT**.
+
+### Export correction finalization — 2026-10-11
+
+Owner authorized one corrective commit/push and one new native AMD64 run with
+same-artifact Trivy. Fresh local checks: **182 passed** (diagnostic Python
+3.12.13/pytest 8.4.1, not a frozen-pytest acceptance claim), Ruff, mypy,
+actionlint and `git diff --check` PASS. Only the workflow, bounded exporter,
+export regression tests and this document are included. Locks remain unchanged.
+Previous run verdicts above stay separate. No automatic retry, merge, deploy,
+VEX/exception change or residual-risk acceptance is authorized by this step.
+The new remote result is pending; this record does not claim a security PASS.
