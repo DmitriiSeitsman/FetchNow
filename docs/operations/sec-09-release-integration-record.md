@@ -1,22 +1,23 @@
 # SEC-08/09 Release Integration — Implementation Record
 
-Status: **NATIVE DIAGNOSTIC RETRY** (source-only-off evidence after 38146599692)
+Status: **V4 OVERLAY FIX / NATIVE RETRY**
 Not READY FOR PRODUCTION / ROLLOUT. Residual acceptance / VEX unchanged.
 Date: 2026-10-11. Worktree `/Users/dina/projects/FetchNow-sec09`.
 
 ### Prior native attempts (retained)
 
-- `38146059444`: workflow bootstrap FAIL; matrix NOT_RUN.
-- `38146599692`: prepare PASS; source-only-off FAIL; cleanup PASS; later cases NOT_RUN.
-  Cause of source-only-off was **not proven** (messages lost by short-circuit assertion).
+- `38146059444`: bootstrap FAIL; matrix NOT_RUN.
+- `38146599692`: prepare PASS; source-only-off FAIL; messages not preserved.
+- `38147397717`: proven `unsupported source_contract_version: 4` in
+  `recorded_compose_overlay` (V3-only gate).
 
-### Diagnostic harness fix (this commit)
+### V4 overlay compatibility (this commit)
 
-- Structured sanitized evidence before cleanup (`media_release_evidence.py`).
-- source-only-off separates rollout failure vs media authority / flags-OFF checks.
-- Unreached matrix cases recorded as NOT_RUN; cleanup is a separate verdict.
-- Exact-subject marker: `[native-once-20261011-diag]`.
-- No application behavior change claimed without a proven offline defect.
+- `recorded_compose_overlay` / `resolve_runtime_overlay` accept explicit V3+V4
+  canonical overlays; unknown versions (5/9) still rejected (no unbounded `>= 3`).
+- Manifest parse messages updated for v3/v4 overlay requirement.
+- Exact-subject marker: `[native-once-20261011-v4overlay]`.
+- Source-only diagnostic evidence preserved from the prior harness commit.
 
 ## Contracts implemented
 

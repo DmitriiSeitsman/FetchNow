@@ -10,7 +10,23 @@ from .c2_constants import (
     SOURCE_CONTRACT_VERSION_V1,
     SOURCE_CONTRACT_VERSION_V2,
     SOURCE_CONTRACT_VERSION_V3,
+    SOURCE_CONTRACT_VERSION_V4,
     SOURCE_DIRNAME,
+)
+
+# Overlay rules for prepared releases that record a canonical overlay.
+# Explicit set — do not use unbounded ``>= 3`` (would admit unsupported futures).
+_CANONICAL_OVERLAY_CONTRACTS = frozenset(
+    {
+        SOURCE_CONTRACT_VERSION_V3,
+        SOURCE_CONTRACT_VERSION_V4,
+    }
+)
+_LEGACY_OVERLAY_CONTRACTS = frozenset(
+    {
+        SOURCE_CONTRACT_VERSION_V1,
+        SOURCE_CONTRACT_VERSION_V2,
+    }
 )
 
 
@@ -86,27 +102,27 @@ def recorded_compose_overlay(
     """Resolve the overlay recorded on a prepared release.
 
     v1/v2 omit the field and always mean the staging overlay.
+    v3/v4 require an explicit canonical overlay (staging or production).
+    Unknown contract versions are rejected.
     """
-    if source_contract_version in {
-        SOURCE_CONTRACT_VERSION_V1,
-        SOURCE_CONTRACT_VERSION_V2,
-    }:
+    if source_contract_version in _LEGACY_OVERLAY_CONTRACTS:
         if compose_overlay not in (None, "", STAGING.overlay):
             raise EnvironmentError(
                 "legacy source contract overlay must be "
                 f"{STAGING.overlay!r} or omitted, got {compose_overlay!r}"
             )
         return STAGING.overlay
-    if source_contract_version != SOURCE_CONTRACT_VERSION_V3:
-        raise EnvironmentError(
-            f"unsupported source_contract_version: {source_contract_version!r}"
-        )
-    if compose_overlay not in CANONICAL_OVERLAYS:
-        raise EnvironmentError(
-            "v3 compose_overlay must be "
-            f"{STAGING.overlay!r} or {PRODUCTION.overlay!r}, got {compose_overlay!r}"
-        )
-    return compose_overlay
+    if source_contract_version in _CANONICAL_OVERLAY_CONTRACTS:
+        if compose_overlay not in CANONICAL_OVERLAYS:
+            raise EnvironmentError(
+                "v3/v4 compose_overlay must be "
+                f"{STAGING.overlay!r} or {PRODUCTION.overlay!r}, "
+                f"got {compose_overlay!r}"
+            )
+        return compose_overlay
+    raise EnvironmentError(
+        f"unsupported source_contract_version: {source_contract_version!r}"
+    )
 
 
 def resolve_runtime_overlay(
@@ -117,12 +133,12 @@ def resolve_runtime_overlay(
 ) -> str:
     """Select the snapshot overlay for a prepared release + project.
 
-    Real production cannot use v1/v2 snapshots. Real v3 overlay must match
-    the canonical identity. Ephemeral v3 uses the recorded overlay.
+    Real production cannot use v1/v2 snapshots. Real v3/v4 overlay must match
+    the canonical identity. Ephemeral v3/v4 projects use the recorded overlay.
     """
     recorded = recorded_compose_overlay(source_contract_version, compose_overlay)
     identity = real_identity(project_name)
-    if identity is PRODUCTION and source_contract_version < SOURCE_CONTRACT_VERSION_V3:
+    if identity is PRODUCTION and source_contract_version in _LEGACY_OVERLAY_CONTRACTS:
         raise EnvironmentError(
             "production cannot use a v1/v2 prepared release; "
             "the production overlay is not part of the hashed legacy contract"

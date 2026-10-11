@@ -59,10 +59,17 @@ _CANONICAL_OVERLAYS = frozenset({"compose.staging.yaml", "compose.production.yam
 
 
 def parse_compose_overlay(raw: object, *, source_contract_version: int) -> str | None:
-    """Parse additive compose_overlay. v1/v2 may omit it (staging overlay)."""
+    """Parse additive compose_overlay.
+
+    v1/v2 may omit it (staging overlay). v3/v4 require an explicit canonical
+    overlay. Callers must already validate ``source_contract_version``.
+    """
     if raw is None:
-        if source_contract_version >= SOURCE_CONTRACT_VERSION_V3:
-            raise ManifestError("v3 compose_overlay is required")
+        if source_contract_version in {
+            SOURCE_CONTRACT_VERSION_V3,
+            SOURCE_CONTRACT_VERSION_V4,
+        }:
+            raise ManifestError("v3/v4 compose_overlay is required")
         return None
     if type(raw) is not str:
         raise ManifestError("compose_overlay must be a string")

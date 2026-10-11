@@ -158,6 +158,107 @@ def test_ephemeral_v3_uses_recorded_overlay(tmp_path: Path) -> None:
         manifest=_Man(),
     )
     assert files[1].name == "compose.production.yaml"
+    assert files[0].parent == source.resolve()
+    assert files[1].parent == source.resolve()
+
+
+def test_v4_staging_and_production_overlays_accepted() -> None:
+    assert (
+        recorded_compose_overlay(4, "compose.staging.yaml") == "compose.staging.yaml"
+    )
+    assert (
+        recorded_compose_overlay(4, "compose.production.yaml")
+        == "compose.production.yaml"
+    )
+    assert (
+        resolve_runtime_overlay(
+            project_name="fetchnow-rollout-test-abcd1234",
+            source_contract_version=4,
+            compose_overlay="compose.staging.yaml",
+        )
+        == "compose.staging.yaml"
+    )
+    assert (
+        resolve_runtime_overlay(
+            project_name="fetchnow-production",
+            source_contract_version=4,
+            compose_overlay="compose.production.yaml",
+        )
+        == "compose.production.yaml"
+    )
+
+
+def test_v4_real_project_overlay_mismatch_rejected() -> None:
+    with pytest.raises(EnvironmentError, match="does not match"):
+        resolve_runtime_overlay(
+            project_name="fetchnow-production",
+            source_contract_version=4,
+            compose_overlay="compose.staging.yaml",
+        )
+    with pytest.raises(EnvironmentError, match="does not match"):
+        resolve_runtime_overlay(
+            project_name="fetchnow-staging",
+            source_contract_version=4,
+            compose_overlay="compose.production.yaml",
+        )
+
+
+def test_v4_missing_or_unknown_overlay_rejected() -> None:
+    with pytest.raises(EnvironmentError, match="v3/v4 compose_overlay"):
+        recorded_compose_overlay(4, None)
+    with pytest.raises(EnvironmentError, match="v3/v4 compose_overlay"):
+        recorded_compose_overlay(4, "")
+    with pytest.raises(EnvironmentError, match="v3/v4 compose_overlay"):
+        recorded_compose_overlay(4, "compose.override.yaml")
+
+
+def test_unknown_contract_versions_rejected() -> None:
+    for version in (5, 9, 0, -1):
+        with pytest.raises(EnvironmentError, match="unsupported source_contract_version"):
+            recorded_compose_overlay(version, "compose.staging.yaml")
+
+
+def test_v3_behavior_preserved() -> None:
+    assert recorded_compose_overlay(3, "compose.staging.yaml") == "compose.staging.yaml"
+    with pytest.raises(EnvironmentError, match="v3/v4 compose_overlay"):
+        recorded_compose_overlay(3, None)
+    assert (
+        resolve_runtime_overlay(
+            project_name="fetchnow-staging",
+            source_contract_version=3,
+            compose_overlay="compose.staging.yaml",
+        )
+        == "compose.staging.yaml"
+    )
+
+
+def test_ephemeral_v4_snapshot_uses_prepared_source_not_checkout(
+    tmp_path: Path,
+) -> None:
+    release = tmp_path / "rel"
+    source = release / "source"
+    source.mkdir(parents=True)
+    (source / "compose.yaml").write_text("services: {api: {}}\n")
+    (source / "compose.staging.yaml").write_text("services: {api: {}}\n")
+    # Live checkout decoy must not be selected.
+    live = tmp_path / "checkout"
+    live.mkdir()
+    (live / "compose.yaml").write_text("services: {live: {}}\n")
+    (live / "compose.staging.yaml").write_text("services: {live: {}}\n")
+
+    class _Man:
+        source_contract_version = 4
+        compose_overlay = "compose.staging.yaml"
+
+    files = snapshot_compose_files_for_release(
+        release,
+        project_name="fetchnow-rollout-test-abcd1234",
+        manifest=_Man(),
+    )
+    assert files[0] == (source / "compose.yaml").resolve()
+    assert files[1] == (source / "compose.staging.yaml").resolve()
+    assert "checkout" not in str(files[0])
+    assert files[0].read_text(encoding="utf-8") == "services: {api: {}}\n"
 
 
 def test_snapshot_compose_files_refuse_unknown_overlay(tmp_path: Path) -> None:
