@@ -1,24 +1,22 @@
 # SEC-08/09 Release Integration — Implementation Record
 
-Status: **NATIVE ACCEPTANCE RETRY** (workflow bootstrap fix after run 38146059444)
+Status: **NATIVE DIAGNOSTIC RETRY** (source-only-off evidence after 38146599692)
 Not READY FOR PRODUCTION / ROLLOUT. Residual acceptance / VEX unchanged.
 Date: 2026-10-11. Worktree `/Users/dina/projects/FetchNow-sec09`.
 
-### Prior native attempt (retained)
+### Prior native attempts (retained)
 
-- Run: https://github.com/DmitriiSeitsman/FetchNow/actions/runs/38146059444
-- Verdict: **workflow bootstrap FAIL; native matrix NOT_RUN**
-- Cause: same-step `uv --version` after `$GITHUB_PATH` append (exit 127)
-- SHA: `a9c67492eb34eee867172ad0f9d92d6e309f592b`
-- New run does not rewrite this result.
+- `38146059444`: workflow bootstrap FAIL; matrix NOT_RUN.
+- `38146599692`: prepare PASS; source-only-off FAIL; cleanup PASS; later cases NOT_RUN.
+  Cause of source-only-off was **not proven** (messages lost by short-circuit assertion).
 
-### Bootstrap fix (this commit)
+### Diagnostic harness fix (this commit)
 
-- Absolute `"$RUNNER_TEMP/${asset%.tar.gz}/uv"` in the install step; `$GITHUB_PATH` kept for later steps.
-- Matrix step no longer pre-creates the evidence leaf; harness `exist_ok=False` retained.
-- Missing `result.json` fallback creates the directory only then, writes FAIL/`native_result=absent`, preserves original exit code.
-- Exact-subject marker: `[native-once-20261011-uvpath]`.
-- Offline tests: `tests/release/test_sec09_release_workflow_bootstrap.py`.
+- Structured sanitized evidence before cleanup (`media_release_evidence.py`).
+- source-only-off separates rollout failure vs media authority / flags-OFF checks.
+- Unreached matrix cases recorded as NOT_RUN; cleanup is a separate verdict.
+- Exact-subject marker: `[native-once-20261011-diag]`.
+- No application behavior change claimed without a proven offline defect.
 
 ## Contracts implemented
 

@@ -4,6 +4,9 @@
 Explicit native execution only: Linux AMD64/root, clean committed source,
 Docker >=28/systemd/cgroup2 and Landlock >=6. One temporary /run slice and
 one test project. NOT_RUN exits 2. No production unit, prune or retries.
+
+Failure evidence is written before scoped cleanup. Diagnostics never replace
+the primary rollout failure, and unreached matrix cases are recorded NOT_RUN.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -31,11 +35,25 @@ from fetchnow_release.activate import ActivateError  # noqa: E402
 from fetchnow_release.bounded_subprocess import run_bounded  # noqa: E402
 from fetchnow_release.c3_constants import STATUS_ROLLED_BACK  # noqa: E402
 from fetchnow_release.current_state import current_path  # noqa: E402
+from fetchnow_release.diagnostics import format_rollout_failure_diagnostics  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
     load_plan,
     new_deployment_id,
     utc_now,
     write_plan,
+)
+from fetchnow_release.journal_io import read_json  # noqa: E402
+from fetchnow_release.media_release_evidence import (  # noqa: E402
+    MATRIX_CASE_NAMES,
+    bounded_container_rows,
+    evaluate_source_only_off,
+    mark_remaining_cases_not_run,
+    merge_primary_and_diagnostic_errors,
+    rollout_result_snapshot,
+    safe_load_current_authority,
+    safe_load_media_authority,
+    sanitized_deployment_journal,
+    write_json_evidence,
 )
 from fetchnow_release.media_state import (  # noqa: E402
     MediaActivationState,
@@ -43,8 +61,9 @@ from fetchnow_release.media_state import (  # noqa: E402
 )
 from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
 from fetchnow_release.recover import RecoverInput, _execute_accept_target  # noqa: E402
+from fetchnow_release.redact import redact  # noqa: E402
 from fetchnow_release.resource_budget import parse_resource_budget  # noqa: E402
-from fetchnow_release.rollout import RolloutInput, rollout_release  # noqa: E402
+from fetchnow_release.rollout import RolloutInput, RolloutResult, rollout_release  # noqa: E402
 from fetchnow_release.rollout_project import make_rollout_project_name  # noqa: E402
 from fetchnow_release.stabilize import StabilizationPolicy  # noqa: E402
 from release_rollout_integration_test import (  # noqa: E402
@@ -96,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     compose: list[str] = []
     installed = False
     rc = 1
+    primary_failure: dict[str, Any] | None = None
     budget = parse_resource_budget(
         {
             "approved": True,
@@ -113,10 +133,14 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
-    def record(name: str, ok: bool) -> None:
-        cases.append(
-            {"name": name, "status": "PASS" if ok else "FAIL", "utc": utc_now()}
-        )
+    def record(name: str, ok: bool, **extra: object) -> None:
+        entry: dict[str, object] = {
+            "name": name,
+            "status": "PASS" if ok else "FAIL",
+            "utc": utc_now(),
+        }
+        entry.update(extra)
+        cases.append(entry)
         if not ok:
             raise RuntimeError(f"matrix assertion failed: {name}")
 
@@ -176,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         with patch.object(rollout, "activate_gateway", injected):
             return rollout_release(inp(revision, active=True))
 
-    def sidecars() -> list[dict]:
+    def project_inspect_rows() -> list[dict[str, Any]]:
         ids = checked(
             [
                 "docker",
@@ -190,12 +214,100 @@ def main(argv: list[str] | None = None) -> int:
         ).split()
         if not ids:
             return []
+        return list(json.loads(checked(["docker", "inspect", *ids], ROOT)))
+
+    def sidecars() -> list[dict]:
         return [
             row
-            for row in json.loads(checked(["docker", "inspect", *ids], ROOT))
+            for row in project_inspect_rows()
             if row["Config"]["Labels"].get("com.docker.compose.service")
             in {"media-executor", "media-net-executor", "egress-proxy"}
         ]
+
+    def persist_failure_bundle(
+        *,
+        stage: str,
+        evaluation: dict[str, Any],
+        result: RolloutResult | None,
+    ) -> None:
+        nonlocal primary_failure
+        diagnostic_error: str | None = None
+        bundle: dict[str, Any] = {
+            "stage": stage,
+            "evaluation": evaluation,
+            "captured_at_utc": utc_now(),
+        }
+        try:
+            bundle["current_authority"] = safe_load_current_authority(
+                lambda: read_json(current_path(deploy))
+                if current_path(deploy).is_file()
+                else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostic_error = type(exc).__name__
+            bundle["current_authority"] = {"load_error": diagnostic_error}
+        try:
+            dep_id = None if result is None else result.deployment_id
+            if dep_id is None and isinstance(evaluation.get("rollout"), dict):
+                dep_id = evaluation["rollout"].get("deployment_id")
+            bundle["deployment_journal"] = sanitized_deployment_journal(
+                deploy_root=deploy, deployment_id=dep_id
+            )
+            if result is not None:
+                bundle["failure_diagnostics_text"] = format_rollout_failure_diagnostics(
+                    status=result.status,
+                    messages=result.messages,
+                    deployment_id=result.deployment_id,
+                    deploy_root=deploy,
+                )
+        except Exception as exc:  # noqa: BLE001
+            diagnostic_error = diagnostic_error or type(exc).__name__
+            bundle["deployment_journal_error"] = type(exc).__name__
+        try:
+            bundle["containers"] = bounded_container_rows(project_inspect_rows())
+        except Exception as exc:  # noqa: BLE001
+            diagnostic_error = diagnostic_error or type(exc).__name__
+            bundle["containers_error"] = type(exc).__name__
+        merged = merge_primary_and_diagnostic_errors(
+            primary=evaluation, diagnostic_error=diagnostic_error
+        )
+        bundle["evaluation"] = merged
+        primary_failure = bundle
+        write_json_evidence(evidence / f"{stage}.json", bundle)
+        write_json_evidence(evidence / "primary_failure.json", bundle)
+
+    def assert_source_only_off(result: RolloutResult) -> None:
+        media = safe_load_media_authority(lambda: load_media_activation_state(deploy))
+        evaluation = evaluate_source_only_off(result, media=media)
+        # Always persist structured evidence before any assertion abort/cleanup.
+        write_json_evidence(evidence / "source-only-off.json", evaluation)
+        if not evaluation["ok"]:
+            persist_failure_bundle(
+                stage="source-only-off", evaluation=evaluation, result=result
+            )
+            print(
+                "FAIL source-only-off:\n"
+                + format_rollout_failure_diagnostics(
+                    status=result.status,
+                    messages=result.messages,
+                    deployment_id=result.deployment_id,
+                    deploy_root=deploy,
+                )
+            )
+            print(
+                "checks="
+                + json.dumps(evaluation["checks"])
+                + " failures="
+                + json.dumps(evaluation["failures"])
+            )
+        record(
+            "source-only-off",
+            bool(evaluation["ok"]),
+            rollout=rollout_result_snapshot(result),
+            media_authority=media,
+            checks=evaluation["checks"],
+            failures=evaluation["failures"],
+        )
 
     try:
         from fetchnow_release.media_prerequisites import (
@@ -242,10 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_postgres(compose, clone)
         run(compose + ["run", "--rm", "api", "alembic", "upgrade", "head"], cwd=clone)
         source = rollout_release(inp(revision_a, active=False, bootstrap=True))
-        record(
-            "source-only-off",
-            source.ok and not media_state().activation,
-        )
+        assert_source_only_off(source)
         before = current_path(deploy).read_bytes()
         failed = fail_gateway_once(revision_a)
         record(
@@ -254,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             and not sidecars()
             and current_path(deploy).read_bytes() == before
             and not media_state().activation,
+            rollout=rollout_result_snapshot(failed),
         )
         on = rollout_release(inp(revision_a, active=True))
         record(
@@ -262,9 +372,14 @@ def main(argv: list[str] | None = None) -> int:
             and not on.already_active
             and media_state().activation
             and len(sidecars()) == 3,
+            rollout=rollout_result_snapshot(on),
         )
         stable = rollout_release(inp(revision_a, active=True))
-        record("active-idempotency", stable.ok and stable.already_active)
+        record(
+            "active-idempotency",
+            stable.ok and stable.already_active,
+            rollout=rollout_result_snapshot(stable),
+        )
         marker.write_text(suffix + " B")
         revision_b = commit(clone, "test: isolated media release B")
         prepare(revision_b)
@@ -283,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
             failed.status == STATUS_ROLLED_BACK
             and current_path(deploy).read_bytes() == before
             and actual_ids == previous_ids,
+            rollout=rollout_result_snapshot(failed),
         )
         from fetchnow_release import rollout
 
@@ -299,11 +415,13 @@ def main(argv: list[str] | None = None) -> int:
             "post-current-publication-rollback",
             failed.status == STATUS_ROLLED_BACK
             and current_path(deploy).read_bytes() == before,
+            rollout=rollout_result_snapshot(failed),
         )
         upgraded = rollout_release(inp(revision_b, active=True))
         record(
             "on-to-on-commit",
             upgraded.ok and media_state().revision == revision_b,
+            rollout=rollout_result_snapshot(upgraded),
         )
         if upgraded.deployment_id is None:
             raise RuntimeError("successful rollout has no deployment id")
@@ -339,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         proxy = next(
             row
             for row in sidecars()
-            if row["Config"]["Labels"]["com.docker.compose.service"] == "egress-proxy"
+            if row["Config"]["Labels"].get("com.docker.compose.service") == "egress-proxy"
         )
         checked(["docker", "stop", proxy["Id"]], ROOT)
         authority_before = current_path(deploy).read_bytes()
@@ -356,11 +474,44 @@ def main(argv: list[str] | None = None) -> int:
         rc = 0
     except Exception as exc:
         cases.append(
-            {"name": "execution", "status": "FAIL", "error_type": type(exc).__name__}
+            {
+                "name": "execution",
+                "status": "FAIL",
+                "error_type": type(exc).__name__,
+                "error_detail": redact(str(exc)),
+            }
         )
-        print(f"FAIL: native media release matrix ({type(exc).__name__})")
+        print(f"FAIL: native media release matrix ({type(exc).__name__}: {redact(str(exc))})")
+        if primary_failure is None:
+            try:
+                persist_failure_bundle(
+                    stage="execution",
+                    evaluation={
+                        "stage": "execution",
+                        "ok": False,
+                        "error_type": type(exc).__name__,
+                        "error_detail": redact(str(exc)),
+                    },
+                    result=None,
+                )
+            except Exception as diag_exc:  # noqa: BLE001
+                write_json_evidence(
+                    evidence / "execution_diagnostic_error.json",
+                    {
+                        "primary_error_type": type(exc).__name__,
+                        "primary_error_detail": redact(str(exc)),
+                        "diagnostic_error": type(diag_exc).__name__,
+                    },
+                )
     finally:
+        cases.extend(
+            mark_remaining_cases_not_run(planned=MATRIX_CASE_NAMES, recorded=cases)
+        )
+        # Evidence must exist before disposable teardown.
+        if primary_failure is not None:
+            write_json_evidence(evidence / "primary_failure.json", primary_failure)
         cleanup_ok = True
+        cleanup_error: str | None = None
         artifacts = []
         references = []
         try:
@@ -374,8 +525,9 @@ def main(argv: list[str] | None = None) -> int:
                     ):
                         raise RuntimeError("refusing non-test image cleanup reference")
                     references.append(reference)
-        except Exception:
+        except Exception as exc:
             cleanup_ok = False
+            cleanup_error = type(exc).__name__
             rc = 1
             references.clear()
         try:
@@ -412,20 +564,27 @@ def main(argv: list[str] | None = None) -> int:
                 )
             for reference in sorted(set(references)):
                 checked(["docker", "image", "rm", reference], ROOT)
-        except Exception:
+        except Exception as exc:
             cleanup_ok = False
+            cleanup_error = cleanup_error or type(exc).__name__
             rc = 1
         if installed:
             try:
                 checked(["systemctl", "stop", slice_unit], ROOT)
                 unit.unlink()
                 checked(["systemctl", "daemon-reload"], ROOT)
-            except Exception:
+            except Exception as exc:
                 cleanup_ok = False
+                cleanup_error = cleanup_error or type(exc).__name__
                 rc = 1
         cases.append(
-            {"name": "scoped-cleanup", "status": "PASS" if cleanup_ok else "FAIL"}
+            {
+                "name": "scoped-cleanup",
+                "status": "PASS" if cleanup_ok else "FAIL",
+                **({"error_type": cleanup_error} if cleanup_error else {}),
+            }
         )
+        # Cleanup failure must not erase or rewrite primary failure evidence.
         (evidence / "result.json").write_text(
             json.dumps(
                 {
@@ -435,6 +594,7 @@ def main(argv: list[str] | None = None) -> int:
                     "status": "PASS" if rc == 0 else "FAIL",
                     "cases": cases,
                     "artifacts": artifacts,
+                    "primary_failure_present": primary_failure is not None,
                     "security_residual_acceptance": False,
                 },
                 indent=2,
