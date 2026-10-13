@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import sha256_file
 from .journal_io import JournalIOError
 from .manifest import ManifestError, load_manifest, manifest_path
+from .media_activation import MEDIA_SIDECAR_START_ORDER, MediaActivationPlan
 from .override import (
     OverrideError,
     compose_files_include_delivery,
@@ -39,9 +41,31 @@ from .redact import redact
 from .revision import RevisionError, validate_full_sha
 from .routing_health import PublicHttpsGateConfig
 
+_IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
 
 class HealthError(ValueError):
     """Health gate failure."""
+
+
+@dataclass(frozen=True)
+class HealthMediaExpectation:
+    """Validated expected media state for health classification.
+
+    OFF keeps canonical-only runtime expectation: leftover sidecars are orphans.
+    ON expects exactly the three media sidecars and runs media-specific probes.
+    Never inferred from container presence, overlays, or release_mode alone.
+    """
+
+    activation: bool
+    media_image_ids: dict[str, str] = field(default_factory=dict)
+    executor_socket: str = "/run/fetchnow-executor/ctrl/worker.sock"
+    net_socket: str = "/run/fetchnow-media-net/ctrl/worker.sock"
+    denied_host: str = ""
+    expect_flags_enabled: bool = True
+    check_worker_flags: bool = True
+    resource_budget: dict[str, object] | None = None
+    slice_unit: str = "fetchnow-media-executor.slice"
 
 
 @dataclass(frozen=True)
@@ -64,6 +88,64 @@ class HealthInput:
     # inject a disposable TLS fixture via this field (test-only); production CLI
     # never accepts an arbitrary public URL.
     public_https: PublicHttpsGateConfig | None = None
+    # Explicit media expectation for rollout/recover. Managed standalone health
+    # (deploy_root set) refuses caller media and loads validated media-activation
+    # state instead. None means OFF for orphan classification.
+    media: HealthMediaExpectation | None = None
+
+
+def validate_health_media_expectation(
+    media: HealthMediaExpectation,
+) -> HealthMediaExpectation:
+    if type(media.activation) is not bool:
+        raise HealthError("media expectation activation must be boolean")
+    if not media.activation:
+        if media.media_image_ids:
+            raise HealthError("OFF media expectation must not include image IDs")
+        return media
+    expected = set(MEDIA_SIDECAR_START_ORDER)
+    got = set(media.media_image_ids)
+    if got != expected:
+        raise HealthError(
+            "ON media expectation requires exactly "
+            f"{sorted(expected)} image IDs, got {sorted(got)}"
+        )
+    for service, image_id in media.media_image_ids.items():
+        if not isinstance(image_id, str) or not _IMAGE_ID_RE.fullmatch(image_id):
+            raise HealthError(f"malformed media image ID for {service}")
+    if not media.denied_host.strip():
+        raise HealthError("ON media expectation requires denied_host")
+    for label, path in (
+        ("executor_socket", media.executor_socket),
+        ("net_socket", media.net_socket),
+    ):
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise HealthError(f"{label} must be an absolute path")
+    return media
+
+
+def health_media_from_plan(
+    plan: MediaActivationPlan | None,
+    *,
+    expect_flags_enabled: bool = True,
+    check_worker_flags: bool = True,
+) -> HealthMediaExpectation:
+    """Build health media expectation from an explicit activation plan."""
+    if plan is None or not plan.activation:
+        return HealthMediaExpectation(activation=False)
+    return validate_health_media_expectation(
+        HealthMediaExpectation(
+            activation=True,
+            media_image_ids=dict(plan.media_image_ids),
+            executor_socket=plan.executor_settings["MEDIA_EXECUTOR_SOCKET"],
+            net_socket=plan.executor_settings["MEDIA_NET_EXECUTOR_SOCKET"],
+            denied_host=plan.denied_host,
+            expect_flags_enabled=expect_flags_enabled,
+            check_worker_flags=check_worker_flags,
+            resource_budget=plan.resource_budget,
+            slice_unit=plan.slice_unit,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -122,9 +204,13 @@ def _inspect(container_id: str) -> dict[str, Any]:
     try:
         result = run_docker_probe(["docker", "inspect", container_id])
     except BoundedTimeoutError as exc:
-        raise HealthError(f"docker inspect timed out for {container_id}: {exc}") from exc
+        raise HealthError(
+            f"docker inspect timed out for {container_id}: {exc}"
+        ) from exc
     except BoundedCancelledError as exc:
-        raise HealthError(f"docker inspect cancelled for {container_id}: {exc}") from exc
+        raise HealthError(
+            f"docker inspect cancelled for {container_id}: {exc}"
+        ) from exc
     if result.returncode != 0:
         raise HealthError(f"docker inspect failed for {container_id}")
     data = json.loads(result.stdout_text)
@@ -180,6 +266,139 @@ def _managed_image_ids(inp: HealthInput, revision: str) -> dict[str, str]:
     return dict(application.image_ids)
 
 
+def _managed_media_expectation(
+    inp: HealthInput, revision: str
+) -> HealthMediaExpectation:
+    """Resolve managed media authority from validated media-activation state."""
+    from .media_state import MediaStateError, load_media_activation_state
+
+    if inp.deploy_root is None:
+        raise HealthError("managed media health requires deploy root")
+    if inp.media is not None:
+        raise HealthError("managed health refuses caller-supplied media expectation")
+    try:
+        state = load_media_activation_state(inp.deploy_root)
+    except MediaStateError as exc:
+        raise HealthError(f"managed media state invalid: {exc}") from exc
+    if state is None or not state.activation:
+        return HealthMediaExpectation(activation=False)
+    if state.revision != revision:
+        raise HealthError("media-activation revision does not match expected revision")
+    try:
+        executor_socket = state.executor_settings["MEDIA_EXECUTOR_SOCKET"]
+        net_socket = state.executor_settings["MEDIA_NET_EXECUTOR_SOCKET"]
+    except KeyError as exc:
+        raise HealthError(
+            "active media-activation state missing executor sockets"
+        ) from exc
+    return validate_health_media_expectation(
+        HealthMediaExpectation(
+            activation=True,
+            media_image_ids=dict(state.media_image_ids),
+            executor_socket=executor_socket,
+            net_socket=net_socket,
+            denied_host=state.denied_host,
+            expect_flags_enabled=True,
+            check_worker_flags=True,
+            resource_budget=state.resource_budget,
+            slice_unit=state.slice_unit,
+        )
+    )
+
+
+def _assert_media_sidecar_runtime(
+    *,
+    inp: HealthInput,
+    by_service: dict[str, list[dict[str, Any]]],
+    media: HealthMediaExpectation,
+    messages: list[str],
+) -> None:
+    """Structural sidecar readiness: running/labels/IDs, not Docker Health.Status."""
+    for svc_name in MEDIA_SIDECAR_START_ORDER:
+        if svc_name not in by_service:
+            raise HealthError(f"missing media service container: {svc_name}")
+        if len(by_service[svc_name]) != 1:
+            raise HealthError(
+                f"service {svc_name} has {len(by_service[svc_name])} containers; "
+                "expected 1"
+            )
+        row = by_service[svc_name][0]
+        state = str(row.get("State") or row.get("state") or "").lower()
+        if state != "running":
+            raise HealthError(f"{svc_name} state is {state!r}, expected running")
+        cid = str(row.get("ID") or row.get("Id") or row.get("id") or "")
+        if not cid:
+            raise HealthError(f"{svc_name} missing container id")
+        info = _inspect(cid)
+        labels = (info.get("Config") or {}).get("Labels") or {}
+        project_label = labels.get("com.docker.compose.project")
+        if project_label != inp.project_name:
+            raise HealthError(
+                f"{svc_name} project label {project_label!r} != {inp.project_name!r}"
+            )
+        service_label = labels.get("com.docker.compose.service")
+        if service_label != svc_name:
+            raise HealthError(
+                f"{svc_name} service label {service_label!r} != {svc_name!r}"
+            )
+        image_id = str(info.get("Image") or "")
+        want = media.media_image_ids[svc_name]
+        if image_id != want:
+            raise HealthError(f"{svc_name} image ID {image_id!r} != expected {want!r}")
+        status = str((info.get("State") or {}).get("Status") or "").lower()
+        if status in {"exited", "dead", "restarting"}:
+            raise HealthError(f"{svc_name} container status is {status!r}")
+        # Sidecars intentionally lack canonical Docker healthchecks.
+        messages.append(
+            f"OK: {svc_name} running media-sidecar restarts="
+            f"{int(info.get('RestartCount') or 0)}"
+        )
+
+
+def _assert_media_probes(
+    *,
+    inp: HealthInput,
+    media: HealthMediaExpectation,
+    messages: list[str],
+) -> None:
+    from .media_health import MediaHealthError, run_media_health
+    from .media_prerequisites import (
+        MediaPrerequisiteError,
+        assert_running_media_budget,
+    )
+    from .resource_budget import ResourceBudgetError, parse_resource_budget
+
+    result = run_media_health(
+        project_name=inp.project_name,
+        env_file=inp.env_file,
+        compose_files=inp.compose_files,
+        cwd=inp.repo_root,
+        executor_socket=media.executor_socket,
+        net_socket=media.net_socket,
+        expect_flags_enabled=media.expect_flags_enabled,
+        denied_host=media.denied_host,
+        media_image_ids=media.media_image_ids,
+        check_worker_flags=media.check_worker_flags,
+    )
+    if not result.ok:
+        raise HealthError(result.messages[0])
+    messages.extend(result.messages)
+    if media.resource_budget is not None:
+        try:
+            budget = parse_resource_budget(media.resource_budget)
+            assert_running_media_budget(
+                project_name=inp.project_name,
+                env_file=inp.env_file,
+                compose_files=inp.compose_files,
+                cwd=inp.repo_root,
+                budget=budget,
+                slice_unit=media.slice_unit,
+            )
+        except (MediaPrerequisiteError, ResourceBudgetError, MediaHealthError) as exc:
+            raise HealthError(str(exc)) from exc
+        messages.append("OK: media running resource budget")
+
+
 def run_health(inp: HealthInput) -> HealthResult:
     messages: list[str] = []
     http_results: list[HttpCheckResult] = []
@@ -189,6 +408,7 @@ def run_health(inp: HealthInput) -> HealthResult:
         require_docker_daemon()
 
         expected_ids = inp.expected_image_ids
+        media_expectation: HealthMediaExpectation
         if inp.deploy_root is not None:
             identity = real_identity(inp.project_name)
             if identity is not None:
@@ -203,10 +423,16 @@ def run_health(inp: HealthInput) -> HealthResult:
                     require_deploy_root=True,
                 )
             expected_ids = _managed_image_ids(inp, rev)
-        elif expected_ids is None:
-            # Standalone CLI/tag path: never allow protected managed projects to
-            # silently fall back to revision-tag matching of Config.Image.
-            assert_isolated_tag_health_project(inp.project_name)
+            media_expectation = _managed_media_expectation(inp, rev)
+        else:
+            if expected_ids is None:
+                # Standalone CLI/tag path: never allow protected managed projects to
+                # silently fall back to revision-tag matching of Config.Image.
+                assert_isolated_tag_health_project(inp.project_name)
+            if inp.media is None:
+                media_expectation = HealthMediaExpectation(activation=False)
+            else:
+                media_expectation = validate_health_media_expectation(inp.media)
 
         rows = _ps_services(inp)
         runtime_expected = tuple(
@@ -218,6 +444,9 @@ def run_health(inp: HealthInput) -> HealthResult:
             {"storage-init"}
             if compose_files_include_storage_init(inp.compose_files)
             else ()
+        )
+        media_services = (
+            MEDIA_SIDECAR_START_ORDER if media_expectation.activation else ()
         )
         by_service: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
@@ -238,7 +467,12 @@ def run_health(inp: HealthInput) -> HealthResult:
                     f"service {expected} has {len(by_service[expected])} containers; expected 1"
                 )
 
-        unknown = sorted(set(by_service) - set(runtime_expected) - oneshot_services)
+        unknown = sorted(
+            set(by_service)
+            - set(runtime_expected)
+            - oneshot_services
+            - set(media_services)
+        )
         if unknown:
             raise HealthError(f"unknown/orphan services present: {', '.join(unknown)}")
         for oneshot in sorted(oneshot_services & set(by_service)):
@@ -374,6 +608,15 @@ def run_health(inp: HealthInput) -> HealthResult:
                 )
             messages.append(f"OK: HTTP {path} status=ok attempts={result.attempts}")
 
+        if media_expectation.activation:
+            _assert_media_sidecar_runtime(
+                inp=inp,
+                by_service=by_service,
+                media=media_expectation,
+                messages=messages,
+            )
+            _assert_media_probes(inp=inp, media=media_expectation, messages=messages)
+
         messages.append("OK: health gate passed")
         return HealthResult(ok=True, messages=tuple(messages), http=tuple(http_results))
     except (
@@ -392,6 +635,7 @@ def run_health(inp: HealthInput) -> HealthResult:
         DockerCheckError,
         OSError,
         json.JSONDecodeError,
+        ValueError,
     ) as exc:
         return HealthResult(
             ok=False,

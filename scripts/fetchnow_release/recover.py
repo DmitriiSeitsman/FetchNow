@@ -48,7 +48,7 @@ from .environment import (
     real_identity,
     snapshot_compose_files_for_release,
 )
-from .health import HealthInput
+from .health import HealthInput, health_media_from_plan
 from .image_identity import assert_release_images_present
 from .journal import (
     JournalError,
@@ -257,6 +257,7 @@ def _execute_accept_target(
         repo_root=cwd,
         gateway_base_url=inp.gateway_base_url,
         expected_image_ids=plan.target_image_ids,
+        media=health_media_from_plan(media_plan if plan.media is not None else None),
     )
     stabilize_full_health(health_inp, policy=inp.policy)
     if plan.media is not None:
@@ -404,6 +405,11 @@ def _execute_rollback(
         compose_files=compose_files,
         cwd=cwd,
     )
+    previous_media_plan = (
+        media_plan_from_journal(plan.media, previous=True)
+        if plan.media is not None
+        else None
+    )
     health_inp = HealthInput(
         project_name=inp.project_name,
         env_file=inp.env_file,
@@ -412,10 +418,11 @@ def _execute_rollback(
         repo_root=cwd,
         gateway_base_url=inp.gateway_base_url,
         expected_image_ids=plan.previous_image_ids,
+        media=health_media_from_plan(previous_media_plan),
     )
     stabilize_full_health(health_inp, policy=inp.policy)
     if plan.media is not None:
-        previous_media_plan = media_plan_from_journal(plan.media, previous=True)
+        assert previous_media_plan is not None
         verify_media_plan(
             plan=previous_media_plan,
             project_name=inp.project_name,

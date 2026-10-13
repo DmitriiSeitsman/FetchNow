@@ -63,7 +63,7 @@ from .environment import (
     real_identity,
     snapshot_compose_files_for_release,
 )
-from .health import HealthInput
+from .health import HealthInput, health_media_from_plan
 from .image_identity import ImageIdentityError, assert_release_images_present
 from .journal import (
     JournalError,
@@ -346,6 +346,11 @@ def _perform_rollback(
             compose_files=compose_files,
             cwd=cwd,
         )
+        previous_media_plan = (
+            media_plan_from_journal(plan_doc.media, previous=True)
+            if plan_doc.media is not None
+            else None
+        )
         health_inp = HealthInput(
             project_name=inp.project_name,
             env_file=inp.env_file,
@@ -354,10 +359,12 @@ def _perform_rollback(
             repo_root=cwd,
             gateway_base_url=inp.gateway_base_url,
             expected_image_ids=previous_ids,
+            media=health_media_from_plan(previous_media_plan),
         )
         stabilize_full_health(health_inp, policy=inp.policy)
         if plan_doc.media is not None:
-            previous_plan = media_plan_from_journal(plan_doc.media, previous=True)
+            previous_plan = previous_media_plan
+            assert previous_plan is not None
             verify_media_plan(
                 plan=previous_plan,
                 project_name=inp.project_name,
@@ -505,6 +512,7 @@ def _verify_already_active(
         repo_root=cwd,
         gateway_base_url=inp.gateway_base_url,
         expected_image_ids=override_ids,
+        media=health_media_from_plan(media_plan),
     )
     result = stabilize_full_health(health_inp, policy=inp.policy)
     if not result.ok:
@@ -959,30 +967,22 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                     repo_root=cwd,
                     gateway_base_url=inp.gateway_base_url,
                     expected_image_ids=target_ids,
+                    media=health_media_from_plan(media_plan),
                 )
-                stabilize_full_health(health_inp, policy=inp.policy)
+                health_result = stabilize_full_health(health_inp, policy=inp.policy)
                 if media_plan.activation:
-                    from .media_health import run_media_health
-
-                    media_health = run_media_health(
-                        project_name=inp.project_name,
-                        env_file=inp.env_file,
-                        compose_files=compose_files,
-                        cwd=cwd,
-                        executor_socket=media_plan.executor_settings[
-                            "MEDIA_EXECUTOR_SOCKET"
-                        ],
-                        net_socket=media_plan.executor_settings[
-                            "MEDIA_NET_EXECUTOR_SOCKET"
-                        ],
-                        expect_flags_enabled=True,
-                        denied_host=inp.media_denied_host,
-                        media_image_ids=media_plan.media_image_ids,
-                        check_worker_flags=True,
+                    messages.extend(
+                        msg
+                        for msg in health_result.messages
+                        if msg.startswith(
+                            (
+                                "OK: media",
+                                "OK: egress-proxy",
+                                "OK: worker executor",
+                            )
+                        )
+                        or msg.startswith("OK: media-")
                     )
-                    if not media_health.ok:
-                        raise RolloutError(media_health.messages[0])
-                    messages.extend(media_health.messages)
 
                 # Atomic current.json (schema v2) only after stabilized success.
                 committed_at = utc_now()

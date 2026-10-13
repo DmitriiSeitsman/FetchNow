@@ -4,10 +4,9 @@ name: SEC-08/09 native release transaction
 # acceptance (sec09-media-net-executor.yml). Push-only; no workflow_dispatch.
 # Exact first-line commit subject required. Reruns (run_attempt != 1) skip.
 #
-# Prior retained: 38146059444 bootstrap FAIL; 38148607608 Compose memory FAIL;
-# 38164784823 source-only-off PASS, off-to-on-rollback FAIL
-# (gateway injection also failed rollback). This marker authorizes the
-# fail-once gateway injection fix only.
+# Prior retained: 38169133092 source-only-off + intended off-to-on-rollback PASS;
+# same-source-activation FAIL (expected media sidecars classified as orphan).
+# This marker authorizes media-aware health/stabilization only.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -29,7 +28,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261011-gatewayonce]
+            test(security): SEC-08/09 native release transaction [native-once-20261013-mediahealth]
         run: |
           python3 - <<'PY'
           import json

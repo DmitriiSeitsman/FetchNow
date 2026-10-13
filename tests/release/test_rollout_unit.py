@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1338,7 +1339,9 @@ def _patch_bootstrap_rollout(
     )
     monkeypatch.setattr(
         "fetchnow_release.rollout.stabilize_full_health",
-        lambda *_a, **_k: None,
+        lambda *_a, **_k: SimpleNamespace(
+            ok=True, messages=("OK: health gate passed",), http=()
+        ),
     )
     monkeypatch.setattr(
         "fetchnow_release.rollout.write_current_state",
@@ -1551,7 +1554,9 @@ def test_pr8_rollback_skips_storage_init(
     )
     monkeypatch.setattr(
         "fetchnow_release.rollout.stabilize_full_health",
-        lambda *_a, **_k: None,
+        lambda *_a, **_k: SimpleNamespace(
+            ok=True, messages=("OK: health gate passed",), http=()
+        ),
     )
 
     def _init(**_k: object) -> None:
