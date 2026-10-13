@@ -17,6 +17,7 @@ from fetchnow_release.media_release_evidence import (  # noqa: E402
     evaluate_source_only_off,
     mark_remaining_cases_not_run,
     merge_primary_and_diagnostic_errors,
+    prepare_result_snapshot,
     redact_messages,
     rollout_result_snapshot,
     safe_load_media_authority,
@@ -44,6 +45,30 @@ def _inactive(**kwargs: object) -> MediaActivationState:
     return MediaActivationState(**base)  # type: ignore[arg-type]
 
 
+def test_prepare_result_snapshot_preserves_messages_before_assertion() -> None:
+    from types import SimpleNamespace
+
+    snap = prepare_result_snapshot(
+        requested_revision="b" * 40,
+        env_revision="a" * 40,
+        result=SimpleNamespace(
+            ok=False,
+            already_prepared=False,
+            messages=(
+                "FAIL: expected revision does not match FETCHNOW_RELEASE_REVISION",
+                "POSTGRES_PASSWORD=s3cret",
+            ),
+            release_dir=Path("/tmp/x") / ("b" * 40),
+        ),
+    )
+    assert snap["ok"] is False
+    assert snap["requested_revision"] == "b" * 40
+    assert snap["env_revision"] == "a" * 40
+    assert "does not match" in snap["messages"][0]
+    assert "s3cret" not in snap["messages"][1]
+    assert snap["release_dir_name"] == "b" * 40
+
+
 def test_source_ok_false_preserves_messages_status_deployment_id() -> None:
     result = RolloutLike(
         ok=False,
@@ -52,9 +77,7 @@ def test_source_ok_false_preserves_messages_status_deployment_id() -> None:
         deployment_id="12345678-1234-1234-1234-123456789abc",
         status="failed",
     )
-    evaluation = evaluate_source_only_off(
-        result, media={"exists": False}
-    )
+    evaluation = evaluate_source_only_off(result, media={"exists": False})
     assert evaluation["ok"] is False
     assert evaluation["checks"]["rollout_ok"] is False
     assert "rollout_failed" in evaluation["failures"]
@@ -133,7 +156,11 @@ def test_secrets_are_redacted_in_messages() -> None:
     blob = "\n".join(messages)
     assert "postgresql://u:p@host/db" not in blob
     assert "user:pass" not in blob
-    assert "token=abc" not in blob or "TOKEN=<redacted>" in blob.upper() or "<redacted>" in blob
+    assert (
+        "token=abc" not in blob
+        or "TOKEN=<redacted>" in blob.upper()
+        or "<redacted>" in blob
+    )
 
 
 def test_evidence_written_before_cleanup_and_cleanup_error_keeps_primary(
@@ -180,9 +207,7 @@ def test_remaining_cases_after_stop_are_not_run_not_pass() -> None:
         {"name": "source-only-off", "status": "FAIL"},
         {"name": "execution", "status": "FAIL"},
     ]
-    extras = mark_remaining_cases_not_run(
-        planned=MATRIX_CASE_NAMES, recorded=recorded
-    )
+    extras = mark_remaining_cases_not_run(planned=MATRIX_CASE_NAMES, recorded=recorded)
     assert extras
     assert all(item["status"] == "NOT_RUN" for item in extras)
     assert all(item["status"] != "PASS" for item in extras)
@@ -210,7 +235,11 @@ def test_bounded_container_rows_omit_env() -> None:
                     "Env": ["POSTGRES_PASSWORD=s3cret"],
                 },
                 "Image": "sha256:" + "a" * 64,
-                "State": {"Running": True, "ExitCode": 0, "Health": {"Status": "healthy"}},
+                "State": {
+                    "Running": True,
+                    "ExitCode": 0,
+                    "Health": {"Status": "healthy"},
+                },
             }
         ]
     )

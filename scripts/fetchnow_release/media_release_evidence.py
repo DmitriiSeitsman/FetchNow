@@ -74,6 +74,40 @@ def rollout_result_snapshot(result: RolloutLike | Any) -> dict[str, Any]:
         }
 
 
+def prepare_result_snapshot(
+    *,
+    requested_revision: str,
+    env_revision: str | None,
+    result: Any,
+) -> dict[str, Any]:
+    """Sanitized prepare evidence retained before assertion/cleanup."""
+    try:
+        release_dir = getattr(result, "release_dir", None)
+        release_name = None
+        if release_dir is not None:
+            release_name = Path(release_dir).name
+        return {
+            "stage": "prepare",
+            "ok": bool(getattr(result, "ok", False)),
+            "already_prepared": bool(getattr(result, "already_prepared", False)),
+            "requested_revision": str(requested_revision),
+            "env_revision": None if env_revision is None else str(env_revision),
+            "messages": redact_messages(tuple(getattr(result, "messages", ()) or ())),
+            "release_dir_name": release_name,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "stage": "prepare",
+            "ok": False,
+            "already_prepared": False,
+            "requested_revision": str(requested_revision),
+            "env_revision": None if env_revision is None else str(env_revision),
+            "messages": (),
+            "release_dir_name": None,
+            "snapshot_error": type(exc).__name__,
+        }
+
+
 def media_authority_snapshot(
     state: Any | None, *, present: bool | None = None
 ) -> dict[str, Any]:
@@ -212,7 +246,9 @@ def merge_primary_and_diagnostic_errors(
     return merged
 
 
-def bounded_container_rows(inspect_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def bounded_container_rows(
+    inspect_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     """Keep only service / image / running / exit / health — never Env."""
     out: list[dict[str, Any]] = []
     for row in inspect_rows:
@@ -243,7 +279,10 @@ def sanitized_deployment_journal(
     if not deployment_id:
         return {"deployment_id": None}
     dep_dir = deploy_root / "deployments" / deployment_id
-    payload: dict[str, Any] = {"deployment_id": deployment_id, "exists": dep_dir.is_dir()}
+    payload: dict[str, Any] = {
+        "deployment_id": deployment_id,
+        "exists": dep_dir.is_dir(),
+    }
     try:
         payload["diagnostics_text"] = format_rollout_failure_diagnostics(
             status=None,

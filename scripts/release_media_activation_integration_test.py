@@ -43,12 +43,14 @@ from fetchnow_release.journal import (  # noqa: E402
     write_plan,
 )
 from fetchnow_release.journal_io import read_json  # noqa: E402
+from fetchnow_release.env_file import load_env_file, replace_env_file_key  # noqa: E402
 from fetchnow_release.media_release_evidence import (  # noqa: E402
     MATRIX_CASE_NAMES,
     bounded_container_rows,
     evaluate_source_only_off,
     mark_remaining_cases_not_run,
     merge_primary_and_diagnostic_errors,
+    prepare_result_snapshot,
     rollout_result_snapshot,
     safe_load_current_authority,
     safe_load_media_authority,
@@ -194,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
         return state
 
     def prepare(revision: str) -> None:
+        # Keep disposable media flags/deny/password; sync only the release pin.
+        replace_env_file_key(env, "FETCHNOW_RELEASE_REVISION", revision)
+        env_revision = load_env_file(env).get("FETCHNOW_RELEASE_REVISION")
         result = prepare_release(
             PrepareInput(
                 project_name=project,
@@ -205,7 +210,19 @@ def main(argv: list[str] | None = None) -> int:
                 release_mode="media",
             )
         )
-        record("prepare-" + revision, result.ok)
+        evaluation = prepare_result_snapshot(
+            requested_revision=revision,
+            env_revision=env_revision,
+            result=result,
+        )
+        write_json_evidence(evidence / f"prepare-{revision}.json", evaluation)
+        if not result.ok:
+            persist_failure_bundle(
+                stage="prepare-" + revision,
+                evaluation=evaluation,
+                result=None,
+            )
+        record("prepare-" + revision, bool(result.ok), prepare=evaluation)
 
     def inp(revision: str, *, active: bool, bootstrap: bool = False) -> RolloutInput:
         return RolloutInput(

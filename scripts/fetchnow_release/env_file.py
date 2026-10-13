@@ -6,6 +6,8 @@ import re
 import stat
 from pathlib import Path
 
+from .journal_io import atomic_write_text
+
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -51,3 +53,27 @@ def require_keys(values: dict[str, str], keys: tuple[str, ...]) -> None:
     missing = [k for k in keys if k not in values or values[k] == ""]
     if missing:
         raise EnvFileError("missing required env keys: " + ", ".join(missing))
+
+
+def replace_env_file_key(path: Path, key: str, value: str) -> None:
+    """Replace exactly one assignment of ``key``; preserve all other lines.
+
+    Fail closed on missing or duplicate keys. Does not rewrite unrelated
+    credentials/settings. Leaves the leaf mode at 0600.
+    """
+    if not _KEY_RE.fullmatch(key):
+        raise EnvFileError(f"invalid env key: {key!r}")
+    if "\n" in value or "\r" in value:
+        raise EnvFileError(f"env value for {key} must be a single line")
+    if path.is_symlink() or not path.is_file():
+        raise EnvFileError(f"env file must be a regular non-symlink file: {path}")
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(rf"(?m)^{re.escape(key)}=.*$")
+    matches = pattern.findall(text)
+    if not matches:
+        raise EnvFileError(f"missing env key: {key}")
+    if len(matches) > 1:
+        raise EnvFileError(f"duplicate env key: {key}")
+    replacement = f"{key}={value}"
+    updated = pattern.sub(replacement, text, count=1)
+    atomic_write_text(path, updated, mode=0o600)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -17,7 +18,12 @@ from fetchnow_release.compose_validate import (  # noqa: E402
     ComposeContractError,
     validate_staging_rendered,
 )
-from fetchnow_release.env_file import EnvFileError, load_env_file, require_keys  # noqa: E402
+from fetchnow_release.env_file import (  # noqa: E402
+    EnvFileError,
+    load_env_file,
+    replace_env_file_key,
+    require_keys,
+)
 from fetchnow_release.health import HealthInput, run_health  # noqa: E402
 from fetchnow_release.http_health import HttpHealthError, check_endpoint  # noqa: E402
 from fetchnow_release.password import PasswordError, validate_staging_password  # noqa: E402
@@ -150,6 +156,18 @@ def test_env_missing_keys(tmp_path: Path) -> None:
     os.chmod(path, 0o600)
     with pytest.raises(EnvFileError, match="missing"):
         require_keys(load_env_file(path), ("A", "B"))
+
+
+def test_replace_env_file_key_preserves_siblings_and_mode(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("A=1\nB=keep\nC=3\n")
+    os.chmod(path, 0o600)
+    replace_env_file_key(path, "A", "2")
+    values = load_env_file(path)
+    assert values == {"A": "2", "B": "keep", "C": "3"}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    with pytest.raises(EnvFileError, match="missing"):
+        replace_env_file_key(path, "Z", "9")
 
 
 def test_unsafe_roots(tmp_path: Path) -> None:
@@ -384,10 +402,7 @@ def test_local_revision_allowed_only_when_flagged() -> None:
 
 def test_redaction() -> None:
     marker = "Z" * 24
-    text = (
-        f"POSTGRES_PASSWORD={marker} "
-        "DATABASE_URL=postgresql+asyncpg://u:p@h/db"
-    )
+    text = f"POSTGRES_PASSWORD={marker} DATABASE_URL=postgresql+asyncpg://u:p@h/db"
     out = redact(text)
     assert marker not in out
     assert "postgresql+asyncpg://u:p@h/db" not in out
