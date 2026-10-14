@@ -245,7 +245,8 @@ def test_summarize_and_reconcile() -> None:
 
 def test_workflow_marker_and_pins() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "[native-once-20261014-img7]" in text
+    assert "[native-once-20261014-img7d0]" in text
+    assert "fetch-depth: 0" in text
     assert "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" in text
     assert "0.74.0" in text
     assert "postgres:16.15-alpine3.24" in text
@@ -255,8 +256,10 @@ def test_workflow_marker_and_pins() -> None:
     )
     assert "686369bd085bd073cb44bd791cb1c0e5beba8323" in text
     assert "38627426197" in text
+    assert "38631542113" in text
     assert "NOT_GRANTED" in text
     assert "image_audit_candidate7.py" in text
+    assert "image_audit_candidate7_history.py" in text
     # Must not call canonical four-target CLI with seven targets.
     assert "scripts/image_audit.py \\" not in text
 

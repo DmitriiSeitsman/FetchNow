@@ -72,13 +72,23 @@ ROLE_MAPPING: dict[str, tuple[str, ...]] = {
 
 POSTGRES_COMPOSE_REF = "postgres:16.15-alpine3.24"
 
+# Keep in sync with image_audit_candidate7_history.RUNTIME_BUILD_INPUT_PATHS.
 RUNTIME_INPUT_PATHS: tuple[str, ...] = (
     "backend/Dockerfile",
     "backend/Dockerfile.media-executor",
     "backend/Dockerfile.media-net-executor",
     "backend/Dockerfile.media-egress-proxy",
+    "backend/pyproject.toml",
+    "backend/uv.lock",
+    "backend/alembic.ini",
+    "backend/src",
+    "backend/migrations",
     "web/Dockerfile",
-    "deploy/nginx/Dockerfile",
+    "web/package.json",
+    "web/package-lock.json",
+    "web/src",
+    "web/docker",
+    "deploy/nginx",
     "compose.yaml",
 )
 
@@ -276,10 +286,24 @@ def db_metadata_hash(cache_dir: Path) -> str | None:
 
 
 def collect_runtime_input_hashes(repo_root: Path) -> dict[str, str]:
+    """Hash files; for directories, hash sorted relative file digests."""
     out: dict[str, str] = {}
     for rel in RUNTIME_INPUT_PATHS:
         path = repo_root / rel
-        out[rel] = sha256_file(path) if path.is_file() else "MISSING"
+        if path.is_file():
+            out[rel] = sha256_file(path)
+        elif path.is_dir():
+            digest = hashlib.sha256()
+            for child in sorted(path.rglob("*")):
+                if child.is_file():
+                    rel_child = child.relative_to(path).as_posix()
+                    digest.update(rel_child.encode())
+                    digest.update(b"\0")
+                    digest.update(sha256_file(child).encode())
+                    digest.update(b"\0")
+            out[rel] = digest.hexdigest()
+        else:
+            out[rel] = "MISSING"
     return out
 
 

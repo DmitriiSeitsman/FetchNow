@@ -6,7 +6,8 @@ name: SEC-03C/08/09 candidate-7 native image audit
 # NEW AUDIT ARTIFACT — does not inherit prior Image IDs or same-artifact native PASS.
 #
 # Baseline native PASS: 38627426197 @ 686369bd085bd073cb44bd791cb1c0e5beba8323
-# This marker authorizes candidate-7 Trivy audit harness only.
+# Prior FAIL: 38631542113 — shallow checkout missing baseline commit object.
+# This marker authorizes fetch-depth:0 history proof + candidate-7 audit only.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -28,7 +29,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-03C/08/09 candidate7 image audit [native-once-20261014-img7]
+            test(security): SEC-03C/08/09 candidate7 image audit [native-once-20261014-img7d0]
         run: |
           python3 - <<'PY'
           import json
@@ -61,6 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Full history required so baseline 686369bd… resolves as a commit
+          # object and can be proven as an ancestor of GITHUB_SHA.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Host platform is native linux/amd64
@@ -82,23 +86,34 @@ jobs:
             -r backend/ci/pytest-requirements.txt
           PYTHONPATH=scripts python3.12 -m pytest -q \
             tests/image_audit/test_image_audit_candidate7_unit.py \
+            tests/image_audit/test_image_audit_candidate7_history_unit.py \
             tests/image_audit/test_image_audit_unit.py
 
-      - name: Prove runtime Dockerfiles/Compose unchanged vs baseline
+      - name: Prove baseline history + runtime/build inputs unchanged
         run: |
           set -euo pipefail
-          basel="${FETCHNOW_BASELINE_SHA}"
-          git cat-file -e "${basel}^{commit}"
-          # Audited images must use the same runtime inputs as the native PASS tip.
-          git diff --exit-code "${basel}" -- \
-            backend/Dockerfile \
-            backend/Dockerfile.media-executor \
-            backend/Dockerfile.media-net-executor \
-            backend/Dockerfile.media-egress-proxy \
-            web/Dockerfile \
-            deploy/nginx/Dockerfile \
-            compose.yaml
-          echo "runtime_inputs_unchanged_vs_baseline=true"
+          # Order: checkout/history → offline tests (above) → this identity proof
+          # → Trivy → builds → frozen DB → scans.
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          PYTHONPATH=scripts python3.12 scripts/image_audit_candidate7_history.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --baseline-sha "$FETCHNOW_BASELINE_SHA" \
+            --expected-head-sha "$GITHUB_SHA" \
+            --json-out "$RUNNER_TEMP/cand7-history-proof.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "cand7-history-proof.json").read_text()
+          )
+          assert proof.get("ok") is True, proof
+          print("baseline=", proof.get("resolved_baseline"))
+          print("head=", proof.get("resolved_head"))
+          print("ancestor=", proof.get("baseline_is_ancestor"))
+          print("runtime_unchanged=", proof.get("runtime_inputs_unchanged"))
+          print("audit_only=", proof.get("audit_only_changes_only"))
+          print("changed=", proof.get("changed_paths"))
+          PY
 
       - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
         run: |
@@ -270,7 +285,7 @@ jobs:
           # No automatic remediation and no residual acceptance in this pass.
           exit "$gate_rc"
 
-      - name: Upload sanitized summary + pre-scan identities
+      - name: Upload sanitized summary + identities + history proof
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -278,6 +293,7 @@ jobs:
           path: |
             ${{ runner.temp }}/fetchnow-cand7-summary.json
             ${{ runner.temp }}/cand7-pre-scan-identities.json
+            ${{ runner.temp }}/cand7-history-proof.json
           if-no-files-found: warn
           retention-days: 14
 
