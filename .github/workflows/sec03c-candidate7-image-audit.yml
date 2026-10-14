@@ -1,0 +1,303 @@
+name: SEC-03C/08/09 candidate-7 native image audit
+
+# Controlled one-shot audit of seven distinct final runtime images.
+# Push-only; exact first-line commit subject; attempt 1 only.
+# Does not change runtime/Dockerfiles/locks. Does not grant residual acceptance.
+# NEW AUDIT ARTIFACT — does not inherit prior Image IDs or same-artifact native PASS.
+#
+# Baseline native PASS: 38627426197 @ 686369bd085bd073cb44bd791cb1c0e5beba8323
+# This marker authorizes candidate-7 Trivy audit harness only.
+on:
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    if: >-
+      github.run_attempt == 1 &&
+      github.ref == 'refs/heads/codex/security-sec-09-network-isolation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      allowed: ${{ steps.subject.outputs.allowed }}
+    steps:
+      - name: Match exact commit subject (first line only; trailers ignored)
+        id: subject
+        env:
+          EXPECTED_SUBJECT: >-
+            test(security): SEC-03C/08/09 candidate7 image audit [native-once-20261014-img7]
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          message = (event.get("head_commit") or {}).get("message", "")
+          subject = message.splitlines()[0] if isinstance(message, str) and message else ""
+          expected = os.environ["EXPECTED_SUBJECT"].strip()
+          allowed = (
+              os.environ["GITHUB_EVENT_NAME"] == "push" and subject == expected
+          )
+          print(f"subject={subject!r}")
+          print(f"expected={expected!r}")
+          print(f"allowed={allowed}")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"allowed={str(allowed).lower()}\n")
+          PY
+
+  audit:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      FETCHNOW_IMAGE_AUDIT_TAG: cand7-${{ github.run_id }}-${{ github.run_attempt }}
+      FETCHNOW_BASELINE_SHA: 686369bd085bd073cb44bd791cb1c0e5beba8323
+      FETCHNOW_TRIVY_VERSION: "0.74.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Host platform is native linux/amd64
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          docker version
+          docker info --format '{{.Architecture}}' | tee "$RUNNER_TEMP/docker-arch.txt"
+          grep -E 'x86_64|amd64' "$RUNNER_TEMP/docker-arch.txt"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Offline candidate7 unit tests
+        run: |
+          set -euo pipefail
+          python3.12 -m pip install --require-hashes --no-deps \
+            -r backend/ci/pytest-requirements.txt
+          PYTHONPATH=scripts python3.12 -m pytest -q \
+            tests/image_audit/test_image_audit_candidate7_unit.py \
+            tests/image_audit/test_image_audit_unit.py
+
+      - name: Prove runtime Dockerfiles/Compose unchanged vs baseline
+        run: |
+          set -euo pipefail
+          basel="${FETCHNOW_BASELINE_SHA}"
+          git cat-file -e "${basel}^{commit}"
+          # Audited images must use the same runtime inputs as the native PASS tip.
+          git diff --exit-code "${basel}" -- \
+            backend/Dockerfile \
+            backend/Dockerfile.media-executor \
+            backend/Dockerfile.media-net-executor \
+            backend/Dockerfile.media-egress-proxy \
+            web/Dockerfile \
+            deploy/nginx/Dockerfile \
+            compose.yaml
+          echo "runtime_inputs_unchanged_vs_baseline=true"
+
+      - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
+        run: |
+          set -euo pipefail
+          asset=trivy_0.74.0_Linux-64bit.tar.gz
+          want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build/pull seven distinct runtime targets (one each)
+        run: |
+          set -euo pipefail
+          rev="${GITHUB_SHA}"
+          tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
+          # Application images — one build each; NEW AUDIT ARTIFACT Image IDs.
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-api:${tag}" \
+            -f backend/Dockerfile \
+            ./backend
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            --build-arg PUBLIC_SITE_URL=http://localhost \
+            --build-arg PUBLIC_SEARCH_INDEXING_ENABLED=false \
+            -t "fetchnow-web:${tag}" \
+            -f web/Dockerfile \
+            ./web
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-gateway:${tag}" \
+            -f deploy/nginx/Dockerfile \
+            ./deploy/nginx
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-media-executor:${tag}" \
+            -f backend/Dockerfile.media-executor \
+            ./backend
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-media-net-executor:${tag}" \
+            -f backend/Dockerfile.media-net-executor \
+            ./backend
+          docker build --platform linux/amd64 \
+            --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-egress-proxy:${tag}" \
+            -f backend/Dockerfile.media-egress-proxy \
+            ./backend
+          # Exact Compose PostgreSQL candidate pin — one pull.
+          docker pull --platform linux/amd64 postgres:16.15-alpine3.24
+
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+
+          tag = os.environ["FETCHNOW_IMAGE_AUDIT_TAG"]
+          mapping = {
+              "api": f"fetchnow-api:{tag}",
+              "web": f"fetchnow-web:{tag}",
+              "gateway": f"fetchnow-gateway:{tag}",
+              "media-executor": f"fetchnow-media-executor:{tag}",
+              "media-net-executor": f"fetchnow-media-net-executor:{tag}",
+              "egress-proxy": f"fetchnow-egress-proxy:{tag}",
+              "postgres": "postgres:16.15-alpine3.24",
+          }
+          identities = {}
+          for name, ref in mapping.items():
+              raw = subprocess.check_output(
+                  [
+                      "docker",
+                      "image",
+                      "inspect",
+                      ref,
+                      "--format",
+                      "{{json .}}",
+                  ],
+                  text=True,
+              )
+              data = json.loads(raw)
+              identities[name] = {
+                  "reference": ref,
+                  "image_id": data.get("Id"),
+                  "platform": f"{data.get('Os')}/{data.get('Architecture')}",
+                  "repo_digests": data.get("RepoDigests") or [],
+                  "revision_label": ((data.get("Config") or {}).get("Labels") or {}).get(
+                      "org.opencontainers.image.revision"
+                  ),
+                  "roles": {
+                      "api": ["api", "worker", "delivery"],
+                      "web": ["web"],
+                      "gateway": ["gateway"],
+                      "media-executor": ["media-executor"],
+                      "media-net-executor": ["media-net-executor"],
+                      "egress-proxy": ["egress-proxy"],
+                      "postgres": ["postgres"],
+                  }[name],
+              }
+              print(
+                  f"{name}: id={identities[name]['image_id']} "
+                  f"platform={identities[name]['platform']} "
+                  f"roles={identities[name]['roles']}"
+              )
+          out = Path(os.environ["RUNNER_TEMP"]) / "cand7-pre-scan-identities.json"
+          out.write_text(json.dumps(identities, indent=2) + "\n", encoding="utf-8")
+          targets = Path(os.environ["RUNNER_TEMP"]) / "cand7-targets.json"
+          targets.write_text(json.dumps(mapping, indent=2) + "\n", encoding="utf-8")
+          print(targets)
+          PY
+
+      - name: Run candidate-7 aggregate audit (one frozen DB)
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fetchnow-cand7-work"
+          cache="$RUNNER_TEMP/fetchnow-cand7-trivy-cache"
+          mkdir -p "$work" "$cache"
+          set +e
+          PYTHONPATH=scripts python3.12 scripts/image_audit_candidate7.py \
+            --trivy-bin trivy \
+            --cache-dir "$cache" \
+            --targets-file "$RUNNER_TEMP/cand7-targets.json" \
+            --expected-platform linux/amd64 \
+            --work-dir "$work" \
+            --summary-out "$RUNNER_TEMP/fetchnow-cand7-summary.json" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --audited-source-sha "$GITHUB_SHA" \
+            --audit-commit-sha "$GITHUB_SHA" \
+            --baseline-sha "$FETCHNOW_BASELINE_SHA"
+          gate_rc=$?
+          set -e
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          summary = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "fetchnow-cand7-summary.json").read_text()
+          )
+          print("status:", summary.get("status"))
+          print("verdicts:", json.dumps(summary.get("verdicts"), sort_keys=True))
+          print("db:", json.dumps(summary.get("db"), sort_keys=True))
+          print("shas:", json.dumps(summary.get("shas"), sort_keys=True))
+          for row in summary.get("targets", []):
+              ident = row.get("identity") or {}
+              print(
+                  f"{row.get('name')}: status={row.get('status')} "
+                  f"err={row.get('error_code')} "
+                  f"id={ident.get('image_id')} platform={ident.get('platform')} "
+                  f"counts={row.get('counts')}"
+              )
+          hc = summary.get("high_critical") or {}
+          print(
+              "high_critical unique:",
+              hc.get("unique_count"),
+              "fixable:",
+              hc.get("fixable_count"),
+              "unfixed:",
+              hc.get("unfixed_count"),
+          )
+          print("residual_acceptance: NOT_GRANTED")
+          print("production_readiness: NO")
+          PY
+          # Findings / needs_owner / technical all stop the job (non-zero).
+          # No automatic remediation and no residual acceptance in this pass.
+          exit "$gate_rc"
+
+      - name: Upload sanitized summary + pre-scan identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cand7-image-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/fetchnow-cand7-summary.json
+            ${{ runner.temp }}/cand7-pre-scan-identities.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Scoped cleanup (job tags/cache/work only)
+        if: always()
+        run: |
+          set -euo pipefail
+          tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
+          docker image rm -f \
+            "fetchnow-api:${tag}" \
+            "fetchnow-web:${tag}" \
+            "fetchnow-gateway:${tag}" \
+            "fetchnow-media-executor:${tag}" \
+            "fetchnow-media-net-executor:${tag}" \
+            "fetchnow-egress-proxy:${tag}" \
+            || true
+          # Do not remove shared postgres:16.15-alpine3.24 if other jobs need it;
+          # only drop dangling build cache for this job's buildx builder is out of scope.
+          if [[ -d "$RUNNER_TEMP/fetchnow-cand7-trivy-cache" ]]; then
+            trivy --cache-dir "$RUNNER_TEMP/fetchnow-cand7-trivy-cache" clean --all || true
+            rm -rf "$RUNNER_TEMP/fetchnow-cand7-trivy-cache"
+          fi
+          rm -rf "$RUNNER_TEMP/fetchnow-cand7-work" || true
