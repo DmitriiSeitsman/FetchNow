@@ -761,7 +761,10 @@ def main(argv: list[str] | None = None) -> int:
             evidence_dir=evidence,
         )
         by_name = {str(c.get("name")): c for c in disk.get("cases", [])}
+        positive_gate = bool(disk.get("positive_control_gate"))
         for case_name in (
+            "f2-disk-layout-prepare",
+            "f2-disk-positive-control",
             "f2-disk-fast-growth-fail",
             "f2-disk-fast-tree-fail",
             "f2-disk-staged-inputs-success",
@@ -770,13 +773,27 @@ def main(argv: list[str] | None = None) -> int:
             "f2-disk-neighbor-continues",
         ):
             entry = by_name.get(case_name, {})
+            # Negative disk cases cannot PASS without positive control gate.
+            if case_name.startswith("f2-disk-") and case_name not in {
+                "f2-disk-layout-prepare",
+                "f2-disk-positive-control",
+            }:
+                case_ok = (
+                    positive_gate
+                    and bool(entry.get("ok"))
+                    and entry.get("status") != "NOT_RUN"
+                )
+            else:
+                case_ok = bool(entry.get("ok"))
             record(
                 case_name,
-                bool(disk.get("ok")) and bool(entry.get("ok")),
+                case_ok,
                 image_id=image_id,
                 image_ref=image_ref,
                 case=entry,
+                positive_control_gate=positive_gate,
                 trust_boundary=disk.get("trust_boundary"),
+                cleanup_ok=disk.get("cleanup_ok"),
             )
 
         # --- F1a/F1b: separate disposable project (does not pollute main matrix) ---

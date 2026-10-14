@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -39,6 +40,29 @@ def _run(argv: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[
             f"{argv[0]} failed ({proc.returncode}): {(proc.stderr or '')[-1500:]}"
         )
     return proc
+
+
+def _bounded_cleanup(argv: list[str], *, timeout: int = 30) -> dict[str, Any]:
+    """Run cleanup with checked return code; never hide failure."""
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except OSError as exc:
+        return {"ok": False, "error": type(exc).__name__, "argv0": argv[0]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "timeout", "argv0": argv[0]}
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "argv0": argv[0],
+        "stderr_tail": (proc.stderr or "")[-400:],
+    }
 
 
 def run_disk_probe(
@@ -89,6 +113,7 @@ def run_disk_probe(
             "not untrusted RPC ceiling proof"
         ),
         "fixture_roots": [str(INSIDE.relative_to(ROOT))],
+        "cleanup": [],
     }
     installed = False
     try:
@@ -171,43 +196,68 @@ def run_disk_probe(
                 f"rc={proc.returncode} stderr={(proc.stderr or '')[-1200:]}"
             )
         result["cases"] = list(payload.get("cases") or [])
-        result["ok"] = bool(payload.get("ok")) and proc.returncode == 0
+        result["positive_control_gate"] = bool(payload.get("positive_control_gate"))
+        result["ok"] = (
+            bool(payload.get("ok"))
+            and bool(payload.get("positive_control_gate"))
+            and proc.returncode == 0
+        )
         result["status"] = "PASS" if result["ok"] else "FAIL"
         result["probe_payload"] = {
             "ok": payload.get("ok"),
+            "positive_control_gate": payload.get("positive_control_gate"),
             "trust_boundary": payload.get("trust_boundary"),
             "fixture_roots": payload.get("fixture_roots"),
+            "image_platform": payload.get("image_platform"),
         }
         result["container_exit"] = proc.returncode
+        result["container_stderr_tail"] = (proc.stderr or "")[-800:]
         return result
     finally:
+        cleanup_ok = True
         if installed:
-            try:
-                subprocess.run(
-                    ["systemctl", "stop", unit_name],
-                    capture_output=True,
-                    check=False,
-                )
-                if unit.exists():
+            stop = _bounded_cleanup(["systemctl", "stop", unit_name])
+            result["cleanup"].append({"step": "systemctl_stop", **stop})
+            if not stop["ok"]:
+                cleanup_ok = False
+            if unit.exists():
+                try:
                     unit.unlink()
-                subprocess.run(
-                    ["systemctl", "daemon-reload"],
-                    capture_output=True,
-                    check=False,
-                )
-            except OSError:
-                result["cleanup_slice_error"] = True
+                    result["cleanup"].append({"step": "unlink_unit", "ok": True})
+                except OSError as exc:
+                    cleanup_ok = False
+                    result["cleanup"].append(
+                        {
+                            "step": "unlink_unit",
+                            "ok": False,
+                            "error": type(exc).__name__,
+                        }
+                    )
+            reload = _bounded_cleanup(["systemctl", "daemon-reload"])
+            result["cleanup"].append({"step": "daemon_reload", **reload})
+            if not reload["ok"]:
+                cleanup_ok = False
+        try:
+            shutil.rmtree(work)
+            result["cleanup"].append({"step": "rmtree_work", "ok": True})
+        except OSError as exc:
+            cleanup_ok = False
+            result["cleanup"].append(
+                {"step": "rmtree_work", "ok": False, "error": type(exc).__name__}
+            )
+        result["cleanup_ok"] = cleanup_ok
+        if not cleanup_ok:
+            result["cleanup_slice_error"] = True
+            # Cleanup failure must not flip a failed probe to PASS.
+            if result.get("ok"):
+                result["ok"] = False
+                result["status"] = "FAIL"
+                result["error"] = "probe_cleanup_failed"
         evidence_dir.mkdir(parents=True, exist_ok=True)
         (evidence_dir / "f2-disk-probe.json").write_text(
             json.dumps(result, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        try:
-            import shutil
-
-            shutil.rmtree(work, ignore_errors=True)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":

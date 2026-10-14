@@ -21,6 +21,8 @@ F1F4_CASES = (
     "f3-f4-prerequisites",
     "f3-config-rollout-refuses-media-on",
     "f4-invalid-on-budget-health-fail",
+    "f2-disk-layout-prepare",
+    "f2-disk-positive-control",
     "f2-disk-fast-growth-fail",
     "f2-disk-fast-tree-fail",
     "f2-disk-staged-inputs-success",
@@ -31,7 +33,7 @@ F1F4_CASES = (
     "f1b-bootstrap-media-on-cleanup-failure-unresolved",
 )
 
-MARKER = "[native-once-20261014-sec09iso]"
+MARKER = "[native-once-20261014-diskdac]"
 
 
 def _harness_text() -> str:
@@ -51,8 +53,8 @@ def test_matrix_case_names_include_f1f4_and_prior() -> None:
     assert "source-only-off" in MATRIX_CASE_NAMES
     assert "off-to-on-rollback" in MATRIX_CASE_NAMES
     assert "accept-target-rejects-stopped-media" in MATRIX_CASE_NAMES
-    # Prior matrix (9) + F1–F4 (10) + prerequisites (1) = 20.
-    assert len(MATRIX_CASE_NAMES) == 20
+    # Prior matrix (9) + F1–F4 (10) + prerequisites (1) + F2 gates (2) = 22.
+    assert len(MATRIX_CASE_NAMES) == 22
     # Execution order in MATRIX_CASE_NAMES: F3→F4→F2→F1 before accept-target.
     assert MATRIX_CASE_NAMES.index("f3-f4-prerequisites") < MATRIX_CASE_NAMES.index(
         "f3-config-rollout-refuses-media-on"
@@ -61,6 +63,9 @@ def test_matrix_case_names_include_f1f4_and_prior() -> None:
         MATRIX_CASE_NAMES.index("f4-invalid-on-budget-health-fail")
     )
     assert MATRIX_CASE_NAMES.index("f4-invalid-on-budget-health-fail") < (
+        MATRIX_CASE_NAMES.index("f2-disk-layout-prepare")
+    )
+    assert MATRIX_CASE_NAMES.index("f2-disk-positive-control") < (
         MATRIX_CASE_NAMES.index("f2-disk-fast-growth-fail")
     )
     assert MATRIX_CASE_NAMES.index(
@@ -151,6 +156,7 @@ def test_disk_inside_cases_cover_required_scenarios() -> None:
         if isinstance(node, ast.FunctionDef) and node.name.startswith("case_")
     }
     assert names >= {
+        "case_positive_control",
         "case_fast_growth",
         "case_fast_tree",
         "case_staged_inputs_ok",
@@ -158,16 +164,20 @@ def test_disk_inside_cases_cover_required_scenarios() -> None:
         "case_long_writer_kill_reap",
         "case_neighbor_continues",
     }
+    text = DISK_INSIDE.read_text(encoding="utf-8")
+    assert "make_job_directory" in text
+    assert "make_work_root" in text
 
 
-def test_workflow_marker_is_sec09iso_attempt_one_only() -> None:
+def test_workflow_marker_is_diskdac_attempt_one_only() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert MARKER in text
     assert "github.run_attempt == 1" in text
     assert (
         "workflow_dispatch" not in text.split("on:", 1)[1].split("permissions:", 1)[0]
     )
-    assert "38611105647" in text
+    assert "38614434493" in text
+    assert "[native-once-20261014-sec09iso]" not in text
     assert "[native-once-20261014-f1f4]" not in text
 
 

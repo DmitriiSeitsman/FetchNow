@@ -27,6 +27,8 @@ MATRIX_CASE_NAMES: tuple[str, ...] = (
     "f3-f4-prerequisites",
     "f3-config-rollout-refuses-media-on",
     "f4-invalid-on-budget-health-fail",
+    "f2-disk-layout-prepare",
+    "f2-disk-positive-control",
     "f2-disk-fast-growth-fail",
     "f2-disk-fast-tree-fail",
     "f2-disk-staged-inputs-success",

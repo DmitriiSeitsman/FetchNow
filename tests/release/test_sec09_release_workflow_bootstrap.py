@@ -21,7 +21,7 @@ WORKFLOW = ROOT / ".github/workflows/sec09-release-media-activation.yml"
 HARNESS = ROOT / "scripts/release_media_activation_integration_test.py"
 EXPECTED_SUBJECT = (
     "test(security): SEC-08/09 native release transaction "
-    "[native-once-20261014-sec09iso]"
+    "[native-once-20261014-diskdac]"
 )
 
 
@@ -75,8 +75,9 @@ def test_workflow_fallback_marks_absent_native_not_pass() -> None:
 def test_workflow_exact_subject_marker_unique() -> None:
     text = _workflow_text()
     assert EXPECTED_SUBJECT in text
-    assert "[native-once-20261014-sec09iso]" in text
-    # Prior markers must not authorize this isolation candidate run.
+    assert "[native-once-20261014-diskdac]" in text
+    # Prior markers must not authorize this disk-DAC candidate run.
+    assert "[native-once-20261014-sec09iso]" not in text
     assert "[native-once-20261014-f1f4]" not in text
     assert "[native-once-20261013-envrev]" not in text
     assert "[native-once-20261013-mediahealth]" not in text

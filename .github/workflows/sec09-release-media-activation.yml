@@ -5,9 +5,9 @@ name: SEC-08/09 native release transaction
 # Exact first-line commit subject required. Reruns (run_attempt != 1) skip.
 #
 # Prior retained: 38466520000 previous-candidate PASS (pre F1–F4 runtime fix).
-# Prior FAIL: 38611105647 — F3 blocked by unresolved recovery journal from early
-# accept-target write_plan; F1/F2/F4 NOT_RUN. This marker authorizes isolation fix
-# (F3→F4→F2→F1 before accept-target; F4 managed run_health).
+# Prior FAIL: 38611105647 — F3 unresolved recovery journal.
+# Prior FAIL: 38614434493 — F3/F4 PASS after isolation; F2 DAC fixture FAIL
+# (root-owned attempt dirs; size=0). This marker authorizes disk DAC fixture fix.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -29,7 +29,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261014-sec09iso]
+            test(security): SEC-08/09 native release transaction [native-once-20261014-diskdac]
         run: |
           python3 - <<'PY'
           import json
