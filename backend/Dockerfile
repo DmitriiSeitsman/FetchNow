@@ -38,9 +38,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Version token is the distro package; worker logs never dump `--version` text.
 # OpenSSL: pin the trixie-security revision that closes CVE-2026-75804 /
 # CVE-2026-84782 (libssl3t64, openssl, openssl-provider-legacy together).
+# libpcre2: pin trixie-security revision that closes CVE-2026-103111
+# (scanner fixed_version 10.46-1~deb13u3; confirmed in debian-security index).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
+        libpcre2-8-0=10.46-1~deb13u3 \
         libssl3t64=3.5.7-1~deb13u3 \
         openssl=3.5.7-1~deb13u3 \
         openssl-provider-legacy=3.5.7-1~deb13u3 \

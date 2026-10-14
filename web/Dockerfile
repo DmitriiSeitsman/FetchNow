@@ -20,8 +20,12 @@ RUN npm run build
 
 FROM nginx:1.31.6-alpine3.24 AS runtime
 
-# SEC-03C: pin libexpat to Alpine v3.24 fix for CVE-2026-93990 (same branch).
-RUN apk add --no-cache 'libexpat=2.8.5-r0'
+# SEC-03C: pin Alpine v3.24 main fixes (same branch; no edge/distro switch).
+# libexpat: CVE-2026-93990; pcre2: CVE-2026-103111; tiff: CVE-2026-4775.
+RUN apk add --no-cache \
+        'libexpat=2.8.5-r0' \
+        'pcre2=10.49-r0' \
+        'tiff=4.7.2-r0'
 
 RUN addgroup -g 10001 -S fetchnow \
     && adduser -S -D -H -u 10001 -G fetchnow fetchnow \

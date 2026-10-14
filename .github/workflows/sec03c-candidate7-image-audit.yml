@@ -1,13 +1,14 @@
 name: SEC-03C/08/09 candidate-7 native image audit
 
-# Controlled one-shot audit of seven distinct final runtime images.
+# Controlled one-shot successor audit of seven distinct final runtime images.
 # Push-only; exact first-line commit subject; attempt 1 only.
-# Does not change runtime/Dockerfiles/locks. Does not grant residual acceptance.
+# Approved runtime Dockerfile delta vs audit predecessor; native baseline unchanged.
 # NEW AUDIT ARTIFACT — does not inherit prior Image IDs or same-artifact native PASS.
+# No VEX / residual acceptance.
 #
-# Baseline native PASS: 38627426197 @ 686369bd085bd073cb44bd791cb1c0e5beba8323
-# Prior FAIL: 38631542113 — shallow checkout missing baseline commit object.
-# This marker authorizes fetch-depth:0 history proof + candidate-7 audit only.
+# Native PASS: 38627426197 @ 686369bd085bd073cb44bd791cb1c0e5beba8323
+# Audit predecessor: 38637415562 @ 48d9fc5bda2ca739e6ea7cd6c938f3b5603f8c67
+# Prior tech FAIL: 38631542113 — shallow checkout missing baseline (historical).
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -29,7 +30,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-03C/08/09 candidate7 image audit [native-once-20261014-img7d0]
+            test(security): SEC-03C/08/09 candidate7 successor audit [native-once-20261015-img7suc]
         run: |
           python3 - <<'PY'
           import json
@@ -58,12 +59,12 @@ jobs:
     env:
       FETCHNOW_IMAGE_AUDIT_TAG: cand7-${{ github.run_id }}-${{ github.run_attempt }}
       FETCHNOW_BASELINE_SHA: 686369bd085bd073cb44bd791cb1c0e5beba8323
+      FETCHNOW_AUDIT_PREDECESSOR_SHA: 48d9fc5bda2ca739e6ea7cd6c938f3b5603f8c67
       FETCHNOW_TRIVY_VERSION: "0.74.0"
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history required so baseline 686369bd… resolves as a commit
-          # object and can be proven as an ancestor of GITHUB_SHA.
+          # Full history: native baseline + audit predecessor must resolve.
           fetch-depth: 0
           persist-credentials: false
 
@@ -89,16 +90,17 @@ jobs:
             tests/image_audit/test_image_audit_candidate7_history_unit.py \
             tests/image_audit/test_image_audit_unit.py
 
-      - name: Prove baseline history + runtime/build inputs unchanged
+      - name: Prove successor history + approved runtime delta
         run: |
           set -euo pipefail
           # Order: checkout/history → offline tests (above) → this identity proof
-          # → Trivy → builds → frozen DB → scans.
+          # → builds → compatibility smoke → Trivy → frozen DB → scans.
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           PYTHONPATH=scripts python3.12 scripts/image_audit_candidate7_history.py \
             --repo "$GITHUB_WORKSPACE" \
-            --baseline-sha "$FETCHNOW_BASELINE_SHA" \
             --expected-head-sha "$GITHUB_SHA" \
+            --native-baseline-sha "$FETCHNOW_BASELINE_SHA" \
+            --audit-predecessor-sha "$FETCHNOW_AUDIT_PREDECESSOR_SHA" \
             --json-out "$RUNNER_TEMP/cand7-history-proof.json"
           python3 - <<'PY'
           import json, os
@@ -107,27 +109,16 @@ jobs:
               Path(os.environ["RUNNER_TEMP"], "cand7-history-proof.json").read_text()
           )
           assert proof.get("ok") is True, proof
-          print("baseline=", proof.get("resolved_baseline"))
+          assert proof.get("runtime_inputs_unchanged") is False, proof
+          assert proof.get("approved_runtime_delta") is True, proof
+          print("native_baseline=", proof.get("resolved_native_baseline"))
+          print("predecessor=", proof.get("resolved_audit_predecessor"))
           print("head=", proof.get("resolved_head"))
-          print("ancestor=", proof.get("baseline_is_ancestor"))
+          print("approved_delta=", proof.get("approved_runtime_delta"))
           print("runtime_unchanged=", proof.get("runtime_inputs_unchanged"))
-          print("audit_only=", proof.get("audit_only_changes_only"))
-          print("changed=", proof.get("changed_paths"))
+          print("artifact_kind=", proof.get("artifact_kind"))
+          print("approved_hashes=", proof.get("approved_content_sha256_at_head"))
           PY
-
-      - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
-        run: |
-          set -euo pipefail
-          asset=trivy_0.74.0_Linux-64bit.tar.gz
-          want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
-          curl -fsSL -o "$RUNNER_TEMP/$asset" \
-            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
-          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/trivy-bin"
-          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
-          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
-          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -138,6 +129,7 @@ jobs:
           rev="${GITHUB_SHA}"
           tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
           # Application images — one build each; NEW AUDIT ARTIFACT Image IDs.
+          # Build context = checked-out commit tree (clean successor SHA).
           docker build --platform linux/amd64 \
             --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
             -t "fetchnow-api:${tag}" \
@@ -201,14 +193,16 @@ jobs:
                   text=True,
               )
               data = json.loads(raw)
+              labels = ((data.get("Config") or {}).get("Labels") or {})
+              image_id = data.get("Id")
               identities[name] = {
                   "reference": ref,
-                  "image_id": data.get("Id"),
+                  "image_id": image_id,
+                  "config_digest": image_id,
                   "platform": f"{data.get('Os')}/{data.get('Architecture')}",
                   "repo_digests": data.get("RepoDigests") or [],
-                  "revision_label": ((data.get("Config") or {}).get("Labels") or {}).get(
-                      "org.opencontainers.image.revision"
-                  ),
+                  "repo_manifest_digests": data.get("RepoDigests") or [],
+                  "revision_label": labels.get("org.opencontainers.image.revision"),
                   "roles": {
                       "api": ["api", "worker", "delivery"],
                       "web": ["web"],
@@ -222,7 +216,8 @@ jobs:
               print(
                   f"{name}: id={identities[name]['image_id']} "
                   f"platform={identities[name]['platform']} "
-                  f"roles={identities[name]['roles']}"
+                  f"revision={identities[name]['revision_label']} "
+                  f"repo_digests={identities[name]['repo_digests']}"
               )
           out = Path(os.environ["RUNNER_TEMP"]) / "cand7-pre-scan-identities.json"
           out.write_text(json.dumps(identities, indent=2) + "\n", encoding="utf-8")
@@ -230,6 +225,121 @@ jobs:
           targets.write_text(json.dumps(mapping, indent=2) + "\n", encoding="utf-8")
           print(targets)
           PY
+
+      - name: Compatibility smoke + installed package pins
+        run: |
+          set -euo pipefail
+          tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
+          api="fetchnow-api:${tag}"
+          web="fetchnow-web:${tag}"
+          gateway="fetchnow-gateway:${tag}"
+
+          # --- Inventory pins (fail-closed) ---
+          docker run --rm --entrypoint /bin/sh "$api" -c \
+            'dpkg-query -W -f="${Package} ${Version}\n" libpcre2-8-0 libssl3t64 openssl openssl-provider-legacy' \
+            | tee "$RUNNER_TEMP/cand7-api-dpkg.txt"
+          grep -qx 'libpcre2-8-0 10.46-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
+          grep -qx 'libssl3t64 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
+          grep -qx 'openssl 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
+          grep -qx 'openssl-provider-legacy 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
+
+          docker run --rm --entrypoint /bin/sh "$web" -c 'apk info -e -v pcre2 tiff libexpat' \
+            | tee "$RUNNER_TEMP/cand7-web-apk.txt"
+          docker run --rm --entrypoint /bin/sh "$gateway" -c 'apk info -e -v pcre2 tiff libexpat' \
+            | tee "$RUNNER_TEMP/cand7-gateway-apk.txt"
+          grep -qx 'pcre2-10.49-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
+          grep -qx 'tiff-4.7.2-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
+          grep -qx 'libexpat-2.8.5-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
+          grep -qx 'pcre2-10.49-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
+          grep -qx 'tiff-4.7.2-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
+          grep -qx 'libexpat-2.8.5-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
+
+          # --- nginx -t + HTTP smoke (same Image IDs) ---
+          docker run --rm --entrypoint /bin/sh "$web" -c 'nginx -t'
+          docker run --rm --entrypoint /bin/sh "$gateway" -c 'nginx -t'
+          docker rm -f cand7-web-smoke 2>/dev/null || true
+          docker run -d --name cand7-web-smoke -p 18080:8080 "$web"
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" = "200"
+          docker rm -f cand7-web-smoke
+
+          # Gateway config smoke (upstream may 502 without API — process must run + -t).
+          docker rm -f cand7-gw-smoke 2>/dev/null || true
+          docker run -d --name cand7-gw-smoke "$gateway"
+          sleep 1
+          docker exec cand7-gw-smoke nginx -t
+          docker rm -f cand7-gw-smoke
+
+          # --- ffmpeg stream-copy + ffprobe inside API image ---
+          mkdir -p "$RUNNER_TEMP/cand7-media"
+          docker run --rm -v "$RUNNER_TEMP/cand7-media:/m" --entrypoint /bin/sh "$api" -c '
+            set -euo pipefail
+            ffmpeg -y -f lavfi -i color=c=black:s=160x120:d=0.2 -c:v libx264 -pix_fmt yuv420p /m/src.mp4
+            ffmpeg -y -i /m/src.mp4 -c copy /m/out.mp4
+            ffmpeg -y -f lavfi -i color=c=black:s=160x120:d=0.2 -c:v libvpx-vp9 /m/src.webm
+            ffmpeg -y -i /m/src.webm -c copy /m/out.webm
+            ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 /m/out.mp4 | grep -q h264
+            ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 /m/out.webm | grep -q vp9
+          '
+
+          # --- API live/ready + worker binary in disposable env ---
+          docker rm -f cand7-pg cand7-api 2>/dev/null || true
+          docker network rm cand7-smoke 2>/dev/null || true
+          docker network create cand7-smoke
+          docker run -d --name cand7-pg --network cand7-smoke \
+            -e POSTGRES_PASSWORD=fetchnow -e POSTGRES_USER=fetchnow -e POSTGRES_DB=fetchnow \
+            postgres:16.15-alpine3.24
+          for _ in $(seq 1 40); do
+            docker exec cand7-pg pg_isready -U fetchnow -d fetchnow && break
+            sleep 1
+          done
+          docker run --rm --network cand7-smoke --entrypoint /bin/sh "$api" -c '
+            set -euo pipefail
+            export DATABASE_URL=postgresql+asyncpg://fetchnow:fetchnow@cand7-pg:5432/fetchnow
+            export APP_ENV=development
+            alembic upgrade head
+          '
+          docker run -d --name cand7-api --network cand7-smoke -p 18000:8000 \
+            -e DATABASE_URL=postgresql+asyncpg://fetchnow:fetchnow@cand7-pg:5432/fetchnow \
+            -e APP_ENV=development \
+            "$api"
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/live || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/live)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/ready)" = "200"
+          docker run --rm --entrypoint /bin/sh "$api" -c \
+            'command -v fetchnow-api; command -v fetchnow-worker'
+          docker rm -f cand7-api cand7-pg
+          docker network rm cand7-smoke
+
+          # --- gosu binary identity (candidate postgres; not live retained) ---
+          cid=$(docker create postgres:16.15-alpine3.24 true)
+          docker cp "$cid:/usr/local/bin/gosu" "$RUNNER_TEMP/cand7-gosu"
+          docker rm -f "$cid"
+          echo "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0  $RUNNER_TEMP/cand7-gosu" \
+            | sha256sum -c -
+          printf '%s\n' "gosu_sha256_ok" | tee "$RUNNER_TEMP/cand7-gosu-proof.txt"
+
+      - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
+        run: |
+          set -euo pipefail
+          asset=trivy_0.74.0_Linux-64bit.tar.gz
+          want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$RUNNER_TEMP/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$RUNNER_TEMP/trivy-version.txt"
 
       - name: Run candidate-7 aggregate audit (one frozen DB)
         run: |
@@ -282,6 +392,7 @@ jobs:
           print("production_readiness: NO")
           PY
           # Findings / needs_owner / technical all stop the job (non-zero).
+          # Postgres gosu fixables without VEX remain gate fail — not technical.
           # No automatic remediation and no residual acceptance in this pass.
           exit "$gate_rc"
 
@@ -294,6 +405,10 @@ jobs:
             ${{ runner.temp }}/fetchnow-cand7-summary.json
             ${{ runner.temp }}/cand7-pre-scan-identities.json
             ${{ runner.temp }}/cand7-history-proof.json
+            ${{ runner.temp }}/cand7-api-dpkg.txt
+            ${{ runner.temp }}/cand7-web-apk.txt
+            ${{ runner.temp }}/cand7-gateway-apk.txt
+            ${{ runner.temp }}/cand7-gosu-proof.txt
           if-no-files-found: warn
           retention-days: 14
 
@@ -302,6 +417,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
+          docker rm -f cand7-web-smoke cand7-gw-smoke cand7-api cand7-pg 2>/dev/null || true
+          docker network rm cand7-smoke 2>/dev/null || true
           docker image rm -f \
             "fetchnow-api:${tag}" \
             "fetchnow-web:${tag}" \
@@ -310,8 +427,6 @@ jobs:
             "fetchnow-media-net-executor:${tag}" \
             "fetchnow-egress-proxy:${tag}" \
             || true
-          # Do not remove shared postgres:16.15-alpine3.24 if other jobs need it;
-          # only drop dangling build cache for this job's buildx builder is out of scope.
           if [[ -d "$RUNNER_TEMP/fetchnow-cand7-trivy-cache" ]]; then
             trivy --cache-dir "$RUNNER_TEMP/fetchnow-cand7-trivy-cache" clean --all || true
             rm -rf "$RUNNER_TEMP/fetchnow-cand7-trivy-cache"

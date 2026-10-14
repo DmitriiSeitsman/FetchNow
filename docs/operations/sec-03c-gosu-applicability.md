@@ -245,3 +245,71 @@ Notable SHA-256:
 - govulncheck binary verbose: `f2f383ee6d09e16bb6d9ca3ef5c609c1d6d9d1bbd4deb8ccb4d7bae18f743806`
 - govulncheck source verbose: `463baa2def2f2323df911b64e08a8778aee6e5f8df3a3fe53bc191062e8c2607`
 - classification.json: `01b1327b04887c47f4906b5860bec71c0d7412043b428bfb736f223569a79e14`
+
+---
+
+## Candidate-7 reconciliation (audit run 38637415562)
+
+Status: evidence review only. **Does not** apply VEX/exceptions/ignores, remove
+or replace gosu, or treat candidate PostgreSQL as live retained PostgreSQL.
+
+Analysis UTC: `2026-10-14T21:18:00Z`
+Parent candidate-7 summary SHA-256:
+`f5840fbb1dbb514b2abcb25693a4409573c34eda29350e32df82eaa66e7f08bb`
+(run `38637415562`, commit `48d9fc5bda2ca739e6ea7cd6c938f3b5603f8c67`).
+
+### Binary re-attribution (required; `stdlib` alone insufficient)
+
+| Field | Value |
+| --- | --- |
+| Candidate image (audit Image ID / config) | `sha256:81bd698b4594e751a3269e4dcd3e03a4a0ec0daf7b72e7aa1abd43cce9887542` |
+| Index digest | `sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea` |
+| Extract path | `/usr/local/bin/gosu` (`docker create` + `docker cp`; no Postgres process) |
+| Binary SHA-256 | `52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0` |
+| Official `gosu-amd64` 1.19 | byte-identical |
+| Go buildinfo | `go1.24.6`; `github.com/tianon/gosu@v1.19.0`; `GOOS=linux` `GOARCH=amd64` `CGO_ENABLED=0` |
+| Audit finding shape | `pkg_type=gobinary`, package `stdlib@v1.24.6` (path not retained in sanitized summary; path proven by extraction) |
+
+### Prior 22 — reuse conditions
+
+Reuse of Stage-1 NOT_AFFECTED classifications is allowed because all of:
+
+1. Same binary SHA-256 as Stage 1.
+2. Same Go `1.24.6` / module `gosu@v1.19.0`.
+3. Same candidate config digest `81bd698b…` as Stage 1 / audit Image ID.
+4. Same methodology definition (Symbol Results empty ⇒ NOT_AFFECTED).
+
+Fresh/reused counts for this pass: **22 reused** (not re-litigated row-by-row);
+binary identity **freshly re-measured**.
+
+### New three (separate review)
+
+Tooling: `govulncheck@v1.1.4` in `golang:1.24.6` (`linux/amd64`), DB
+`https://vuln.go.dev` updated `2026-10-08 22:31:09 +0000 UTC`. Modes: binary +
+source (`gosu` tag `1.19`). Wrapper exclusions **not** applied.
+
+| CVE | GO advisory | OSV package / symbols (abbrev.) | Symbol | Package | Module | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CVE-2026-78667 | GO-2026-6609 | `net/http` `ServeContent` / `ServeFile` / `parseRange` | absent | absent | present | NOT_AFFECTED |
+| CVE-2026-78669 | GO-2026-6611 | `net/http` + `net/http/internal/http2` HTTP/2 SETTINGS window path | absent | absent | present | NOT_AFFECTED |
+| CVE-2026-97031 | GO-2026-6607 | `crypto/tls` `Conn.Handshake*` / `decodeInnerClientHello` (ECH) | absent | absent | present | NOT_AFFECTED |
+
+Shared basis (not “no network mode” alone): OSV vulnerable symbols are HTTP
+file-serve / HTTP/2 settings / TLS-ECH server paths; gosu’s call path is
+user-switch + `syscall.Exec`; govulncheck Symbol Results empty for each GO-ID
+in both binary and source modes (“Your code is affected by **0**
+vulnerabilities”).
+
+### Limitations (unchanged)
+
+Static reachability ≠ runtime exploit proof. No VEX applied. Gate remains
+fail/needs_owner until owner-approved exception or upstream rebuild. Candidate
+scan ≠ live retained PostgreSQL identity.
+
+### Working evidence (this reconciliation)
+
+Directory: `/tmp/fetchnow-c7-gosu-recon/`
+
+- gosu binary: `52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0`
+- govulncheck binary verbose: `fa4020b41fd4a0aeab619695b3c1e1d00af0aae3ae3a3e4f5a98e6fd4f3cfb2c`
+- govulncheck source verbose: `531bb2615af55acbc63bb6cc141ac9f085117272fa6cdbaa289af99d34152812`

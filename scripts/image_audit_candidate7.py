@@ -35,6 +35,8 @@ from fetchnow_release.bounded_subprocess import (  # noqa: E402
 GATE_NAME = "sec-03c-candidate7-image-audit"
 BASELINE_NATIVE_SHA = "686369bd085bd073cb44bd791cb1c0e5beba8323"
 NATIVE_ACCEPTANCE_RUN = "38627426197"
+AUDIT_PREDECESSOR_SHA = "48d9fc5bda2ca739e6ea7cd6c938f3b5603f8c67"
+AUDIT_PREDECESSOR_RUN = "38637415562"
 
 # Seven distinct final runtime images (api image also maps worker/delivery).
 CANDIDATE7_TARGETS: tuple[str, ...] = (
@@ -647,8 +649,16 @@ def run_candidate7_gate(
         "verdict": "PASS",
         "note": "Native release matrix PASS; not image-security PASS",
     }
+    base_summary["audit_predecessor"] = {
+        "run": AUDIT_PREDECESSOR_RUN,
+        "sha": AUDIT_PREDECESSOR_SHA,
+        "note": "Prior candidate-7 audit tip; successor is NEW_AUDIT_ARTIFACT",
+    }
+    base_summary["approved_runtime_delta"] = True
+    base_summary["runtime_inputs_unchanged"] = False
     base_summary["shas"] = {
         "baseline_native_sha": baseline_sha,
+        "audit_predecessor_sha": AUDIT_PREDECESSOR_SHA,
         "audited_source_sha": audited_source_sha,
         "audit_commit_sha": audit_commit_sha,
     }
