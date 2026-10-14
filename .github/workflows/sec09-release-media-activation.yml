@@ -7,7 +7,10 @@ name: SEC-08/09 native release transaction
 # Prior retained: 38466520000 previous-candidate PASS (pre F1–F4 runtime fix).
 # Prior FAIL: 38611105647 — F3 unresolved recovery journal.
 # Prior FAIL: 38614434493 — F3/F4 PASS after isolation; F2 DAC fixture FAIL
-# (root-owned attempt dirs; size=0). This marker authorizes disk DAC fixture fix.
+# (root-owned attempt dirs; size=0).
+# Prior FAIL: 38618740901 — DAC positive + most F2 PASS; long-writer FAIL
+# (relative Path('grow.bin') under job_process cwd="/"). This marker authorizes
+# cwd-independent absolute writer paths only (no production cwd/policy change).
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -29,7 +32,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261014-diskdac]
+            test(security): SEC-08/09 native release transaction [native-once-20261014-cwdabs]
         run: |
           python3 - <<'PY'
           import json

@@ -133,6 +133,27 @@ def test_positive_control_evaluator_requires_layout_and_launcher_zero() -> None:
     assert disk.evaluate_positive_control(evidence) is False
 
 
+def test_evaluate_long_writer_requires_heartbeat_and_stop() -> None:
+    evidence = {
+        "failure_class": "disk_limit",
+        "writer_started": True,
+        "exit_code": 1,
+        "timed_out": False,
+        "size": 8000,
+        "heartbeat": 3,
+        "recording_stopped": True,
+        "elapsed": 1.2,
+    }
+    assert disk.evaluate_long_writer(evidence) is True
+    evidence["heartbeat"] = 0
+    evidence["writer_started"] = False
+    assert disk.evaluate_long_writer(evidence) is False
+    evidence["heartbeat"] = 3
+    evidence["writer_started"] = True
+    evidence["failure_class"] = "dac_or_no_write"
+    assert disk.evaluate_long_writer(evidence) is False
+
+
 def test_sanitize_strips_urls_and_secrets() -> None:
     text = disk._sanitize_text(
         b"fail password=sekrit https://evil.example/x Bearer abcdef"
@@ -170,7 +191,8 @@ def test_dac_smoke_script_is_not_landlock_acceptance() -> None:
     assert "writable-cgroups" not in text
 
 
-def test_workflow_marker_diskdac() -> None:
+def test_workflow_marker_cwdabs() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "[native-once-20261014-diskdac]" in text
+    assert "[native-once-20261014-cwdabs]" in text
+    assert "[native-once-20261014-diskdac]" not in text
     assert "[native-once-20261014-sec09iso]" not in text

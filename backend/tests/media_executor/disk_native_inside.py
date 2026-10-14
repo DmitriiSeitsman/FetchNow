@@ -49,9 +49,7 @@ def _runner():
 
 
 def _sanitize_text(raw: bytes | str, *, limit: int = 400) -> str:
-    text = (
-        raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-    )
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
     text = _SAFE_ERR.sub("<redacted>", text)
     return text[:limit]
 
@@ -275,6 +273,127 @@ def evaluate_positive_control(evidence: dict[str, Any]) -> bool:
         and evidence.get("launcher_exit_code") == 0
         and not evidence.get("timed_out")
         and evidence.get("failure_class") == "success"
+    )
+
+
+def evaluate_long_writer(evidence: dict[str, Any]) -> bool:
+    return bool(
+        evidence.get("failure_class") == "disk_limit"
+        and evidence.get("writer_started")
+        and evidence.get("exit_code") == 1
+        and not evidence.get("timed_out")
+        and int(evidence.get("size") or 0) > 0
+        and int(evidence.get("size") or 0) <= 40_000
+        and int(evidence.get("heartbeat") or 0) >= 1
+        and evidence.get("recording_stopped")
+        and float(evidence.get("elapsed") or 99.0) < 9.0
+    )
+
+
+def evaluate_neighbor(evidence: dict[str, Any]) -> bool:
+    """Require real overlap + neighbor continuity after limited stop."""
+    return bool(
+        evidence.get("failure_class_limited") == "disk_limit"
+        and evidence.get("limited_writer_started")
+        and evidence.get("limited") == 1
+        and not evidence.get("limited_timed_out")
+        and evidence.get("limited_recording_stopped")
+        and evidence.get("neighbor") == 0
+        and not evidence.get("neighbor_timed_out")
+        and evidence.get("neighbor_alive")
+        and evidence.get("neighbor_concurrent")
+        and evidence.get("neighbor_continued_after_limited")
+        and int(evidence.get("limited_heartbeat") or 0) >= 1
+        and int(evidence.get("limited_size") or 0) > 0
+    )
+
+
+def _attempt_base_preamble() -> str:
+    """Absolute attempt dir for scripts launched by absolute filename (cwd may be /)."""
+    return "from pathlib import Path\nbase = Path(__file__).resolve().parent\n"
+
+
+def long_writer_script(*, relative: bool = False) -> str:
+    """Growing writer for F2 long-writer. relative=True is the known-bad form."""
+    if relative:
+        return (
+            "import time\n"
+            "from pathlib import Path\n"
+            "p = Path('grow.bin')\n"
+            "h = Path('heartbeat')\n"
+            "n = 0\n"
+            "while True:\n"
+            "    cur = p.read_bytes() if p.exists() else b''\n"
+            "    p.write_bytes(cur + b'z' * 2000)\n"
+            "    n += 1\n"
+            "    h.write_text(str(n))\n"
+            "    time.sleep(0.02)\n"
+        )
+    return (
+        "import time\n" + _attempt_base_preamble() + "p = base / 'grow.bin'\n"
+        "h = base / 'heartbeat'\n"
+        "n = 0\n"
+        "while True:\n"
+        "    cur = p.read_bytes() if p.exists() else b''\n"
+        "    p.write_bytes(cur + b'z' * 2000)\n"
+        "    n += 1\n"
+        "    h.write_text(str(n))\n"
+        "    time.sleep(0.02)\n"
+    )
+
+
+def limited_neighbor_writer_script(
+    *,
+    relative: bool = False,
+    chunk: int = 2000,
+    sleep_s: float = 0.08,
+) -> str:
+    """Limited neighbor writer; cadence leaves an observable overlap window."""
+    if relative:
+        return (
+            "import time\n"
+            "from pathlib import Path\n"
+            "p = Path('x')\n"
+            "h = Path('hb')\n"
+            "n = 0\n"
+            "while True:\n"
+            "    cur = p.read_bytes() if p.exists() else b''\n"
+            f"    p.write_bytes(cur + b'y' * {chunk})\n"
+            "    n += 1\n"
+            "    h.write_text(str(n))\n"
+            f"    time.sleep({sleep_s})\n"
+        )
+    return (
+        "import time\n" + _attempt_base_preamble() + "p = base / 'x'\n"
+        "h = base / 'hb'\n"
+        "n = 0\n"
+        "while True:\n"
+        "    cur = p.read_bytes() if p.exists() else b''\n"
+        f"    p.write_bytes(cur + b'y' * {chunk})\n"
+        "    n += 1\n"
+        "    h.write_text(str(n))\n"
+        f"    time.sleep({sleep_s})\n"
+    )
+
+
+def healthy_neighbor_script(*, relative: bool = False, ticks: int = 40) -> str:
+    """Neighbor heartbeat writer; ticks keep it alive across limited stop."""
+    if relative:
+        return (
+            "import time\n"
+            "from pathlib import Path\n"
+            "h = Path('hb')\n"
+            f"for i in range(1, {ticks + 1}):\n"
+            "    h.write_text(str(i))\n"
+            "    time.sleep(0.05)\n"
+            "print('ok')\n"
+        )
+    return (
+        "import time\n" + _attempt_base_preamble() + "h = base / 'hb'\n"
+        f"for i in range(1, {ticks + 1}):\n"
+        "    h.write_text(str(i))\n"
+        "    time.sleep(0.05)\n"
+        "print('ok')\n"
     )
 
 
@@ -570,20 +689,7 @@ def case_prestart_refuse(work: Path) -> dict[str, object]:
 
 def case_long_writer_kill_reap(work: Path) -> dict[str, object]:
     attempt, attempt_meta = make_attempt(work, "long")
-    script = (
-        "import time\n"
-        "from pathlib import Path\n"
-        "p = Path('grow.bin')\n"
-        "h = Path('heartbeat')\n"
-        "n = 0\n"
-        "while True:\n"
-        "    cur = p.read_bytes() if p.exists() else b''\n"
-        "    p.write_bytes(cur + b'z' * 2000)\n"
-        "    n += 1\n"
-        "    h.write_text(str(n))\n"
-        "    time.sleep(0.02)\n"
-    )
-    _write_as_worker(attempt / "grow.py", script.encode())
+    _write_as_worker(attempt / "grow.py", long_writer_script().encode())
     t0 = time.monotonic()
     raised: BaseException | None = None
     outcome: ToolOutcome | None = None
@@ -615,20 +721,8 @@ def case_long_writer_kill_reap(work: Path) -> dict[str, object]:
         expected_min_write=2000,
         raised=raised,
     )
-    ok = (
-        failure_class == "disk_limit"
-        and outcome is not None
-        and outcome.exit_code == 1
-        and not outcome.timed_out
-        and size > 0
-        and size <= 40_000
-        and hb_value >= 1
-        and recording_stopped
-        and elapsed < 9.0
-    )
-    return {
+    evidence: dict[str, object] = {
         "name": "f2-disk-long-writer-kill-reap",
-        "ok": ok,
         "attempt": attempt_meta,
         "writer_started": size > 0 and hb_value >= 1,
         "heartbeat": hb_value,
@@ -642,39 +736,16 @@ def case_long_writer_kill_reap(work: Path) -> dict[str, object]:
             outcome, error=None if raised is None else type(raised).__name__
         ),
     }
+    evidence["ok"] = evaluate_long_writer(evidence)
+    return evidence
 
 
 def case_neighbor_continues(work: Path) -> dict[str, object]:
     a1, meta1 = make_attempt(work, "n1")
     a2, meta2 = make_attempt(work, "n2")
-    _write_as_worker(
-        a1 / "grow.py",
-        (
-            b"import time\n"
-            b"from pathlib import Path\n"
-            b"p = Path('x')\n"
-            b"h = Path('hb')\n"
-            b"n = 0\n"
-            b"while True:\n"
-            b"    cur = p.read_bytes() if p.exists() else b''\n"
-            b"    p.write_bytes(cur + b'y' * 3000)\n"
-            b"    n += 1\n"
-            b"    h.write_text(str(n))\n"
-            b"    time.sleep(0.02)\n"
-        ),
-    )
-    _write_as_worker(
-        a2 / "ok.py",
-        (
-            b"import time\n"
-            b"from pathlib import Path\n"
-            b"h = Path('hb')\n"
-            b"for i in range(1, 6):\n"
-            b"    h.write_text(str(i))\n"
-            b"    time.sleep(0.05)\n"
-            b"print('ok')\n"
-        ),
-    )
+    _write_as_worker(a1 / "grow.py", limited_neighbor_writer_script().encode())
+    # Long enough to overlap limited start and continue after limited stop (~2s).
+    _write_as_worker(a2 / "ok.py", healthy_neighbor_script(ticks=40).encode())
     results: dict[str, Any] = {}
     runner = _runner()
 
@@ -684,17 +755,32 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
                 runner,
                 attempt=a1,
                 argv=[sys.executable, str(a1 / "grow.py")],
-                max_growth=5_000,
+                # Ceiling high enough for several heartbeats before kill (~0.5s window).
+                max_growth=10_000,
                 max_tree=50_000,
                 min_free=None,
                 timeout=8.0,
             )
         except BaseException as exc:  # noqa: BLE001
             results["limited_error"] = type(exc).__name__
+        finally:
+            results["neighbor_hb_at_limited_end"] = _read_text(a2 / "hb").strip()
+            results["limited_end_mono"] = time.monotonic()
 
     def neighbor() -> None:
-        time.sleep(0.15)
-        results["neighbor_hb_before"] = _read_text(a2 / "hb").strip()
+        # Wait until limited writer has proven a real write/heartbeat.
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            size_now = max(0, _file_size(a1 / "x"))
+            hb_now = _read_text(a1 / "hb").strip()
+            if size_now > 0 and hb_now.isdigit() and int(hb_now) >= 1:
+                results["limited_size_at_neighbor_start"] = size_now
+                results["limited_hb_at_neighbor_start"] = hb_now
+                break
+            time.sleep(0.02)
+        else:
+            results["neighbor_error"] = "limited_never_started"
+            return
         try:
             results["neighbor_outcome"] = _run(
                 runner,
@@ -703,7 +789,7 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
                 max_growth=1_000_000,
                 max_tree=1_000_000,
                 min_free=None,
-                timeout=5.0,
+                timeout=8.0,
             )
         except BaseException as exc:  # noqa: BLE001
             results["neighbor_error"] = type(exc).__name__
@@ -714,49 +800,77 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
     t1.start()
     t2.start()
     t1.join(timeout=15)
+    # Prove neighbor heartbeat still advances after limited task stopped.
+    hb_at_limited_end = str(results.get("neighbor_hb_at_limited_end") or "")
+    continued = False
+    if hb_at_limited_end.isdigit():
+        baseline = int(hb_at_limited_end)
+        poll_deadline = time.monotonic() + 2.5
+        while time.monotonic() < poll_deadline:
+            cur = _read_text(a2 / "hb").strip()
+            if cur.isdigit() and int(cur) > baseline:
+                continued = True
+                results["neighbor_hb_after_limited_growth"] = cur
+                break
+            time.sleep(0.05)
+    results["neighbor_continued_after_limited"] = continued
     t2.join(timeout=15)
+
     limited_out: ToolOutcome | None = results.get("limited_outcome")
     neighbor_out: ToolOutcome | None = results.get("neighbor_outcome")
     limited_size = max(0, _file_size(a1 / "x"))
     limited_hb_text = _read_text(a1 / "hb").strip()
     limited_hb = int(limited_hb_text) if limited_hb_text.isdigit() else 0
+    size_after = limited_size
+    time.sleep(0.15)
+    size_stable = max(0, _file_size(a1 / "x"))
+    limited_recording_stopped = size_stable == size_after
     neighbor_hb_after = str(results.get("neighbor_hb_after") or "")
     neighbor_alive = neighbor_hb_after.isdigit() and int(neighbor_hb_after) >= 1
+    neighbor_concurrent = (
+        str(results.get("limited_hb_at_neighbor_start") or "").isdigit()
+        and int(results.get("limited_size_at_neighbor_start") or 0) > 0
+        and str(results.get("neighbor_hb_at_limited_end") or "").isdigit()
+        and int(results.get("neighbor_hb_at_limited_end") or "0") >= 1
+    )
     limited_class = classify_tool_failure(
         outcome=limited_out,
         bytes_written=limited_size,
-        expected_min_write=3000,
+        expected_min_write=2000,
         raised=None
         if "limited_error" not in results
         else OSError(results["limited_error"]),
     )
-    ok = (
-        limited_class == "disk_limit"
-        and limited_out is not None
-        and limited_out.exit_code == 1
-        and neighbor_out is not None
-        and neighbor_out.exit_code == 0
-        and not neighbor_out.timed_out
-        and neighbor_alive
-        and limited_hb >= 1
-    )
-    return {
+    evidence: dict[str, object] = {
         "name": "f2-disk-neighbor-continues",
-        "ok": ok,
         "attempt_limited": meta1,
         "attempt_neighbor": meta2,
         "limited": None if limited_out is None else limited_out.exit_code,
         "neighbor": None if neighbor_out is None else neighbor_out.exit_code,
+        "limited_timed_out": None if limited_out is None else limited_out.timed_out,
+        "neighbor_timed_out": None if neighbor_out is None else neighbor_out.timed_out,
+        "limited_writer_started": limited_size > 0 and limited_hb >= 1,
         "limited_heartbeat": limited_hb,
         "limited_size": limited_size,
+        "limited_recording_stopped": limited_recording_stopped,
+        "neighbor_hb_at_limited_end": results.get("neighbor_hb_at_limited_end"),
         "neighbor_hb_after": neighbor_hb_after,
+        "neighbor_hb_after_limited_growth": results.get(
+            "neighbor_hb_after_limited_growth"
+        ),
         "neighbor_alive": neighbor_alive,
+        "neighbor_concurrent": neighbor_concurrent,
+        "neighbor_continued_after_limited": continued,
+        "limited_size_at_neighbor_start": results.get("limited_size_at_neighbor_start"),
+        "limited_hb_at_neighbor_start": results.get("limited_hb_at_neighbor_start"),
         "failure_class_limited": limited_class,
         "diag_limited": _outcome_diag(limited_out, error=results.get("limited_error")),
         "diag_neighbor": _outcome_diag(
             neighbor_out, error=results.get("neighbor_error")
         ),
     }
+    evidence["ok"] = evaluate_neighbor(evidence)
+    return evidence
 
 
 def main() -> int:

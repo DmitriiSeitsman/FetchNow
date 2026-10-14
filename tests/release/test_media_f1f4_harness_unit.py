@@ -33,7 +33,7 @@ F1F4_CASES = (
     "f1b-bootstrap-media-on-cleanup-failure-unresolved",
 )
 
-MARKER = "[native-once-20261014-diskdac]"
+MARKER = "[native-once-20261014-cwdabs]"
 
 
 def _harness_text() -> str:
@@ -169,14 +169,15 @@ def test_disk_inside_cases_cover_required_scenarios() -> None:
     assert "make_work_root" in text
 
 
-def test_workflow_marker_is_diskdac_attempt_one_only() -> None:
+def test_workflow_marker_is_cwdabs_attempt_one_only() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert MARKER in text
     assert "github.run_attempt == 1" in text
     assert (
         "workflow_dispatch" not in text.split("on:", 1)[1].split("permissions:", 1)[0]
     )
-    assert "38614434493" in text
+    assert "38618740901" in text
+    assert "[native-once-20261014-diskdac]" not in text
     assert "[native-once-20261014-sec09iso]" not in text
     assert "[native-once-20261014-f1f4]" not in text
 
