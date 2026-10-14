@@ -23,19 +23,22 @@ MATRIX_CASE_NAMES: tuple[str, ...] = (
     "on-to-on-rollback",
     "post-current-publication-rollback",
     "on-to-on-commit",
-    "accept-target-media-health",
-    "accept-target-rejects-stopped-media",
-    # F1–F4 corrective native cases (2026-10-14).
-    "f1a-bootstrap-media-on-partial-fail-cleanup",
-    "f1b-bootstrap-media-on-cleanup-failure-unresolved",
+    # Healthy media-ON prerequisites, then F3→F4→F2→F1 before accept-target.
+    "f3-f4-prerequisites",
+    "f3-config-rollout-refuses-media-on",
+    "f4-invalid-on-budget-health-fail",
     "f2-disk-fast-growth-fail",
     "f2-disk-fast-tree-fail",
     "f2-disk-staged-inputs-success",
     "f2-disk-prestart-refuse",
     "f2-disk-long-writer-kill-reap",
     "f2-disk-neighbor-continues",
-    "f3-config-rollout-refuses-media-on",
-    "f4-invalid-on-budget-health-fail",
+    "f1a-bootstrap-media-on-partial-fail-cleanup",
+    "f1b-bootstrap-media-on-cleanup-failure-unresolved",
+    # Accept-target helper cases last: write_plan leaves an unresolved journal
+    # and the negative case stops egress-proxy.
+    "accept-target-media-health",
+    "accept-target-rejects-stopped-media",
 )
 
 _SAFE_MEDIA_KEYS = frozenset(

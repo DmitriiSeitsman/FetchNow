@@ -34,22 +34,28 @@ if str(_ROOT / "tests" / "release") not in sys.path:
 from fetchnow_release.activate import ActivateError  # noqa: E402
 from fetchnow_release.bounded_subprocess import run_bounded  # noqa: E402
 from fetchnow_release.bootstrap_cleanup import BootstrapCleanupError  # noqa: E402
+from fetchnow_release.bootstrap_journal import find_unresolved_bootstraps  # noqa: E402
+from fetchnow_release.c2_constants import SOURCE_DIRNAME  # noqa: E402
 from fetchnow_release.c3_constants import (  # noqa: E402
     BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
+    OVERRIDES_DIRNAME,
     STATUS_ACTIVATING_MEDIA,
     STATUS_BOOTSTRAP_CLEANED,
     STATUS_BOOTSTRAP_CLEANUP_STARTED,
     STATUS_FAILED,
     STATUS_ROLLED_BACK,
 )
+from fetchnow_release.config_journal import find_unresolved_config_rollouts  # noqa: E402
 from fetchnow_release.config_rollout import (  # noqa: E402
     ConfigRolloutInput,
     run_config_rollout,
 )
 from fetchnow_release.current_state import current_path  # noqa: E402
+from fetchnow_release.deploy_root import release_dir  # noqa: E402
 from fetchnow_release.diagnostics import format_rollout_failure_diagnostics  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
     deployment_blocks_rollout,
+    find_unresolved_deployments,
     load_plan,
     new_deployment_id,
     utc_now,
@@ -57,11 +63,9 @@ from fetchnow_release.journal import (  # noqa: E402
 )
 from fetchnow_release.journal_io import read_json  # noqa: E402
 from fetchnow_release.env_file import load_env_file, replace_env_file_key  # noqa: E402
-from fetchnow_release.health import (  # noqa: E402
-    HealthError,
-    HealthInput,
-    _managed_media_expectation,
-)
+from fetchnow_release.health import HealthInput, run_health  # noqa: E402
+from fetchnow_release.media_activation import compose_for_media_plan  # noqa: E402
+from fetchnow_release.migration_journal import find_unresolved_migrations  # noqa: E402
 from fetchnow_release.media_release_evidence import (  # noqa: E402
     MATRIX_CASE_NAMES,
     bounded_container_rows,
@@ -75,7 +79,10 @@ from fetchnow_release.media_release_evidence import (  # noqa: E402
     sanitized_deployment_journal,
     write_json_evidence,
 )
-from fetchnow_release.media_rollout import MediaRolloutError  # noqa: E402
+from fetchnow_release.media_rollout import (  # noqa: E402
+    MediaRolloutError,
+    media_plan_from_journal,
+)
 from fetchnow_release.media_state import (  # noqa: E402
     MediaActivationState,
     load_media_activation_state,
@@ -85,7 +92,12 @@ from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
 from fetchnow_release.recover import RecoverInput, _execute_accept_target  # noqa: E402
 from fetchnow_release.redact import redact  # noqa: E402
 from fetchnow_release.resource_budget import parse_resource_budget  # noqa: E402
-from fetchnow_release.rollout import RolloutInput, RolloutResult, rollout_release  # noqa: E402
+from fetchnow_release.rollout import (  # noqa: E402
+    RolloutInput,
+    RolloutResult,
+    _compose_with_override,
+    rollout_release,
+)
 from fetchnow_release.rollout_project import make_rollout_project_name  # noqa: E402
 from fetchnow_release.stabilize import StabilizationPolicy  # noqa: E402
 from release_media_disk_native_probe import run_disk_probe  # noqa: E402
@@ -544,52 +556,89 @@ def main(argv: list[str] | None = None) -> int:
         )
         if upgraded.deployment_id is None:
             raise RuntimeError("successful rollout has no deployment id")
-        original_plan = load_plan(deploy / "deployments" / upgraded.deployment_id)
-        recovery_id = new_deployment_id()
-        recovery_plan = replace(original_plan, deployment_id=recovery_id)
-        recovery_dir = deploy / "deployments" / recovery_id
-        write_plan(recovery_dir, recovery_plan)
-        recovery_input = RecoverInput(
-            project_name=project,
-            env_file=env,
-            deploy_root=deploy,
-            repo_root=clone,
-            deployment_id=recovery_id,
-            action="accept-target",
-            gateway_base_url=f"http://{port}",
+        committed_plan = load_plan(deploy / "deployments" / upgraded.deployment_id)
+        target_release = release_dir(deploy, revision_b)
+        override_path = (
+            deploy
+            / "deployments"
+            / upgraded.deployment_id
+            / OVERRIDES_DIRNAME
+            / "images.yaml"
         )
+        if not override_path.is_file():
+            raise RuntimeError("committed deployment missing images override")
+        managed_compose = _compose_with_override(
+            target_release, override_path, project_name=project
+        )
+        media_plan = media_plan_from_journal(committed_plan.media or {})
+        if media_plan.activation:
+            managed_compose = compose_for_media_plan(
+                target_release, base_compose=managed_compose, plan=media_plan
+            )
+        managed_health_cwd = target_release / SOURCE_DIRNAME
 
-        def accept_target() -> str:
-            return _execute_accept_target(
-                inp=recovery_input,
-                deploy=deploy,
-                plan=recovery_plan,
-                dep_dir=recovery_dir,
-                compose_override_dir=recovery_dir / "overrides",
+        def managed_health_input() -> HealthInput:
+            return HealthInput(
+                project_name=project,
+                env_file=env,
+                compose_files=tuple(managed_compose),
+                expected_revision=revision_b,
+                repo_root=managed_health_cwd,
+                gateway_base_url=f"http://{port}",
+                deploy_root=deploy,
             )
 
-        recovered = accept_target()
-        record(
-            "accept-target-media-health",
-            recovered == revision_b and media_state().revision == revision_b,
-        )
-        proxy = next(
-            row
+        # --- Healthy media-ON prerequisites before F3/F4 (no synthetic recovery yet) ---
+        prereq_failures: list[str] = []
+        state_b = media_state()
+        if state_b.revision != revision_b:
+            prereq_failures.append("active_revision_not_b")
+        if not state_b.activation:
+            prereq_failures.append("media_activation_not_on")
+        if state_b.resource_budget is None:
+            prereq_failures.append("media_budget_missing")
+        else:
+            try:
+                parse_resource_budget(state_b.resource_budget)
+            except Exception:  # noqa: BLE001
+                prereq_failures.append("media_budget_invalid")
+        running_sidecars = {
+            row["Config"]["Labels"].get("com.docker.compose.service")
             for row in sidecars()
-            if row["Config"]["Labels"].get("com.docker.compose.service")
-            == "egress-proxy"
+            if row.get("State", {}).get("Running")
+        }
+        if running_sidecars != {
+            "media-executor",
+            "media-net-executor",
+            "egress-proxy",
+        }:
+            prereq_failures.append(f"sidecars_not_running:{sorted(running_sidecars)}")
+        unresolved = (
+            tuple(find_unresolved_deployments(deploy))
+            + tuple(find_unresolved_migrations(deploy))
+            + tuple(find_unresolved_bootstraps(deploy))
+            + tuple(find_unresolved_config_rollouts(deploy))
         )
-        checked(["docker", "stop", proxy["Id"]], ROOT)
-        authority_before = current_path(deploy).read_bytes()
-        rejected = False
-        try:
-            accept_target()
-        except Exception:
-            rejected = True
+        if unresolved:
+            prereq_failures.append(f"unresolved_journals:{list(unresolved)}")
+        baseline_health = run_health(managed_health_input())
+        if not baseline_health.ok:
+            prereq_failures.append(
+                "managed_health_not_pass:"
+                + redact(" | ".join(baseline_health.messages[:3]))
+            )
         record(
-            "accept-target-rejects-stopped-media",
-            rejected and current_path(deploy).read_bytes() == authority_before,
+            "f3-f4-prerequisites",
+            not prereq_failures,
+            failures=prereq_failures,
+            health_messages=list(baseline_health.messages),
+            unresolved=list(unresolved),
         )
+        if prereq_failures:
+            raise RuntimeError(
+                "F3/F4 prerequisites not met (not an F3 defect): "
+                + ", ".join(prereq_failures)
+            )
 
         # --- F3: config-only refuses while media activation is ON ---
         env_before_f3 = env.read_bytes()
@@ -615,6 +664,7 @@ def main(argv: list[str] | None = None) -> int:
             "f3-config-rollout-refuses-media-on",
             (not cfg.ok)
             and any("media activation is ON" in m for m in cfg.messages)
+            and not any("unresolved release journal" in m for m in cfg.messages)
             and env.read_bytes() == env_before_f3
             and current_path(deploy).read_bytes() == current_before_f3
             and media_state_path(deploy).read_bytes() == media_before_f3
@@ -632,11 +682,15 @@ def main(argv: list[str] | None = None) -> int:
             media_sha256=_sha256_file(media_state_path(deploy)),
         )
 
-        # --- F4: invalid ON budget fails managed health before PASS ---
+        # --- F4: invalid ON budget fails managed run_health; state restored ---
         media_path = media_state_path(deploy)
         original_media = media_path.read_bytes()
+        current_before_f4 = current_path(deploy).read_bytes()
         f4_ok = True
-        f4_detail: dict[str, object] = {}
+        f4_detail: dict[str, object] = {
+            "baseline_ok": baseline_health.ok,
+            "baseline_messages": list(baseline_health.messages),
+        }
         try:
             for label, bad in (
                 ("missing", None),
@@ -661,36 +715,41 @@ def main(argv: list[str] | None = None) -> int:
                     json.dumps(raw, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
-                raised = False
-                try:
-                    _managed_media_expectation(
-                        HealthInput(
-                            project_name=project,
-                            env_file=env,
-                            compose_files=tuple(),
-                            expected_revision=revision_b,
-                            repo_root=clone,
-                            deploy_root=deploy,
-                        ),
-                        revision_b,
-                    )
-                except (HealthError, MediaRolloutError, ValueError) as exc:
-                    raised = True
-                    f4_detail[label] = type(exc).__name__
-                if not raised:
+                bad_health = run_health(managed_health_input())
+                joined = " ".join(bad_health.messages)
+                budget_fail = (not bad_health.ok) and (
+                    "resource_budget" in joined
+                    or "ON media expectation requires resource_budget" in joined
+                )
+                authority_intact = (
+                    current_path(deploy).read_bytes() == current_before_f4
+                )
+                f4_detail[label] = {
+                    "ok": bad_health.ok,
+                    "budget_error": budget_fail,
+                    "authority_unchanged": authority_intact,
+                    "messages": list(bad_health.messages[:4]),
+                }
+                if not budget_fail or not authority_intact:
                     f4_ok = False
-                    f4_detail[label] = "missing_error"
         finally:
             media_path.write_bytes(original_media)
-        # Valid restored state must load again.
+        restored_bytes_ok = media_path.read_bytes() == original_media
         restored = load_media_activation_state(deploy)
+        restored_health = run_health(managed_health_input())
+        f4_detail["restored_bytes"] = restored_bytes_ok
+        f4_detail["restored_health_ok"] = restored_health.ok
+        f4_detail["restored_health_messages"] = list(restored_health.messages)
+        if not restored_bytes_ok or not restored_health.ok:
+            f4_ok = False
         record(
             "f4-invalid-on-budget-health-fail",
             f4_ok
             and restored is not None
             and restored.activation
             and restored.resource_budget is not None
-            and media_path.read_bytes() == original_media,
+            and restored_bytes_ok
+            and restored_health.ok,
             detail=f4_detail,
         )
 
@@ -837,9 +896,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             f1a = rollout_release(f1_inp(active=True))
         f1a_dep = (
-            f1_deploy / "deployments" / f1a.deployment_id
-            if f1a.deployment_id
-            else None
+            f1_deploy / "deployments" / f1a.deployment_id if f1a.deployment_id else None
         )
         f1a_statuses = _event_statuses(f1a_dep) if f1a_dep else []
         f1a_audit = [
@@ -923,16 +980,15 @@ def main(argv: list[str] | None = None) -> int:
         def boom_remove(**_kwargs: object) -> tuple:
             raise BootstrapCleanupError("test-only ownership removal failure")
 
-        with patch.object(
-            media_rollout_mod, "assert_running_media_budget", fail_after_sidecars
-        ), patch.object(
-            rollout_mod, "remove_owned_bootstrap_containers", boom_remove
+        with (
+            patch.object(
+                media_rollout_mod, "assert_running_media_budget", fail_after_sidecars
+            ),
+            patch.object(rollout_mod, "remove_owned_bootstrap_containers", boom_remove),
         ):
             f1b = rollout_release(f1_inp(active=True))
         f1b_dep = (
-            f1_deploy / "deployments" / f1b.deployment_id
-            if f1b.deployment_id
-            else None
+            f1_deploy / "deployments" / f1b.deployment_id if f1b.deployment_id else None
         )
         f1b_statuses = _event_statuses(f1b_dep) if f1b_dep else []
         record(
@@ -988,6 +1044,55 @@ def main(argv: list[str] | None = None) -> int:
                 clone,
             )
         checked(["docker", "rm", "-f", foreign_name], ROOT)
+
+        # --- Accept-target helper cases last (write_plan leaves unresolved journal;
+        # negative path stops egress-proxy). Must not precede F3/F4/F2/F1. ---
+        original_plan = committed_plan
+        recovery_id = new_deployment_id()
+        recovery_plan = replace(original_plan, deployment_id=recovery_id)
+        recovery_dir = deploy / "deployments" / recovery_id
+        write_plan(recovery_dir, recovery_plan)
+        recovery_input = RecoverInput(
+            project_name=project,
+            env_file=env,
+            deploy_root=deploy,
+            repo_root=clone,
+            deployment_id=recovery_id,
+            action="accept-target",
+            gateway_base_url=f"http://{port}",
+        )
+
+        def accept_target() -> str:
+            return _execute_accept_target(
+                inp=recovery_input,
+                deploy=deploy,
+                plan=recovery_plan,
+                dep_dir=recovery_dir,
+                compose_override_dir=recovery_dir / "overrides",
+            )
+
+        recovered = accept_target()
+        record(
+            "accept-target-media-health",
+            recovered == revision_b and media_state().revision == revision_b,
+        )
+        proxy = next(
+            row
+            for row in sidecars()
+            if row["Config"]["Labels"].get("com.docker.compose.service")
+            == "egress-proxy"
+        )
+        checked(["docker", "stop", proxy["Id"]], ROOT)
+        authority_before = current_path(deploy).read_bytes()
+        rejected = False
+        try:
+            accept_target()
+        except Exception:
+            rejected = True
+        record(
+            "accept-target-rejects-stopped-media",
+            rejected and current_path(deploy).read_bytes() == authority_before,
+        )
 
         assert_current_state_v2(deploy, application_revision=revision_b)
         rc = 0
