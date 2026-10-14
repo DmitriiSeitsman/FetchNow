@@ -123,11 +123,13 @@ def test_limited_and_neighbor_writers_cwd_independent(tmp_path: Path) -> None:
     neighbor_dir = tmp_path / "n2"
     limited_dir.mkdir()
     neighbor_dir.mkdir()
+    seed = disk.NEIGHBOR_LIMITED_SEED_BYTES
     (limited_dir / "grow.py").write_text(
-        disk.limited_neighbor_writer_script(relative=False), encoding="utf-8"
+        disk.limited_neighbor_writer_script(relative=False, seed_bytes=seed),
+        encoding="utf-8",
     )
     (neighbor_dir / "ok.py").write_text(
-        disk.healthy_neighbor_script(relative=False, ticks=20), encoding="utf-8"
+        disk.healthy_neighbor_script(relative=False), encoding="utf-8"
     )
     limited = subprocess.Popen(
         [sys.executable, str(limited_dir / "grow.py")],
@@ -142,22 +144,25 @@ def test_limited_and_neighbor_writers_cwd_independent(tmp_path: Path) -> None:
         stderr=subprocess.PIPE,
     )
     try:
-        assert _wait_file(limited_dir / "x", timeout=2.0)
-        assert _wait_file(limited_dir / "hb", timeout=2.0)
+        assert _wait_file(limited_dir / "ready", timeout=2.0)
+        assert _wait_file(neighbor_dir / "ready", timeout=2.0)
         assert _wait_file(neighbor_dir / "hb", timeout=2.0)
-        assert (limited_dir / "x").stat().st_size >= 2000
-        assert int((limited_dir / "hb").read_text(encoding="utf-8").strip()) >= 1
+        assert (limited_dir / "x").stat().st_size == seed
         assert int((neighbor_dir / "hb").read_text(encoding="utf-8").strip()) >= 1
-        # Writes stay inside their own attempt roots.
         assert not (tmp_path / "x").exists()
-        assert list(limited_dir.glob("x")) and list(neighbor_dir.glob("hb"))
-        # Stop limited writer; let healthy neighbor finish on its own.
+        (limited_dir / "grow_gate").write_text("1\n", encoding="utf-8")
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if (limited_dir / "x").stat().st_size > seed:
+                break
+            time.sleep(0.02)
+        assert (limited_dir / "x").stat().st_size > seed
         _reap(limited)
+        (neighbor_dir / "finish_gate").write_text("1\n", encoding="utf-8")
         neighbor.wait(timeout=3)
     finally:
         _reap(limited)
         _reap(neighbor)
-    # Neighbor should finish cleanly when not killed.
     assert neighbor.returncode == 0
     final_hb = int((neighbor_dir / "hb").read_text(encoding="utf-8").strip())
     assert final_hb >= 1
@@ -170,9 +175,11 @@ def test_scripts_declare_base_from_file_not_cwd() -> None:
     for text in (abs_long, abs_lim, abs_nb):
         assert "Path(__file__).resolve().parent" in text
         assert "Path('grow.bin')" not in text
-        assert "Path('x')" not in text
-        assert "Path('hb')" not in text
         assert "Path('heartbeat')" not in text
+    assert "base / 'x'" in abs_lim
+    assert "base / 'grow_gate'" in abs_lim
+    assert "base / 'finish_gate'" in abs_nb
+    assert "base / 'ready'" in abs_lim and "base / 'ready'" in abs_nb
     rel = disk.long_writer_script(relative=True)
     assert "Path('grow.bin')" in rel
     assert "Path(__file__)" not in rel
@@ -180,6 +187,10 @@ def test_scripts_declare_base_from_file_not_cwd() -> None:
 
 def test_evaluate_neighbor_requires_continuity_not_just_exits() -> None:
     base = {
+        "phase_error": None,
+        "both_ready": True,
+        "growth_released": True,
+        "limited_below_ceiling_at_release": True,
         "failure_class_limited": "disk_limit",
         "limited_writer_started": True,
         "limited": 1,
@@ -190,8 +201,11 @@ def test_evaluate_neighbor_requires_continuity_not_just_exits() -> None:
         "neighbor_alive": True,
         "neighbor_concurrent": True,
         "neighbor_continued_after_limited": True,
+        "neighbor_finish_released": True,
         "limited_heartbeat": 2,
         "limited_size": 4000,
+        "neighbor_hb_at_limited_end": 3,
+        "size_before_release": 500,
     }
     assert disk.evaluate_neighbor(base) is True
     weak = dict(base)
@@ -207,15 +221,12 @@ def test_evaluate_neighbor_requires_continuity_not_just_exits() -> None:
 
 def test_fixture_has_no_cwd_relative_writer_literals() -> None:
     text = DISK_INSIDE.read_text(encoding="utf-8")
-    # Production cases must call absolute builders; relative= only for regression helper.
     assert "long_writer_script()" in text
-    assert "limited_neighbor_writer_script()" in text
+    assert "limited_neighbor_writer_script(" in text
     assert "healthy_neighbor_script(" in text
-    # Ensure case bodies do not embed bare relative Path('...') writers.
-    assert "p = Path('grow.bin')" in text  # only inside relative=True helper
+    assert "grow_gate" in text and "finish_gate" in text
+    assert "both_ready" in text
     assert text.count("p = Path('grow.bin')") == 1
-    assert text.count("p = Path('x')") == 1
     assert "base / 'grow.bin'" in text
-    assert "base / 'heartbeat'" in text
-    assert "base / 'x'" in text
-    assert "base / 'hb'" in text
+    assert "base / 'grow_gate'" in text
+    assert "base / 'finish_gate'" in text

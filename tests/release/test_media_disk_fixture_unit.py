@@ -191,8 +191,9 @@ def test_dac_smoke_script_is_not_landlock_acceptance() -> None:
     assert "writable-cgroups" not in text
 
 
-def test_workflow_marker_cwdabs() -> None:
+def test_workflow_marker_nbhs() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "[native-once-20261014-cwdabs]" in text
+    assert "[native-once-20261014-nbhs]" in text
+    assert "[native-once-20261014-cwdabs]" not in text
     assert "[native-once-20261014-diskdac]" not in text
     assert "[native-once-20261014-sec09iso]" not in text

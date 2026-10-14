@@ -14,6 +14,7 @@ Synthetic writers are /usr/bin/python3 -c only (no provider downloads).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -291,9 +292,13 @@ def evaluate_long_writer(evidence: dict[str, Any]) -> bool:
 
 
 def evaluate_neighbor(evidence: dict[str, Any]) -> bool:
-    """Require real overlap + neighbor continuity after limited stop."""
+    """Require handshake both-ready → release → disk stop → neighbor progress."""
     return bool(
-        evidence.get("failure_class_limited") == "disk_limit"
+        not evidence.get("phase_error")
+        and evidence.get("both_ready")
+        and evidence.get("growth_released")
+        and evidence.get("limited_below_ceiling_at_release")
+        and evidence.get("failure_class_limited") == "disk_limit"
         and evidence.get("limited_writer_started")
         and evidence.get("limited") == 1
         and not evidence.get("limited_timed_out")
@@ -303,8 +308,11 @@ def evaluate_neighbor(evidence: dict[str, Any]) -> bool:
         and evidence.get("neighbor_alive")
         and evidence.get("neighbor_concurrent")
         and evidence.get("neighbor_continued_after_limited")
+        and evidence.get("neighbor_finish_released")
         and int(evidence.get("limited_heartbeat") or 0) >= 1
         and int(evidence.get("limited_size") or 0) > 0
+        and int(evidence.get("neighbor_hb_at_limited_end") or 0) >= 1
+        and int(evidence.get("size_before_release") or -1) >= 0
     )
 
 
@@ -346,15 +354,30 @@ def limited_neighbor_writer_script(
     *,
     relative: bool = False,
     chunk: int = 2000,
-    sleep_s: float = 0.08,
+    sleep_s: float = 0.05,
+    seed_bytes: int = 500,
+    ready_delay_s: float = 0.0,
+    grow_gate_wait_s: float = 25.0,
 ) -> str:
-    """Limited neighbor writer; cadence leaves an observable overlap window."""
+    """Limited writer: ready+seed, wait own grow_gate, then grow until killed."""
     if relative:
         return (
             "import time\n"
             "from pathlib import Path\n"
             "p = Path('x')\n"
             "h = Path('hb')\n"
+            "ready = Path('ready')\n"
+            "gate = Path('grow_gate')\n"
+            f"time.sleep({ready_delay_s})\n"
+            f"p.write_bytes(b'y' * {seed_bytes})\n"
+            "h.write_text('0')\n"
+            "ready.write_text('1')\n"
+            "t0 = time.monotonic()\n"
+            "while not gate.is_file():\n"
+            f"    if time.monotonic() - t0 > {grow_gate_wait_s}:\n"
+            "        print('grow_gate_timeout', file=__import__('sys').stderr)\n"
+            "        raise SystemExit(2)\n"
+            "    time.sleep(0.02)\n"
             "n = 0\n"
             "while True:\n"
             "    cur = p.read_bytes() if p.exists() else b''\n"
@@ -366,6 +389,18 @@ def limited_neighbor_writer_script(
     return (
         "import time\n" + _attempt_base_preamble() + "p = base / 'x'\n"
         "h = base / 'hb'\n"
+        "ready = base / 'ready'\n"
+        "gate = base / 'grow_gate'\n"
+        f"time.sleep({ready_delay_s})\n"
+        f"p.write_bytes(b'y' * {seed_bytes})\n"
+        "h.write_text('0')\n"
+        "ready.write_text('1')\n"
+        "t0 = time.monotonic()\n"
+        "while not gate.is_file():\n"
+        f"    if time.monotonic() - t0 > {grow_gate_wait_s}:\n"
+        "        print('grow_gate_timeout', file=__import__('sys').stderr)\n"
+        "        raise SystemExit(2)\n"
+        "    time.sleep(0.02)\n"
         "n = 0\n"
         "while True:\n"
         "    cur = p.read_bytes() if p.exists() else b''\n"
@@ -376,25 +411,83 @@ def limited_neighbor_writer_script(
     )
 
 
-def healthy_neighbor_script(*, relative: bool = False, ticks: int = 40) -> str:
-    """Neighbor heartbeat writer; ticks keep it alive across limited stop."""
+def healthy_neighbor_script(
+    *,
+    relative: bool = False,
+    ready_delay_s: float = 0.0,
+    hb_sleep_s: float = 0.05,
+    finish_gate_wait_s: float = 30.0,
+) -> str:
+    """Neighbor: ready+heartbeat on own files; exit only after own finish_gate."""
     if relative:
         return (
             "import time\n"
             "from pathlib import Path\n"
             "h = Path('hb')\n"
-            f"for i in range(1, {ticks + 1}):\n"
-            "    h.write_text(str(i))\n"
-            "    time.sleep(0.05)\n"
+            "ready = Path('ready')\n"
+            "gate = Path('finish_gate')\n"
+            f"time.sleep({ready_delay_s})\n"
+            "ready.write_text('1')\n"
+            "n = 0\n"
+            "t0 = time.monotonic()\n"
+            "while not gate.is_file():\n"
+            "    n += 1\n"
+            "    h.write_text(str(n))\n"
+            f"    if time.monotonic() - t0 > {finish_gate_wait_s}:\n"
+            "        print('finish_gate_timeout', file=__import__('sys').stderr)\n"
+            "        raise SystemExit(2)\n"
+            f"    time.sleep({hb_sleep_s})\n"
             "print('ok')\n"
         )
     return (
         "import time\n" + _attempt_base_preamble() + "h = base / 'hb'\n"
-        f"for i in range(1, {ticks + 1}):\n"
-        "    h.write_text(str(i))\n"
-        "    time.sleep(0.05)\n"
+        "ready = base / 'ready'\n"
+        "gate = base / 'finish_gate'\n"
+        f"time.sleep({ready_delay_s})\n"
+        "ready.write_text('1')\n"
+        "n = 0\n"
+        "t0 = time.monotonic()\n"
+        "while not gate.is_file():\n"
+        "    n += 1\n"
+        "    h.write_text(str(n))\n"
+        f"    if time.monotonic() - t0 > {finish_gate_wait_s}:\n"
+        "        print('finish_gate_timeout', file=__import__('sys').stderr)\n"
+        "        raise SystemExit(2)\n"
+        f"    time.sleep({hb_sleep_s})\n"
         "print('ok')\n"
     )
+
+
+# Neighbor handshake ceilings (fixture-local; not production RPC ceilings).
+NEIGHBOR_LIMITED_MAX_GROWTH = 10_000
+NEIGHBOR_LIMITED_SEED_BYTES = 500
+NEIGHBOR_PHASE_LIMITED_READY_S = 8.0
+NEIGHBOR_PHASE_NEIGHBOR_READY_S = 8.0
+NEIGHBOR_PHASE_GROWTH_S = 12.0
+NEIGHBOR_PHASE_CONTINUITY_S = 5.0
+NEIGHBOR_PHASE_FINISH_S = 8.0
+NEIGHBOR_PHASE_JOIN_S = 5.0
+
+
+def _hb_int(path: Path) -> int:
+    text = _read_text(path).strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _wait_phase(
+    *,
+    phase: str,
+    deadline_s: float,
+    predicate,
+    sleep_s: float = 0.02,
+) -> str | None:
+    """Return None on success, or phase_error name on timeout."""
+    deadline = time.monotonic() + deadline_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return None
+        time.sleep(sleep_s)
+    return f"{phase}_timeout"
 
 
 def prepare_work_root(executor_root: Path, work: Path) -> dict[str, Any]:
@@ -741,13 +834,32 @@ def case_long_writer_kill_reap(work: Path) -> dict[str, object]:
 
 
 def case_neighbor_continues(work: Path) -> dict[str, object]:
+    """Deterministic handshake: both ready → release growth → disk stop → continue."""
     a1, meta1 = make_attempt(work, "n1")
     a2, meta2 = make_attempt(work, "n2")
-    _write_as_worker(a1 / "grow.py", limited_neighbor_writer_script().encode())
-    # Long enough to overlap limited start and continue after limited stop (~2s).
-    _write_as_worker(a2 / "ok.py", healthy_neighbor_script(ticks=40).encode())
-    results: dict[str, Any] = {}
+    _write_as_worker(
+        a1 / "grow.py",
+        limited_neighbor_writer_script(seed_bytes=NEIGHBOR_LIMITED_SEED_BYTES).encode(),
+    )
+    _write_as_worker(a2 / "ok.py", healthy_neighbor_script().encode())
+    results: dict[str, Any] = {
+        "phases": [],
+        "phase_error": None,
+        "timestamps": {},
+    }
     runner = _runner()
+    ceiling = NEIGHBOR_LIMITED_MAX_GROWTH
+
+    def _mark(phase: str) -> None:
+        results["phases"].append(phase)
+        results["timestamps"][phase] = time.monotonic()
+
+    def _unblock_gates() -> None:
+        # Best-effort: allow waiting tools to exit on any controller path.
+        with contextlib.suppress(OSError):
+            _write_as_worker(a1 / "grow_gate", b"1\n")
+        with contextlib.suppress(OSError):
+            _write_as_worker(a2 / "finish_gate", b"1\n")
 
     def limited() -> None:
         try:
@@ -755,32 +867,19 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
                 runner,
                 attempt=a1,
                 argv=[sys.executable, str(a1 / "grow.py")],
-                # Ceiling high enough for several heartbeats before kill (~0.5s window).
-                max_growth=10_000,
+                max_growth=ceiling,
                 max_tree=50_000,
                 min_free=None,
-                timeout=8.0,
+                timeout=25.0,
             )
         except BaseException as exc:  # noqa: BLE001
             results["limited_error"] = type(exc).__name__
         finally:
-            results["neighbor_hb_at_limited_end"] = _read_text(a2 / "hb").strip()
+            results["neighbor_hb_at_limited_end"] = _hb_int(a2 / "hb")
             results["limited_end_mono"] = time.monotonic()
+            _mark("limited_end")
 
     def neighbor() -> None:
-        # Wait until limited writer has proven a real write/heartbeat.
-        deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline:
-            size_now = max(0, _file_size(a1 / "x"))
-            hb_now = _read_text(a1 / "hb").strip()
-            if size_now > 0 and hb_now.isdigit() and int(hb_now) >= 1:
-                results["limited_size_at_neighbor_start"] = size_now
-                results["limited_hb_at_neighbor_start"] = hb_now
-                break
-            time.sleep(0.02)
-        else:
-            results["neighbor_error"] = "limited_never_started"
-            return
         try:
             results["neighbor_outcome"] = _run(
                 runner,
@@ -789,58 +888,189 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
                 max_growth=1_000_000,
                 max_tree=1_000_000,
                 min_free=None,
-                timeout=8.0,
+                timeout=35.0,
             )
         except BaseException as exc:  # noqa: BLE001
             results["neighbor_error"] = type(exc).__name__
-        results["neighbor_hb_after"] = _read_text(a2 / "hb").strip()
+        results["neighbor_hb_after"] = _hb_int(a2 / "hb")
+        _mark("neighbor_end")
 
-    t1 = threading.Thread(target=limited)
-    t2 = threading.Thread(target=neighbor)
+    t1 = threading.Thread(target=limited, name="f2-limited")
+    t2 = threading.Thread(target=neighbor, name="f2-neighbor")
+    _mark("tools_launch")
     t1.start()
     t2.start()
-    t1.join(timeout=15)
-    # Prove neighbor heartbeat still advances after limited task stopped.
-    hb_at_limited_end = str(results.get("neighbor_hb_at_limited_end") or "")
+
+    phase_error = _wait_phase(
+        phase="limited_readiness",
+        deadline_s=NEIGHBOR_PHASE_LIMITED_READY_S,
+        predicate=lambda: _file_exists(a1 / "ready")
+        and max(0, _file_size(a1 / "x")) == NEIGHBOR_LIMITED_SEED_BYTES,
+    )
+    if phase_error is None:
+        _mark("limited_ready")
+        results["limited_ready_marker"] = True
+        results["size_at_limited_ready"] = max(0, _file_size(a1 / "x"))
+    else:
+        results["phase_error"] = phase_error
+
+    if results["phase_error"] is None:
+        phase_error = _wait_phase(
+            phase="neighbor_readiness",
+            deadline_s=NEIGHBOR_PHASE_NEIGHBOR_READY_S,
+            predicate=lambda: _file_exists(a2 / "ready") and _hb_int(a2 / "hb") >= 1,
+        )
+        if phase_error is None:
+            _mark("neighbor_ready")
+            results["neighbor_ready_marker"] = True
+            results["neighbor_hb_at_ready"] = _hb_int(a2 / "hb")
+        else:
+            results["phase_error"] = phase_error
+
+    both_ready = (
+        results["phase_error"] is None
+        and bool(results.get("limited_ready_marker"))
+        and bool(results.get("neighbor_ready_marker"))
+        and t1.is_alive()
+        and "limited_outcome" not in results
+    )
+    size_before_release = max(0, _file_size(a1 / "x"))
+    below_ceiling = size_before_release < ceiling
+    results["both_ready"] = both_ready
+    results["size_before_release"] = size_before_release
+    results["limited_below_ceiling_at_release"] = below_ceiling
+    results["neighbor_hb_before_release"] = _hb_int(a2 / "hb")
+
+    growth_released = False
+    if both_ready and below_ceiling:
+        try:
+            _write_as_worker(a1 / "grow_gate", b"1\n")
+            # Prove tool can observe its own gate (identity-aware exists check).
+            if not _file_exists(a1 / "grow_gate"):
+                results["phase_error"] = "grow_gate_not_visible_to_tool"
+            else:
+                growth_released = True
+                _mark("growth_release")
+        except OSError as exc:
+            results["phase_error"] = f"grow_gate_write:{type(exc).__name__}"
+    elif results["phase_error"] is None:
+        results["phase_error"] = (
+            "pre_release_invariant" if both_ready else "both_ready_failed"
+        )
+
+    results["growth_released"] = growth_released
+
+    if growth_released and results["phase_error"] is None:
+        t1.join(timeout=NEIGHBOR_PHASE_GROWTH_S)
+        if t1.is_alive() or "limited_outcome" not in results:
+            results["phase_error"] = "controlled_growth_timeout"
+        else:
+            _mark("growth_observed")
+
     continued = False
-    if hb_at_limited_end.isdigit():
-        baseline = int(hb_at_limited_end)
-        poll_deadline = time.monotonic() + 2.5
-        while time.monotonic() < poll_deadline:
-            cur = _read_text(a2 / "hb").strip()
-            if cur.isdigit() and int(cur) > baseline:
+    neighbor_concurrent = False
+    if results["phase_error"] is None:
+        hb_at_end = int(results.get("neighbor_hb_at_limited_end") or 0)
+        neighbor_concurrent = hb_at_end >= 1 and bool(results.get("both_ready"))
+        results["neighbor_concurrent"] = neighbor_concurrent
+        if not neighbor_concurrent:
+            results["phase_error"] = "neighbor_not_alive_at_limited_end"
+        else:
+            phase_error = _wait_phase(
+                phase="neighbor_continuity",
+                deadline_s=NEIGHBOR_PHASE_CONTINUITY_S,
+                predicate=lambda: _hb_int(a2 / "hb") > hb_at_end,
+                sleep_s=0.05,
+            )
+            if phase_error is None:
                 continued = True
-                results["neighbor_hb_after_limited_growth"] = cur
-                break
-            time.sleep(0.05)
+                results["neighbor_hb_after_limited_growth"] = _hb_int(a2 / "hb")
+                _mark("neighbor_continued")
+            else:
+                results["phase_error"] = phase_error
     results["neighbor_continued_after_limited"] = continued
-    t2.join(timeout=15)
+
+    neighbor_finish_released = False
+    try:
+        if continued and results["phase_error"] is None:
+            _write_as_worker(a2 / "finish_gate", b"1\n")
+            if _file_exists(a2 / "finish_gate"):
+                neighbor_finish_released = True
+                _mark("neighbor_finish_release")
+            else:
+                results["phase_error"] = "finish_gate_not_visible_to_tool"
+        else:
+            _unblock_gates()
+    except OSError as exc:
+        results["phase_error"] = results["phase_error"] or (
+            f"finish_gate_write:{type(exc).__name__}"
+        )
+        _unblock_gates()
+    results["neighbor_finish_released"] = neighbor_finish_released
+
+    if neighbor_finish_released and results["phase_error"] is None:
+        t2.join(timeout=NEIGHBOR_PHASE_FINISH_S)
+        if t2.is_alive():
+            results["phase_error"] = "neighbor_finish_timeout"
+    else:
+        t2.join(timeout=NEIGHBOR_PHASE_JOIN_S)
+    t1.join(timeout=NEIGHBOR_PHASE_JOIN_S)
+    if t1.is_alive() or t2.is_alive():
+        results["phase_error"] = results["phase_error"] or "join_timeout"
+        _unblock_gates()
+        t1.join(timeout=2.0)
+        t2.join(timeout=2.0)
 
     limited_out: ToolOutcome | None = results.get("limited_outcome")
     neighbor_out: ToolOutcome | None = results.get("neighbor_outcome")
     limited_size = max(0, _file_size(a1 / "x"))
-    limited_hb_text = _read_text(a1 / "hb").strip()
-    limited_hb = int(limited_hb_text) if limited_hb_text.isdigit() else 0
+    limited_hb = _hb_int(a1 / "hb")
     size_after = limited_size
     time.sleep(0.15)
     size_stable = max(0, _file_size(a1 / "x"))
     limited_recording_stopped = size_stable == size_after
-    neighbor_hb_after = str(results.get("neighbor_hb_after") or "")
-    neighbor_alive = neighbor_hb_after.isdigit() and int(neighbor_hb_after) >= 1
-    neighbor_concurrent = (
-        str(results.get("limited_hb_at_neighbor_start") or "").isdigit()
-        and int(results.get("limited_size_at_neighbor_start") or 0) > 0
-        and str(results.get("neighbor_hb_at_limited_end") or "").isdigit()
-        and int(results.get("neighbor_hb_at_limited_end") or "0") >= 1
-    )
-    limited_class = classify_tool_failure(
-        outcome=limited_out,
-        bytes_written=limited_size,
-        expected_min_write=2000,
-        raised=None
-        if "limited_error" not in results
-        else OSError(results["limited_error"]),
-    )
+    neighbor_hb_after = int(results.get("neighbor_hb_after") or _hb_int(a2 / "hb"))
+    neighbor_alive = neighbor_hb_after >= 1
+
+    # Gate/Python timeouts must not be classified as disk_limit PASS.
+    stderr_blob = ""
+    if limited_out is not None:
+        stderr_blob = _sanitize_text(limited_out.stderr).lower()
+    if "grow_gate_timeout" in stderr_blob or results.get("limited_error") == "Timeout":
+        limited_class = "gate_or_timeout"
+    else:
+        limited_class = classify_tool_failure(
+            outcome=limited_out,
+            bytes_written=limited_size,
+            expected_min_write=max(NEIGHBOR_LIMITED_SEED_BYTES + 2000, 2000),
+            raised=None
+            if "limited_error" not in results
+            else OSError(results["limited_error"]),
+        )
+
+    ts = results.get("timestamps") or {}
+    ordering_ok = True
+    order = [
+        "tools_launch",
+        "limited_ready",
+        "neighbor_ready",
+        "growth_release",
+        "limited_end",
+        "neighbor_continued",
+        "neighbor_finish_release",
+        "neighbor_end",
+    ]
+    prev = -1.0
+    seen_order: list[str] = []
+    for name in order:
+        if name in ts:
+            if float(ts[name]) < prev:
+                ordering_ok = False
+            prev = float(ts[name])
+            seen_order.append(name)
+    if results["phase_error"] is None and not ordering_ok:
+        results["phase_error"] = "phase_ordering"
+
     evidence: dict[str, object] = {
         "name": "f2-disk-neighbor-continues",
         "attempt_limited": meta1,
@@ -849,7 +1079,8 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
         "neighbor": None if neighbor_out is None else neighbor_out.exit_code,
         "limited_timed_out": None if limited_out is None else limited_out.timed_out,
         "neighbor_timed_out": None if neighbor_out is None else neighbor_out.timed_out,
-        "limited_writer_started": limited_size > 0 and limited_hb >= 1,
+        "limited_writer_started": limited_size > NEIGHBOR_LIMITED_SEED_BYTES
+        and limited_hb >= 1,
         "limited_heartbeat": limited_hb,
         "limited_size": limited_size,
         "limited_recording_stopped": limited_recording_stopped,
@@ -858,11 +1089,19 @@ def case_neighbor_continues(work: Path) -> dict[str, object]:
         "neighbor_hb_after_limited_growth": results.get(
             "neighbor_hb_after_limited_growth"
         ),
+        "neighbor_hb_before_release": results.get("neighbor_hb_before_release"),
         "neighbor_alive": neighbor_alive,
-        "neighbor_concurrent": neighbor_concurrent,
+        "neighbor_concurrent": bool(results.get("neighbor_concurrent")),
         "neighbor_continued_after_limited": continued,
-        "limited_size_at_neighbor_start": results.get("limited_size_at_neighbor_start"),
-        "limited_hb_at_neighbor_start": results.get("limited_hb_at_neighbor_start"),
+        "both_ready": bool(results.get("both_ready")),
+        "growth_released": growth_released,
+        "neighbor_finish_released": neighbor_finish_released,
+        "size_before_release": size_before_release,
+        "limited_below_ceiling_at_release": below_ceiling,
+        "phase_error": results.get("phase_error"),
+        "phases": list(results.get("phases") or []),
+        "phase_order": seen_order,
+        "timestamps": dict(ts),
         "failure_class_limited": limited_class,
         "diag_limited": _outcome_diag(limited_out, error=results.get("limited_error")),
         "diag_neighbor": _outcome_diag(

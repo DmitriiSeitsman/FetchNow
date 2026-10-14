@@ -9,8 +9,10 @@ name: SEC-08/09 native release transaction
 # Prior FAIL: 38614434493 — F3/F4 PASS after isolation; F2 DAC fixture FAIL
 # (root-owned attempt dirs; size=0).
 # Prior FAIL: 38618740901 — DAC positive + most F2 PASS; long-writer FAIL
-# (relative Path('grow.bin') under job_process cwd="/"). This marker authorizes
-# cwd-independent absolute writer paths only (no production cwd/policy change).
+# (relative Path('grow.bin') under job_process cwd="/").
+# Prior FAIL: 38624273794 — long-writer PASS after cwd-abs; neighbor FAIL
+# (no proven overlap: limited ended before neighbor first heartbeat). This marker
+# authorizes deterministic neighbor ready/release handshake only.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -32,7 +34,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261014-cwdabs]
+            test(security): SEC-08/09 native release transaction [native-once-20261014-nbhs]
         run: |
           python3 - <<'PY'
           import json
