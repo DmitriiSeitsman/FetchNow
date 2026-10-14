@@ -4,9 +4,9 @@ name: SEC-08/09 native release transaction
 # acceptance (sec09-media-net-executor.yml). Push-only; no workflow_dispatch.
 # Exact first-line commit subject required. Reruns (run_attempt != 1) skip.
 #
-# Prior retained: 38463103323 source-only/rollback/activation/idempotency PASS;
-# prepare B FAIL (disposable env left on revision A). This marker authorizes
-# FETCHNOW_RELEASE_REVISION sync before each prepare + PrepareResult evidence.
+# Prior retained: 38466520000 previous-candidate PASS (pre F1–F4 runtime fix).
+# This marker authorizes the updated F1–F4 candidate matrix (disk final-check,
+# bootstrap media-ON cleanup, config-rollout refuse, budget health).
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -28,7 +28,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-08/09 native release transaction [native-once-20261013-envrev]
+            test(security): SEC-08/09 native release transaction [native-once-20261014-f1f4]
         run: |
           python3 - <<'PY'
           import json

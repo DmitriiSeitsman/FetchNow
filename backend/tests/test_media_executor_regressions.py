@@ -182,6 +182,7 @@ def test_job_output_is_drained_and_bounded(
             3,
             0,
             0,
+            0,
             tmp_path,
             [sys.executable, "-c", f"import sys; sys.stdout.write('x'*{size})"],
         )

@@ -195,11 +195,13 @@ def test_f4_worker_cannot_raise_server_ceiling(
             timeout_seconds: float,
             cancel: object,
             protected: list[str],
-            max_output_bytes: int | None = None,
+            max_growth_bytes: int | None = None,
+            max_tree_bytes: int | None = None,
             min_free_bytes: int | None = None,
         ) -> ToolOutcome:
             del timeout_seconds, cancel, protected
-            seen["max"] = max_output_bytes
+            seen["max"] = max_growth_bytes
+            seen["tree"] = max_tree_bytes
             seen["free"] = min_free_bytes
             (attempt / "output-artifact.bin").write_bytes(b"abc")
             assert "--max-filesize" in argv
@@ -249,6 +251,7 @@ def test_f4_worker_cannot_raise_server_ceiling(
     )
     assert b'"ok":true' in body
     assert seen["max"] == 50
+    assert seen["tree"] == 50
     assert seen["free"] == 12
 
 
@@ -270,7 +273,8 @@ def test_f4_size_monitor_kills_local_runner(tmp_path: Path) -> None:
         timeout_seconds=5,
         cancel=cancel,
         protected=[],
-        max_output_bytes=5_000,
+        max_growth_bytes=5_000,
+        max_tree_bytes=5_000,
         min_free_bytes=None,
     )
     assert outcome.exit_code == 1

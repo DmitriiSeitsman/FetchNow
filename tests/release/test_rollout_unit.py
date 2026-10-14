@@ -29,6 +29,7 @@ from fetchnow_release.c3_constants import (  # noqa: E402
     RESOLUTION_SCHEMA_VERSION,
     STATUS_ACTIVATING_APP,
     STATUS_ACTIVATING_GATEWAY,
+    STATUS_ACTIVATING_MEDIA,
     STATUS_APP_HEALTHY,
     STATUS_BOOTSTRAP_CLEANED,
     STATUS_BOOTSTRAP_CLEANUP_STARTED,
@@ -752,6 +753,7 @@ def test_post_mutation_phases_cannot_transition_directly_to_failed() -> None:
 
 def test_bootstrap_failure_transitions_require_cleanup_chain() -> None:
     for phase in (
+        STATUS_ACTIVATING_MEDIA,
         STATUS_ACTIVATING_APP,
         STATUS_APP_HEALTHY,
         STATUS_ACTIVATING_GATEWAY,
@@ -765,6 +767,61 @@ def test_bootstrap_failure_transitions_require_cleanup_chain() -> None:
     assert BOOTSTRAP_FAILURE_TRANSITIONS[STATUS_BOOTSTRAP_CLEANED] == frozenset(
         {STATUS_FAILED}
     )
+
+
+def test_bootstrap_activating_media_cleanup_uses_real_journal_transitions(
+    tmp_path: Path,
+) -> None:
+    """activating_media → cleanup → cleaned → failed; never direct failed."""
+    from fetchnow_release.journal_io import read_json
+
+    dep = tmp_path / "dep"
+    dep.mkdir()
+    plan = _bootstrap_plan()
+    write_plan(dep, plan)
+    append_event(dep, STATUS_PLANNED)
+    append_event(dep, STATUS_ACTIVATING_MEDIA)
+    with pytest.raises(JournalError, match="illegal"):
+        assert_legal_transition(STATUS_ACTIVATING_MEDIA, STATUS_FAILED)
+    audit = (
+        BOOTSTRAP_CLEANUP_AUDIT_PREFIX
+        + '[{"service":"egress-proxy","container_id":"abc123"}]'
+    )
+    begin_bootstrap_cleanup_event(dep)
+    publish_bootstrap_failed_after_cleanup(
+        dep,
+        plan=plan,
+        deployment_id=plan.deployment_id,
+        messages=(audit,),
+        detail="activate media sidecars failed",
+    )
+    events = sorted((dep / "events").glob("*.json"))
+    statuses = [p.name.split("_", 1)[1].removesuffix(".json") for p in events]
+    assert statuses == [
+        STATUS_PLANNED,
+        STATUS_ACTIVATING_MEDIA,
+        STATUS_BOOTSTRAP_CLEANUP_STARTED,
+        STATUS_BOOTSTRAP_CLEANED,
+        STATUS_FAILED,
+    ]
+    assert parse_result(read_json(dep / "result.json")).status == STATUS_FAILED
+
+
+def test_bootstrap_activating_media_cleanup_failure_stays_unresolved(
+    tmp_path: Path,
+) -> None:
+    dep = tmp_path / "dep"
+    dep.mkdir()
+    plan = _bootstrap_plan()
+    write_plan(dep, plan)
+    append_event(dep, STATUS_PLANNED)
+    append_event(dep, STATUS_ACTIVATING_MEDIA)
+    begin_bootstrap_cleanup_event(dep)
+    with pytest.raises(JournalError, match="illegal"):
+        # Direct failed without cleaned is forbidden on bootstrap failure path.
+        append_bootstrap_failure_event(dep, STATUS_FAILED, "skip cleaned")
+    assert not (dep / "result.json").exists()
+    assert deployment_blocks_rollout(dep) is True
 
 
 def test_bootstrap_failed_result_requires_cleanup_audit(tmp_path: Path) -> None:
@@ -1709,6 +1766,291 @@ def test_post_activation_failure_emits_cleanup_audit(
     services = {item["service"] for item in items}
     assert "postgres" not in services
     assert services == {"api", "worker", "delivery", "web"}
+
+
+def _media_on_plan(rev: str):
+    from fetchnow_release.media_activation import (
+        DEFAULT_EXECUTOR_SOCKET,
+        DEFAULT_EXECUTOR_WORK_ROOT,
+        DEFAULT_NET_SOCKET,
+        DEFAULT_NET_WORK_ROOT,
+        MediaActivationPlan,
+    )
+    from fetchnow_release.resource_budget import disposable_test_budget
+
+    media_ids = {
+        "media-executor": "sha256:" + ("1" * 64),
+        "media-net-executor": "sha256:" + ("2" * 64),
+        "egress-proxy": "sha256:" + ("3" * 64),
+    }
+    plan = MediaActivationPlan(
+        activation=True,
+        release_mode="media",
+        overlays=(
+            "compose.media-executor.yaml",
+            "compose.media-net-executor.yaml",
+        ),
+        profiles=("media-executor", "media-net-executor"),
+        media_image_ids=media_ids,
+        executor_settings={
+            "MEDIA_EXECUTOR_ENABLED": "true",
+            "MEDIA_NET_EXECUTOR_ENABLED": "true",
+            "MEDIA_EXECUTOR_SOCKET": DEFAULT_EXECUTOR_SOCKET,
+            "MEDIA_NET_EXECUTOR_SOCKET": DEFAULT_NET_SOCKET,
+            "MEDIA_EXECUTOR_WORK_ROOT": DEFAULT_EXECUTOR_WORK_ROOT,
+            "MEDIA_NET_EXECUTOR_WORK_ROOT": DEFAULT_NET_WORK_ROOT,
+        },
+        required_deny_cidrs=("10.0.0.0/8",),
+        required_deny_ips=("169.254.169.254",),
+        resource_budget=disposable_test_budget().to_dict(),
+        denied_host="127.0.0.1",
+    )
+    return plan, media_ids
+
+
+def _patch_media_on_bootstrap_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    deploy: Path,
+    rev: str,
+    calls: list[str],
+    remove_impl,
+) -> dict[str, object]:
+    """Shared stubs for bootstrap+media ON → activate_media failure path.
+
+    Docker inventory/removal transport is replaced; journal helpers and the
+    production cleanup orchestration in rollout_release stay real.
+    """
+    from fetchnow_release.bootstrap_cleanup import RemovedBootstrapContainer
+    from fetchnow_release.media_rollout import MediaRolloutError
+
+    plan, media_ids = _media_on_plan(rev)
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.resolve_media_plan_for_rollout",
+        lambda **_k: (plan, plan.to_dict()),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.media_image_ids_from_manifest",
+        lambda _m: dict(media_ids),
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.compose_for_media_plan",
+        lambda _release, *, base_compose, plan: base_compose,
+    )
+
+    def _activate_media(**_k: object):
+        calls.append("activate-media")
+        # Sidecars are treated as already created when discovery runs.
+        raise MediaRolloutError("activate media sidecars failed")
+
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.activate_media_before_worker",
+        _activate_media,
+    )
+
+    owned = [
+        RemovedBootstrapContainer(
+            container_id=f"cid-{svc}",
+            service=svc,
+            labels={
+                "com.docker.compose.project": "fetchnow-rollout-test-abcd1234",
+                "com.docker.compose.service": svc,
+                "com.fetchnow.deployment-id": "pending",
+                "com.fetchnow.release-revision": rev,
+            },
+        )
+        for svc in ("egress-proxy", "media-executor", "media-net-executor")
+    ]
+    discover_kwargs: list[dict] = []
+    remove_kwargs: list[dict] = []
+
+    def _discover(**kwargs: object):
+        discover_kwargs.append(dict(kwargs))
+        calls.append("discover")
+        return owned
+
+    def _remove(**kwargs: object):
+        remove_kwargs.append(dict(kwargs))
+        calls.append("remove")
+        return remove_impl(owned=owned, kwargs=kwargs)
+
+    monkeypatch.setattr(
+        "fetchnow_release.bootstrap_cleanup.discover_owned_bootstrap_containers",
+        _discover,
+    )
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.remove_owned_bootstrap_containers",
+        _remove,
+    )
+    authority_calls: list[tuple[str, str]] = []
+
+    def _retract(deploy_root: Path, *, deployment_id: str, revision: str) -> None:
+        authority_calls.append((deployment_id, revision))
+        calls.append("retract-authority")
+        from fetchnow_release.media_rollout import remove_failed_bootstrap_authority
+
+        remove_failed_bootstrap_authority(
+            deploy_root, deployment_id=deployment_id, revision=revision
+        )
+
+    monkeypatch.setattr(
+        "fetchnow_release.rollout.remove_failed_bootstrap_authority",
+        _retract,
+    )
+    return {
+        "owned": owned,
+        "discover_kwargs": discover_kwargs,
+        "remove_kwargs": remove_kwargs,
+        "authority_calls": authority_calls,
+        "media_ids": media_ids,
+    }
+
+
+def test_bootstrap_media_on_activate_failure_cleanup_via_rollout_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1 transaction: media ON bootstrap → activate fail → ownership cleanup."""
+    import json
+
+    from fetchnow_release.journal_io import read_json
+    from fetchnow_release.media_state import load_media_activation_state
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    _write_release_compose(deploy / "releases" / rev, storage_init=False)
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+    probes = _patch_media_on_bootstrap_failure(
+        monkeypatch,
+        deploy=deploy,
+        rev=rev,
+        calls=calls,
+        remove_impl=lambda owned, kwargs: tuple(owned),
+    )
+
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+            media_activation=True,
+            media_denied_host="127.0.0.1",
+        )
+    )
+    assert result.ok is False
+    assert result.status == STATUS_FAILED
+    assert "activate-media" in calls
+    assert calls.index("discover") < calls.index("remove")
+    assert "activate" not in calls  # worker/app never activated
+
+    discover = probes["discover_kwargs"][0]
+    remove = probes["remove_kwargs"][0]
+    assert discover["deployment_id"] == result.deployment_id
+    assert discover["release_revision"] == rev
+    assert "media-executor" in discover["allowed_services"]
+    assert "egress-proxy" in discover["allowed_services"]
+    assert "postgres" not in discover["allowed_services"]
+    assert remove["deployment_id"] == result.deployment_id
+    assert set(remove["expected_container_ids"]) == {
+        "cid-egress-proxy",
+        "cid-media-executor",
+        "cid-media-net-executor",
+    }
+
+    dep = deploy / "deployments" / result.deployment_id
+    events = sorted((dep / "events").glob("*.json"))
+    statuses = [p.name.split("_", 1)[1].removesuffix(".json") for p in events]
+    assert statuses == [
+        STATUS_PLANNED,
+        STATUS_ACTIVATING_MEDIA,
+        STATUS_BOOTSTRAP_CLEANUP_STARTED,
+        STATUS_BOOTSTRAP_CLEANED,
+        STATUS_FAILED,
+    ]
+    parsed = parse_result(read_json(dep / "result.json"))
+    assert parsed.status == STATUS_FAILED
+    audit_lines = [
+        msg for msg in result.messages if msg.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX)
+    ]
+    assert audit_lines
+    items = json.loads(audit_lines[0][len(BOOTSTRAP_CLEANUP_AUDIT_PREFIX) :])
+    services = {item["service"] for item in items}
+    assert services == {"egress-proxy", "media-executor", "media-net-executor"}
+    assert "postgres" not in services
+    assert load_media_activation_state(deploy) is None
+    assert not (deploy / "state" / "current.json").exists()
+    assert any("activate media sidecars failed" in msg for msg in result.messages)
+
+
+def test_bootstrap_media_on_cleanup_failure_leaves_unresolved_via_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: cleanup failure must not publish cleaned/failed success terminal."""
+    from fetchnow_release.bootstrap_cleanup import BootstrapCleanupError
+    from fetchnow_release.rollout import RolloutInput, rollout_release
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "locks").mkdir()
+    (deploy / "state").mkdir()
+    (deploy / "deployments").mkdir()
+    rev = "c" * 40
+    _write_release_compose(deploy / "releases" / rev, storage_init=False)
+    calls = _patch_bootstrap_rollout(monkeypatch, deploy)
+
+    def _fail_remove(*, owned, kwargs):  # noqa: ANN001
+        raise BootstrapCleanupError("simulated ownership removal failure")
+
+    probes = _patch_media_on_bootstrap_failure(
+        monkeypatch,
+        deploy=deploy,
+        rev=rev,
+        calls=calls,
+        remove_impl=_fail_remove,
+    )
+    del probes
+
+    result = rollout_release(
+        RolloutInput(
+            project_name="fetchnow-rollout-test-abcd1234",
+            env_file=tmp_path / "env",
+            expected_revision=rev,
+            repo_root=tmp_path,
+            deploy_root=deploy,
+            bootstrap=True,
+            media_activation=True,
+            media_denied_host="127.0.0.1",
+        )
+    )
+    assert result.ok is False
+    assert result.status is None
+    assert "activate-media" in calls
+    assert "discover" in calls
+    assert "remove" in calls
+    assert "retract-authority" not in calls
+    assert result.deployment_id is not None
+    dep = deploy / "deployments" / result.deployment_id
+    statuses = sorted(
+        p.name.split("_", 1)[1].removesuffix(".json")
+        for p in (dep / "events").glob("*.json")
+    )
+    assert STATUS_ACTIVATING_MEDIA in statuses
+    assert STATUS_BOOTSTRAP_CLEANUP_STARTED in statuses
+    assert STATUS_BOOTSTRAP_CLEANED not in statuses
+    assert STATUS_FAILED not in statuses
+    assert not (dep / "result.json").exists()
+    assert deployment_blocks_rollout(dep) is True
+    joined = " ".join(result.messages)
+    assert "activate media sidecars failed" in joined
+    assert "bootstrap cleanup" in joined.lower()
+    assert "unresolved journal" in joined.lower()
 
 
 def test_bootstrap_cleanup_skips_postgres_and_foreign_project(

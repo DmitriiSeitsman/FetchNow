@@ -146,10 +146,12 @@ def test_network_inspect_success_path(tmp_path: Path) -> None:
             timeout_seconds: float,
             cancel: object,
             protected: list[str],
-            max_output_bytes: int | None = None,
+            max_growth_bytes: int | None = None,
+            max_tree_bytes: int | None = None,
             min_free_bytes: int | None = None,
         ) -> ToolOutcome:
             del attempt, timeout_seconds, cancel, protected
+            del max_growth_bytes, max_tree_bytes, min_free_bytes
             assert "--proxy" in argv
             assert "http://egress-proxy:8888" in argv
             return ToolOutcome(0, b'{"id":"x"}', b"", False, False)
@@ -244,12 +246,14 @@ def test_download_max_bytes_clamped_to_server_ceiling(tmp_path: Path) -> None:
             timeout_seconds: float,
             cancel: object,
             protected: list[str],
-            max_output_bytes: int | None = None,
+            max_growth_bytes: int | None = None,
+            max_tree_bytes: int | None = None,
             min_free_bytes: int | None = None,
         ) -> ToolOutcome:
             del attempt, timeout_seconds, cancel, protected
             seen.append(argv)
-            assert max_output_bytes == 100
+            assert max_growth_bytes == 100
+            assert max_tree_bytes == 100
             assert min_free_bytes == 0
             out = Path(argv[argv.index("-o") + 1].replace("%(ext)s", "bin"))
             out.write_bytes(b"x")

@@ -123,7 +123,10 @@ RECOVERY_LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
 RECOVERY_SUCCESS_STATUSES = frozenset({STATUS_COMMITTED, STATUS_ROLLED_BACK})
 
 # Bootstrap-only post-mutation failure path (after ownership-verified cleanup).
+# activating_media is included so media-ON bootstrap failures cannot skip
+# ownership cleanup into a direct failed terminal (SEC-08/09 corrective).
 BOOTSTRAP_FAILURE_TRANSITIONS: dict[str, frozenset[str]] = {
+    STATUS_ACTIVATING_MEDIA: frozenset({STATUS_BOOTSTRAP_CLEANUP_STARTED}),
     STATUS_ACTIVATING_APP: frozenset({STATUS_BOOTSTRAP_CLEANUP_STARTED}),
     STATUS_APP_HEALTHY: frozenset({STATUS_BOOTSTRAP_CLEANUP_STARTED}),
     STATUS_ACTIVATING_GATEWAY: frozenset({STATUS_BOOTSTRAP_CLEANUP_STARTED}),

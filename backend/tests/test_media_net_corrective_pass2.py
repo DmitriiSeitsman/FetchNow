@@ -412,7 +412,8 @@ def test_r3_localrunner_enumeration_failure_is_limit_hit(
         timeout_seconds=2,
         cancel=threading.Event(),
         protected=[],
-        max_output_bytes=10,
+        max_growth_bytes=10,
+        max_tree_bytes=10,
         min_free_bytes=None,
     )
     assert outcome.exit_code == 1

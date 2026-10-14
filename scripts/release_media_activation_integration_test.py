@@ -33,10 +33,23 @@ if str(_ROOT / "tests" / "release") not in sys.path:
 
 from fetchnow_release.activate import ActivateError  # noqa: E402
 from fetchnow_release.bounded_subprocess import run_bounded  # noqa: E402
-from fetchnow_release.c3_constants import STATUS_ROLLED_BACK  # noqa: E402
+from fetchnow_release.bootstrap_cleanup import BootstrapCleanupError  # noqa: E402
+from fetchnow_release.c3_constants import (  # noqa: E402
+    BOOTSTRAP_CLEANUP_AUDIT_PREFIX,
+    STATUS_ACTIVATING_MEDIA,
+    STATUS_BOOTSTRAP_CLEANED,
+    STATUS_BOOTSTRAP_CLEANUP_STARTED,
+    STATUS_FAILED,
+    STATUS_ROLLED_BACK,
+)
+from fetchnow_release.config_rollout import (  # noqa: E402
+    ConfigRolloutInput,
+    run_config_rollout,
+)
 from fetchnow_release.current_state import current_path  # noqa: E402
 from fetchnow_release.diagnostics import format_rollout_failure_diagnostics  # noqa: E402
 from fetchnow_release.journal import (  # noqa: E402
+    deployment_blocks_rollout,
     load_plan,
     new_deployment_id,
     utc_now,
@@ -44,6 +57,11 @@ from fetchnow_release.journal import (  # noqa: E402
 )
 from fetchnow_release.journal_io import read_json  # noqa: E402
 from fetchnow_release.env_file import load_env_file, replace_env_file_key  # noqa: E402
+from fetchnow_release.health import (  # noqa: E402
+    HealthError,
+    HealthInput,
+    _managed_media_expectation,
+)
 from fetchnow_release.media_release_evidence import (  # noqa: E402
     MATRIX_CASE_NAMES,
     bounded_container_rows,
@@ -57,9 +75,11 @@ from fetchnow_release.media_release_evidence import (  # noqa: E402
     sanitized_deployment_journal,
     write_json_evidence,
 )
+from fetchnow_release.media_rollout import MediaRolloutError  # noqa: E402
 from fetchnow_release.media_state import (  # noqa: E402
     MediaActivationState,
     load_media_activation_state,
+    media_state_path,
 )
 from fetchnow_release.prepare import PrepareInput, prepare_release  # noqa: E402
 from fetchnow_release.recover import RecoverInput, _execute_accept_target  # noqa: E402
@@ -68,6 +88,7 @@ from fetchnow_release.resource_budget import parse_resource_budget  # noqa: E402
 from fetchnow_release.rollout import RolloutInput, RolloutResult, rollout_release  # noqa: E402
 from fetchnow_release.rollout_project import make_rollout_project_name  # noqa: E402
 from fetchnow_release.stabilize import StabilizationPolicy  # noqa: E402
+from release_media_disk_native_probe import run_disk_probe  # noqa: E402
 from release_rollout_integration_test import (  # noqa: E402
     assert_current_state_v2,
     commit,
@@ -129,6 +150,30 @@ def intended_gateway_injection_reached(injection: dict[str, object]) -> bool:
         and injection.get("phase") == "activating_gateway"
         and injection.get("error") == "test-only gateway injection"
     )
+
+
+def _event_statuses(dep_dir: Path) -> list[str]:
+    events = sorted((dep_dir / "events").glob("*.json"))
+    return [p.name.split("_", 1)[1].removesuffix(".json") for p in events]
+
+
+def _media_executor_image(deploy: Path, revision: str) -> tuple[str, str]:
+    """Return (reference, image_id) for the media-executor artifact of revision."""
+    raw = json.loads((deploy / "releases" / revision / "release.json").read_text())
+    for image in raw["images"]:
+        if image["service"] == "media-executor":
+            ref = str(image["reference"])
+            image_id = str(image["image_id"])
+            if not ref.startswith("fetchnow-") or not image_id.startswith("sha256:"):
+                raise RuntimeError("refusing non-test media-executor identity")
+            return ref, image_id
+    raise RuntimeError("media-executor image missing from release.json")
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -545,6 +590,405 @@ def main(argv: list[str] | None = None) -> int:
             "accept-target-rejects-stopped-media",
             rejected and current_path(deploy).read_bytes() == authority_before,
         )
+
+        # --- F3: config-only refuses while media activation is ON ---
+        env_before_f3 = env.read_bytes()
+        current_before_f3 = current_path(deploy).read_bytes()
+        media_before_f3 = media_state_path(deploy).read_bytes()
+        sidecar_ids_before = {
+            row["Id"]
+            for row in sidecars()
+            if row["Config"]["Labels"].get("com.docker.compose.service")
+            in {"media-executor", "media-net-executor"}
+        }
+        cfg = run_config_rollout(
+            ConfigRolloutInput(
+                project_name=project,
+                env_file=env,
+                expected_revision=revision_b,
+                repo_root=clone,
+                deploy_root=deploy,
+                gateway_base_url=f"http://{port}",
+            )
+        )
+        record(
+            "f3-config-rollout-refuses-media-on",
+            (not cfg.ok)
+            and any("media activation is ON" in m for m in cfg.messages)
+            and env.read_bytes() == env_before_f3
+            and current_path(deploy).read_bytes() == current_before_f3
+            and media_state_path(deploy).read_bytes() == media_before_f3
+            and media_state().activation
+            and {
+                row["Id"]
+                for row in sidecars()
+                if row["Config"]["Labels"].get("com.docker.compose.service")
+                in {"media-executor", "media-net-executor"}
+            }
+            == sidecar_ids_before,
+            rollout=rollout_result_snapshot(cfg),
+            env_sha256=_sha256_file(env),
+            current_sha256=_sha256_file(current_path(deploy)),
+            media_sha256=_sha256_file(media_state_path(deploy)),
+        )
+
+        # --- F4: invalid ON budget fails managed health before PASS ---
+        media_path = media_state_path(deploy)
+        original_media = media_path.read_bytes()
+        f4_ok = True
+        f4_detail: dict[str, object] = {}
+        try:
+            for label, bad in (
+                ("missing", None),
+                ("null", {"resource_budget": None}),
+                (
+                    "unapproved",
+                    {
+                        "resource_budget": {
+                            **budget.to_dict(),
+                            "approved": False,
+                        }
+                    },
+                ),
+                ("malformed", {"resource_budget": {"approved": True}}),
+            ):
+                raw = json.loads(original_media)
+                if bad is None:
+                    raw.pop("resource_budget", None)
+                else:
+                    raw.update(bad)
+                media_path.write_text(
+                    json.dumps(raw, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                raised = False
+                try:
+                    _managed_media_expectation(
+                        HealthInput(
+                            project_name=project,
+                            env_file=env,
+                            compose_files=tuple(),
+                            expected_revision=revision_b,
+                            repo_root=clone,
+                            deploy_root=deploy,
+                        ),
+                        revision_b,
+                    )
+                except (HealthError, MediaRolloutError, ValueError) as exc:
+                    raised = True
+                    f4_detail[label] = type(exc).__name__
+                if not raised:
+                    f4_ok = False
+                    f4_detail[label] = "missing_error"
+        finally:
+            media_path.write_bytes(original_media)
+        # Valid restored state must load again.
+        restored = load_media_activation_state(deploy)
+        record(
+            "f4-invalid-on-budget-health-fail",
+            f4_ok
+            and restored is not None
+            and restored.activation
+            and restored.resource_budget is not None
+            and media_path.read_bytes() == original_media,
+            detail=f4_detail,
+        )
+
+        # --- F2: real LandlockRunner disk limits (separate disposable container) ---
+        image_ref, image_id = _media_executor_image(deploy, revision_b)
+        disk = run_disk_probe(
+            image_ref=image_ref,
+            image_id=image_id,
+            evidence_dir=evidence,
+        )
+        by_name = {str(c.get("name")): c for c in disk.get("cases", [])}
+        for case_name in (
+            "f2-disk-fast-growth-fail",
+            "f2-disk-fast-tree-fail",
+            "f2-disk-staged-inputs-success",
+            "f2-disk-prestart-refuse",
+            "f2-disk-long-writer-kill-reap",
+            "f2-disk-neighbor-continues",
+        ):
+            entry = by_name.get(case_name, {})
+            record(
+                case_name,
+                bool(disk.get("ok")) and bool(entry.get("ok")),
+                image_id=image_id,
+                image_ref=image_ref,
+                case=entry,
+                trust_boundary=disk.get("trust_boundary"),
+            )
+
+        # --- F1a/F1b: separate disposable project (does not pollute main matrix) ---
+        from fetchnow_release import media_rollout as media_rollout_mod
+        from fetchnow_release import rollout as rollout_mod
+
+        f1_project = make_rollout_project_name()
+        f1_deploy = work / "deploy-f1"
+        f1_deploy.mkdir()
+        f1_env = work / "env-f1"
+        f1_port = f"127.0.0.1:{20000 + secrets.randbelow(1500)}"
+        f1_compose: list[str] = []
+        foreign_name = f"fetchnow-f1-foreign-{suffix}"
+        write_env(
+            f1_env,
+            project=f1_project,
+            revision=revision_a,
+            gateway_port=f1_port,
+            deploy_root=f1_deploy,
+        )
+        with f1_env.open("a") as stream:
+            stream.write(
+                "MEDIA_EXECUTOR_ENABLED=false\n"
+                "MEDIA_NET_EXECUTOR_ENABLED=false\n"
+                "EGRESS_DENY_CIDRS=172.16.0.0/12\n"
+                "EGRESS_DENY_IPS=127.0.0.1\n"
+            )
+        replace_env_file_key(f1_env, "FETCHNOW_RELEASE_REVISION", revision_a)
+        f1_prepare = prepare_release(
+            PrepareInput(
+                project_name=f1_project,
+                env_file=f1_env,
+                compose_files=(clone / "compose.yaml", clone / "compose.staging.yaml"),
+                expected_revision=revision_a,
+                repo_root=clone,
+                deploy_root=f1_deploy,
+                release_mode="media",
+            )
+        )
+        if not f1_prepare.ok:
+            raise RuntimeError("F1 prepare failed")
+        f1_compose = compose_argv(f1_project, f1_env, clone)
+        run(f1_compose + ["up", "-d", "postgres"], cwd=clone)
+        wait_for_postgres(f1_compose, clone)
+        run(
+            f1_compose + ["run", "--rm", "api", "alembic", "upgrade", "head"],
+            cwd=clone,
+        )
+        # Foreign sentinel: different compose project label; must survive cleanup.
+        checked(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                foreign_name,
+                "--label",
+                f"com.docker.compose.project=foreign-{suffix}",
+                "--label",
+                "com.docker.compose.service=sentinel",
+                "alpine:3.20",
+                "sleep",
+                "3600",
+            ],
+            ROOT,
+        )
+        foreign_id = checked(
+            ["docker", "inspect", "--format", "{{.Id}}", foreign_name], ROOT
+        )
+        pg_before = checked(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(f1_env),
+                "--project-name",
+                f1_project,
+                "-f",
+                str(clone / "compose.yaml"),
+                "ps",
+                "-q",
+                "postgres",
+            ],
+            clone,
+        ).strip()
+
+        def f1_inp(*, active: bool) -> RolloutInput:
+            return RolloutInput(
+                project_name=f1_project,
+                env_file=f1_env,
+                expected_revision=revision_a,
+                repo_root=clone,
+                deploy_root=f1_deploy,
+                gateway_base_url=f"http://{f1_port}",
+                bootstrap=True,
+                policy=StabilizationPolicy(
+                    consecutive_successes=2, interval_seconds=1, window_seconds=60
+                ),
+                media_activation=active,
+                resource_budget=budget.to_dict() if active else None,
+                required_deny_cidrs=("172.16.0.0/12",),
+                required_deny_ips=("127.0.0.1",),
+                media_denied_host="127.0.0.1",
+                media_slice_unit=slice_unit,
+            )
+
+        # F1a: real sidecars start, then test-only failure before worker.
+        original_budget_assert = media_rollout_mod.assert_running_media_budget
+
+        def fail_after_sidecars(**_kwargs: object) -> None:
+            raise MediaRolloutError(
+                "test-only media failure after partial sidecar activation"
+            )
+
+        with patch.object(
+            media_rollout_mod, "assert_running_media_budget", fail_after_sidecars
+        ):
+            f1a = rollout_release(f1_inp(active=True))
+        f1a_dep = (
+            f1_deploy / "deployments" / f1a.deployment_id
+            if f1a.deployment_id
+            else None
+        )
+        f1a_statuses = _event_statuses(f1a_dep) if f1a_dep else []
+        f1a_audit = [
+            m for m in f1a.messages if m.startswith(BOOTSTRAP_CLEANUP_AUDIT_PREFIX)
+        ]
+        pg_after = checked(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(f1_env),
+                "--project-name",
+                f1_project,
+                "-f",
+                str(clone / "compose.yaml"),
+                "ps",
+                "-q",
+                "postgres",
+            ],
+            clone,
+        ).strip()
+        foreign_alive = checked(
+            ["docker", "inspect", "--format", "{{.State.Running}}", foreign_name],
+            ROOT,
+        ).strip()
+        f1_ids = checked(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={f1_project}",
+            ],
+            ROOT,
+        ).split()
+        f1_media_left: list[str] = []
+        if f1_ids:
+            for row in json.loads(checked(["docker", "inspect", *f1_ids], ROOT)):
+                svc = row["Config"]["Labels"].get("com.docker.compose.service")
+                if svc in {"media-executor", "media-net-executor", "egress-proxy"}:
+                    f1_media_left.append(svc)
+        # Allow optional initializing_storage before activating_media.
+        cleanup_chain = [
+            STATUS_ACTIVATING_MEDIA,
+            STATUS_BOOTSTRAP_CLEANUP_STARTED,
+            STATUS_BOOTSTRAP_CLEANED,
+            STATUS_FAILED,
+        ]
+        chain_ok = False
+        for idx in range(0, max(0, len(f1a_statuses) - len(cleanup_chain) + 1)):
+            if f1a_statuses[idx : idx + len(cleanup_chain)] == cleanup_chain:
+                chain_ok = True
+                break
+        record(
+            "f1a-bootstrap-media-on-partial-fail-cleanup",
+            (not f1a.ok)
+            and f1a.status == STATUS_FAILED
+            and chain_ok
+            and bool(f1a_audit)
+            and not f1_media_left
+            and pg_after == pg_before
+            and foreign_alive == "true"
+            and checked(
+                ["docker", "inspect", "--format", "{{.Id}}", foreign_name], ROOT
+            )
+            == foreign_id
+            and not current_path(f1_deploy).exists()
+            and load_media_activation_state(f1_deploy) is None
+            and any(
+                "test-only media failure after partial sidecar activation" in m
+                for m in f1a.messages
+            ),
+            rollout=rollout_result_snapshot(f1a),
+            statuses=f1a_statuses,
+            audit_present=bool(f1a_audit),
+        )
+        del original_budget_assert
+
+        # F1b: cleanup removal fails → unresolved journal (no cleaned/failed).
+        def boom_remove(**_kwargs: object) -> tuple:
+            raise BootstrapCleanupError("test-only ownership removal failure")
+
+        with patch.object(
+            media_rollout_mod, "assert_running_media_budget", fail_after_sidecars
+        ), patch.object(
+            rollout_mod, "remove_owned_bootstrap_containers", boom_remove
+        ):
+            f1b = rollout_release(f1_inp(active=True))
+        f1b_dep = (
+            f1_deploy / "deployments" / f1b.deployment_id
+            if f1b.deployment_id
+            else None
+        )
+        f1b_statuses = _event_statuses(f1b_dep) if f1b_dep else []
+        record(
+            "f1b-bootstrap-media-on-cleanup-failure-unresolved",
+            (not f1b.ok)
+            and f1b.status is None
+            and f1b_dep is not None
+            and STATUS_ACTIVATING_MEDIA in f1b_statuses
+            and STATUS_BOOTSTRAP_CLEANUP_STARTED in f1b_statuses
+            and STATUS_BOOTSTRAP_CLEANED not in f1b_statuses
+            and STATUS_FAILED not in f1b_statuses
+            and not (f1b_dep / "result.json").exists()
+            and deployment_blocks_rollout(f1b_dep)
+            and any(
+                "test-only media failure after partial sidecar activation" in m
+                for m in f1b.messages
+            )
+            and any("bootstrap cleanup" in m.lower() for m in f1b.messages)
+            and any("unresolved journal" in m.lower() for m in f1b.messages),
+            rollout=rollout_result_snapshot(f1b),
+            statuses=f1b_statuses,
+        )
+        # Scoped F1 teardown (only this project's resources + foreign sentinel).
+        f1_cleanup_ids = checked(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={f1_project}",
+            ],
+            ROOT,
+        ).split()
+        if f1_cleanup_ids:
+            checked(["docker", "rm", "-f", *f1_cleanup_ids], ROOT)
+        if f1_compose:
+            checked(
+                [
+                    *f1_compose,
+                    "-f",
+                    str(clone / "compose.media-executor.yaml"),
+                    "-f",
+                    str(clone / "compose.media-net-executor.yaml"),
+                    "--profile",
+                    "media-executor",
+                    "--profile",
+                    "media-net-executor",
+                    "down",
+                    "-v",
+                    "--remove-orphans",
+                ],
+                clone,
+            )
+        checked(["docker", "rm", "-f", foreign_name], ROOT)
+
         assert_current_state_v2(deploy, application_revision=revision_b)
         rc = 0
     except Exception as exc:

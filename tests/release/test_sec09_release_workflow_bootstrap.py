@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/sec09-release-media-activation.yml"
 HARNESS = ROOT / "scripts/release_media_activation_integration_test.py"
 EXPECTED_SUBJECT = (
-    "test(security): SEC-08/09 native release transaction [native-once-20261013-envrev]"
+    "test(security): SEC-08/09 native release transaction [native-once-20261014-f1f4]"
 )
 
 
@@ -74,8 +74,9 @@ def test_workflow_fallback_marks_absent_native_not_pass() -> None:
 def test_workflow_exact_subject_marker_unique() -> None:
     text = _workflow_text()
     assert EXPECTED_SUBJECT in text
-    assert "[native-once-20261013-envrev]" in text
-    # Prior markers must not authorize this env-revision sync fix run.
+    assert "[native-once-20261014-f1f4]" in text
+    # Prior markers must not authorize this F1–F4 candidate run.
+    assert "[native-once-20261013-envrev]" not in text
     assert "[native-once-20261013-mediahealth]" not in text
     assert "[native-once-20261011-gatewayonce]" not in text
     assert "[native-once-20261011-composemem]" not in text

@@ -10,6 +10,7 @@ from typing import Any
 from .c3_constants import STATE_DIRNAME
 from .journal_io import atomic_write_json, read_json
 from .release_mode import RELEASE_MODE_CANONICAL, RELEASE_MODE_MEDIA, parse_release_mode
+from .resource_budget import ResourceBudgetError, parse_resource_budget
 from .revision import validate_full_sha
 
 MEDIA_STATE_NAME = "media-activation.json"
@@ -138,6 +139,7 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
         if not _IMAGE_ID_RE.fullmatch(value):
             raise MediaStateError(f"malformed media image id for {key}")
         images[key] = value
+    budget_raw = raw.get("resource_budget")
     if activation:
         if release_mode != RELEASE_MODE_MEDIA:
             raise MediaStateError("activation requires release_mode=media")
@@ -150,6 +152,15 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
             raise MediaStateError("activation requires MEDIA_EXECUTOR_ENABLED=true")
         if settings.get("MEDIA_NET_EXECUTOR_ENABLED") != "true":
             raise MediaStateError("activation requires MEDIA_NET_EXECUTOR_ENABLED=true")
+        if budget_raw is None:
+            raise MediaStateError("activation requires resource_budget")
+        try:
+            budget = parse_resource_budget(budget_raw)
+        except ResourceBudgetError as exc:
+            raise MediaStateError(
+                f"activation resource_budget invalid: {exc}"
+            ) from exc
+        budget_stored: dict[str, Any] | None = budget.to_dict()
     else:
         if release_mode not in {RELEASE_MODE_CANONICAL, RELEASE_MODE_MEDIA}:
             raise MediaStateError("invalid release_mode for inactive state")
@@ -157,6 +168,16 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
             raise MediaStateError("inactive state must keep executor flags false")
         if settings.get("MEDIA_NET_EXECUTOR_ENABLED", "false") != "false":
             raise MediaStateError("inactive state must keep net executor flags false")
+        # OFF/legacy may omit budget; if present it must still parse.
+        if budget_raw is None:
+            budget_stored = None
+        else:
+            try:
+                budget_stored = parse_resource_budget(budget_raw).to_dict()
+            except ResourceBudgetError as exc:
+                raise MediaStateError(
+                    f"inactive resource_budget invalid: {exc}"
+                ) from exc
     return MediaActivationState(
         schema_version=schema,
         activation=activation,
@@ -167,7 +188,7 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
         profiles=profiles,
         executor_settings=settings,
         updated_at_utc=updated,
-        resource_budget=raw.get("resource_budget"),
+        resource_budget=budget_stored,
         slice_unit=str(raw.get("slice_unit") or "fetchnow-media-executor.slice"),
         denied_host=str(raw.get("denied_host") or ""),
     )

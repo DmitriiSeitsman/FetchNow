@@ -451,6 +451,24 @@ def run_config_rollout(inp: ConfigRolloutInput) -> ConfigRolloutResult:
                     + ", ".join(blockers)
                 )
 
+            # Media ON changes compose topology; config-only must refuse before
+            # env mutation / container recreate / config-state publication.
+            from .journal_io import JournalIOError
+            from .media_state import MediaStateError, load_media_activation_state
+
+            try:
+                media_state = load_media_activation_state(deploy)
+            except (MediaStateError, JournalIOError, OSError, ValueError) as exc:
+                raise ConfigRolloutError(
+                    "config-only rollout refused: media-activation state is "
+                    f"malformed or inconsistent ({exc}); refuse fail-closed"
+                ) from exc
+            if media_state is not None and media_state.activation:
+                raise ConfigRolloutError(
+                    "config-only rollout refused while media activation is ON; "
+                    "use explicit media rollout/recover (not config-only)"
+                )
+
             # Re-read both authorities while holding the shared rollout lock.
             current = load_and_resolve_current_state(deploy, repo_root=inp.repo_root)
             if current is None or current.revision != revision:

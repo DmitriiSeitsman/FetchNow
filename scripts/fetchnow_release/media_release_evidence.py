@@ -25,6 +25,17 @@ MATRIX_CASE_NAMES: tuple[str, ...] = (
     "on-to-on-commit",
     "accept-target-media-health",
     "accept-target-rejects-stopped-media",
+    # F1–F4 corrective native cases (2026-10-14).
+    "f1a-bootstrap-media-on-partial-fail-cleanup",
+    "f1b-bootstrap-media-on-cleanup-failure-unresolved",
+    "f2-disk-fast-growth-fail",
+    "f2-disk-fast-tree-fail",
+    "f2-disk-staged-inputs-success",
+    "f2-disk-prestart-refuse",
+    "f2-disk-long-writer-kill-reap",
+    "f2-disk-neighbor-continues",
+    "f3-config-rollout-refuses-media-on",
+    "f4-invalid-on-budget-health-fail",
 )
 
 _SAFE_MEDIA_KEYS = frozenset(

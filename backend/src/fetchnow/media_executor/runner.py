@@ -40,7 +40,8 @@ class ToolRunner:
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
-        max_output_bytes: int | None = None,
+        max_growth_bytes: int | None = None,
+        max_tree_bytes: int | None = None,
         min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         raise NotImplementedError
@@ -78,6 +79,39 @@ def _tree_bytes(root: Path) -> int:
     return total
 
 
+def _local_disk_limits_exceeded(
+    *,
+    attempt: Path,
+    baseline: int,
+    max_growth_bytes: int | None,
+    max_tree_bytes: int | None,
+    min_free_bytes: int | None,
+) -> bool:
+    """LocalRunner disk contract (not production DAC/cgroup evidence)."""
+    import shutil
+
+    try:
+        tree = _tree_bytes(attempt)
+        growth = tree - baseline
+        if (
+            max_growth_bytes is not None
+            and max_growth_bytes > 0
+            and growth > max_growth_bytes
+        ):
+            return True
+        if max_tree_bytes is not None and max_tree_bytes > 0 and tree > max_tree_bytes:
+            return True
+        if (
+            min_free_bytes is not None
+            and min_free_bytes > 0
+            and shutil.disk_usage(attempt).free < min_free_bytes
+        ):
+            return True
+    except OSError:
+        return True
+    return False
+
+
 class LocalRunner(ToolRunner):
     """In-process fallback is not used in production. Tests use this runner."""
 
@@ -89,10 +123,62 @@ class LocalRunner(ToolRunner):
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
-        max_output_bytes: int | None = None,
+        max_growth_bytes: int | None = None,
+        max_tree_bytes: int | None = None,
         min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         del protected
+        try:
+            baseline = (
+                _tree_bytes(attempt)
+                if (
+                    (max_growth_bytes is not None and max_growth_bytes > 0)
+                    or (max_tree_bytes is not None and max_tree_bytes > 0)
+                    or (min_free_bytes is not None and min_free_bytes > 0)
+                )
+                else 0
+            )
+        except OSError:
+            return ToolOutcome(
+                exit_code=1,
+                stdout=b"",
+                stderr=b"",
+                timed_out=False,
+                cancelled=False,
+            )
+        # Refuse launch when the attempt is already over tree/free ceilings.
+        if (
+            max_tree_bytes is not None
+            and max_tree_bytes > 0
+            and baseline > max_tree_bytes
+        ):
+            return ToolOutcome(
+                exit_code=1,
+                stdout=b"",
+                stderr=b"",
+                timed_out=False,
+                cancelled=False,
+            )
+        if min_free_bytes is not None and min_free_bytes > 0:
+            import shutil
+
+            try:
+                if shutil.disk_usage(attempt).free < min_free_bytes:
+                    return ToolOutcome(
+                        exit_code=1,
+                        stdout=b"",
+                        stderr=b"",
+                        timed_out=False,
+                        cancelled=False,
+                    )
+            except OSError:
+                return ToolOutcome(
+                    exit_code=1,
+                    stdout=b"",
+                    stderr=b"",
+                    timed_out=False,
+                    cancelled=False,
+                )
         proc = subprocess.Popen(
             argv,
             cwd=str(attempt),
@@ -115,27 +201,28 @@ class LocalRunner(ToolRunner):
                 timed_out = True
                 _kill_group(proc.pid)
                 break
-            try:
-                if (
-                    max_output_bytes is not None
-                    and _tree_bytes(attempt) > max_output_bytes
-                ):
-                    limit_hit = True
-                    _kill_group(proc.pid)
-                    break
-                if min_free_bytes is not None:
-                    import shutil
-
-                    if shutil.disk_usage(attempt).free < min_free_bytes:
-                        limit_hit = True
-                        _kill_group(proc.pid)
-                        break
-            except OSError:
+            if _local_disk_limits_exceeded(
+                attempt=attempt,
+                baseline=baseline,
+                max_growth_bytes=max_growth_bytes,
+                max_tree_bytes=max_tree_bytes,
+                min_free_bytes=min_free_bytes,
+            ):
                 limit_hit = True
                 _kill_group(proc.pid)
                 break
             time.sleep(0.02)
         stdout, stderr = proc.communicate(timeout=5)
+        # Final check after the child can no longer write — exit between polls
+        # must not bypass growth/tree/min_free (same contract as job_process).
+        if _local_disk_limits_exceeded(
+            attempt=attempt,
+            baseline=baseline,
+            max_growth_bytes=max_growth_bytes,
+            max_tree_bytes=max_tree_bytes,
+            min_free_bytes=min_free_bytes,
+        ):
+            limit_hit = True
         return ToolOutcome(
             exit_code=1 if limit_hit else proc.returncode,
             stdout=stdout,
@@ -214,7 +301,8 @@ class LandlockRunner(ToolRunner):
         timeout_seconds: float,
         cancel: threading.Event,
         protected: list[str],
-        max_output_bytes: int | None = None,
+        max_growth_bytes: int | None = None,
+        max_tree_bytes: int | None = None,
         min_free_bytes: int | None = None,
     ) -> ToolOutcome:
         read_only = ["/usr", "/bin", "/lib", "/lib64"]
@@ -260,7 +348,8 @@ class LandlockRunner(ToolRunner):
                     str(cgroup),
                     str(read_fd),
                     str(timeout_seconds),
-                    str(max_output_bytes or 0),
+                    str(max_growth_bytes or 0),
+                    str(max_tree_bytes or 0),
                     str(min_free_bytes or 0),
                     str(attempt),
                     *command,

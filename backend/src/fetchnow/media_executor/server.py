@@ -19,12 +19,20 @@ from fetchnow.media_executor.argv import (
 from fetchnow.media_executor.constants import (
     INPUT_AUDIO,
     INPUT_VIDEO,
+    INSPECT_MAX_GROWTH_BYTES,
+    INSPECT_MAX_TREE_BYTES,
     MAX_JOBS,
+    MAX_MIN_FREE_BYTES,
     MAX_REQUEST_BYTES,
+    OFFLINE_FFPROBE_MAX_GROWTH_BYTES,
+    OFFLINE_FFPROBE_MAX_TREE_BYTES,
+    OFFLINE_MUX_MAX_GROWTH_BYTES,
+    OFFLINE_MUX_MAX_TREE_BYTES,
     OUTPUT_ARTIFACT_GLOB,
     OUTPUT_MUX,
     PROFILE_NETWORK,
     PROFILE_OFFLINE,
+    TOOL_MIN_FREE_BYTES,
     TOOL_UID,
     WORKER_GID,
     WORKER_UID,
@@ -224,7 +232,7 @@ class ExecutorApp:
                 return {"ok": False, "code": "not_reserved"}
             argv = self._argv(request, path)
             timeout = self._timeout_for(request.op)
-            max_output, min_free = self._limits_for(request)
+            max_growth, max_tree, min_free = self._limits_for(request)
             current.state = "running"
             current.op = request.op
             current.container = request.container
@@ -243,7 +251,8 @@ class ExecutorApp:
                 timeout_seconds=timeout,
                 cancel=cancel,
                 protected=protected,
-                max_output_bytes=max_output,
+                max_growth_bytes=max_growth,
+                max_tree_bytes=max_tree,
                 min_free_bytes=min_free,
             )
         except Exception:
@@ -294,13 +303,42 @@ class ExecutorApp:
             return self.download_timeout_seconds
         return _OFFLINE_OPERATION_SECONDS
 
-    def _limits_for(self, request: Request) -> tuple[int | None, int | None]:
+    def _limits_for(self, request: Request) -> tuple[int, int, int]:
+        """Return (max_growth_bytes, max_tree_bytes, min_free_bytes).
+
+        Growth counts only new writes after baseline; tree is absolute attempt
+        usage (inputs + output + cache). Client cannot raise growth/tree
+        ceilings above the server constants / max_filesize_bytes.
+        """
+        if request.op == "mux_copy":
+            return (
+                OFFLINE_MUX_MAX_GROWTH_BYTES,
+                OFFLINE_MUX_MAX_TREE_BYTES,
+                TOOL_MIN_FREE_BYTES,
+            )
+        if request.op == "ffprobe_validate":
+            return (
+                OFFLINE_FFPROBE_MAX_GROWTH_BYTES,
+                OFFLINE_FFPROBE_MAX_TREE_BYTES,
+                TOOL_MIN_FREE_BYTES,
+            )
+        if request.op == "inspect_metadata":
+            return (
+                INSPECT_MAX_GROWTH_BYTES,
+                INSPECT_MAX_TREE_BYTES,
+                TOOL_MIN_FREE_BYTES,
+            )
         if not request.op.startswith("download_"):
-            return None, None
+            raise ProtocolError("malformed")
         if request.max_bytes is None or request.min_free_bytes is None:
             raise ProtocolError("malformed")
-        # Worker cannot raise the server ceiling.
-        return min(request.max_bytes, self.max_filesize_bytes), request.min_free_bytes
+        # Worker cannot raise the server ceiling; may request a stricter growth.
+        growth = min(request.max_bytes, self.max_filesize_bytes)
+        # Downloads typically start empty; growth ≈ tree. Keep them aligned.
+        tree = growth
+        # Preserve client min_free (incl. 0); only bound the upper protocol range.
+        min_free = min(request.min_free_bytes, MAX_MIN_FREE_BYTES)
+        return growth, tree, min_free
 
     def _argv(self, request: Request, path: Path) -> list[str]:
         if request.op == "mux_copy":

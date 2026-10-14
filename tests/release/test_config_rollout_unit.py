@@ -1050,3 +1050,114 @@ def test_cli_exposes_config_rollout_without_bypass_flags() -> None:
         ]
     )
     assert parsed.initialize_active_config is True
+
+
+def _write_on_media_authority(deploy: Path) -> None:
+    from fetchnow_release.media_state import (
+        MediaActivationState,
+        write_media_activation_state,
+    )
+    from fetchnow_release.resource_budget import disposable_test_budget
+
+    (deploy / "state").mkdir(parents=True, exist_ok=True)
+    write_media_activation_state(
+        deploy,
+        MediaActivationState(
+            schema_version=1,
+            activation=True,
+            release_mode="media",
+            revision=REVISION,
+            media_image_ids={
+                "media-executor": "sha256:" + ("7" * 64),
+                "media-net-executor": "sha256:" + ("8" * 64),
+                "egress-proxy": "sha256:" + ("9" * 64),
+            },
+            overlays=(
+                "compose.media-executor.yaml",
+                "compose.media-net-executor.yaml",
+            ),
+            profiles=("media-executor", "media-net-executor"),
+            executor_settings={
+                "MEDIA_EXECUTOR_ENABLED": "true",
+                "MEDIA_NET_EXECUTOR_ENABLED": "true",
+                "MEDIA_EXECUTOR_SOCKET": "/run/fetchnow-executor/ctrl/worker.sock",
+                "MEDIA_NET_EXECUTOR_SOCKET": "/run/fetchnow-media-net/ctrl/worker.sock",
+                "MEDIA_EXECUTOR_WORK_ROOT": "/var/lib/fetchnow/executor",
+                "MEDIA_NET_EXECUTOR_WORK_ROOT": "/var/lib/fetchnow/media-net",
+            },
+            updated_at_utc="2026-01-01T00:00:00Z",
+            resource_budget=disposable_test_budget().to_dict(),
+            denied_host="127.0.0.1",
+        ),
+    )
+
+
+def test_config_rollout_refuses_media_on_without_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.media_state import load_media_activation_state
+
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        inspections=[_live("false"), _live("false")],
+    )
+    _write_on_media_authority(inp.deploy_root)
+    before = load_media_activation_state(inp.deploy_root)
+    assert before is not None and before.activation is True
+    env_before = inp.env_file.read_text(encoding="utf-8")
+    result = run_config_rollout(inp)
+    assert not result.ok
+    assert "media activation is ON" in result.messages[0]
+    assert calls["activate"] == []
+    assert calls["health"] == []
+    assert inp.env_file.read_text(encoding="utf-8") == env_before
+    after = load_media_activation_state(inp.deploy_root)
+    assert after is not None and after.activation is True
+    assert after.executor_settings["MEDIA_EXECUTOR_ENABLED"] == "true"
+    assert not find_unresolved_config_rollouts(inp.deploy_root)
+
+
+def test_config_rollout_refuses_malformed_media_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        inspections=[],
+    )
+    state_dir = inp.deploy_root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "media-activation.json").write_text("{not-json\n", encoding="utf-8")
+    result = run_config_rollout(inp)
+    assert not result.ok
+    assert "media-activation state is malformed" in result.messages[0]
+    assert calls["activate"] == []
+
+
+def test_config_rollout_off_media_still_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fetchnow_release.media_state import (
+        inactive_media_state,
+        write_media_activation_state,
+    )
+
+    inp, calls = _patch_transaction(
+        monkeypatch,
+        tmp_path,
+        target_quota="false",
+        inspections=[_live("false"), _live("false")],
+    )
+    write_media_activation_state(
+        inp.deploy_root,
+        inactive_media_state(
+            revision=REVISION, updated_at_utc="2026-01-01T00:00:00Z"
+        ),
+    )
+    inp = ConfigRolloutInput(**{**inp.__dict__, "initialize_active_config": True})
+    result = run_config_rollout(inp)
+    assert result.ok
+    assert calls["health"] == ["pass"]

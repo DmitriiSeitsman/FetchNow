@@ -178,3 +178,23 @@ Total pending manifest: 41 paths, including preserved earlier dirty docs.
 **STOP:** local corrective evidence only. Native release acceptance, current
 candidate image audit, production prerequisite/budget approval and residual-risk
 decisions remain separate gates. Production/TEST/LIVE/SEO/VEX unchanged.
+
+## Updated F1–F4 candidate native matrix (2026-10-14)
+
+Prior native PASS `38466520000` retained as evidence of the **previous**
+candidate only (pre disk final-check / F1 transaction / F3–F4 authority gates).
+
+This attempt marker: `[native-once-20261014-f1f4]`.
+
+Added cases (same workflow; disposable F1 project separate from main matrix):
+
+| Case | Intent |
+| --- | --- |
+| F1a/F1b | bootstrap media ON partial fail → ownership cleanup / unresolved |
+| F2×6 | real LandlockRunner disk growth/tree/prestart/neighbor |
+| F3 | config-rollout refuses media ON without side effects |
+| F4 | invalid ON budget fails managed health; original bytes restored |
+
+F2 trust boundary: trusted `disk_native_inside.py` passes small ceilings to
+LandlockRunner; not untrusted RPC `max_bytes` mapping proof (offline covered).
+Accept-target helper remains not public recover CLI E2E.

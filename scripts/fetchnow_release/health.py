@@ -121,6 +121,14 @@ def validate_health_media_expectation(
     ):
         if not isinstance(path, str) or not path.startswith("/"):
             raise HealthError(f"{label} must be an absolute path")
+    from .resource_budget import ResourceBudgetError, parse_resource_budget
+
+    if media.resource_budget is None:
+        raise HealthError("ON media expectation requires resource_budget")
+    try:
+        parse_resource_budget(media.resource_budget)
+    except ResourceBudgetError as exc:
+        raise HealthError(f"ON media expectation resource_budget invalid: {exc}") from exc
     return media
 
 
@@ -383,20 +391,20 @@ def _assert_media_probes(
     if not result.ok:
         raise HealthError(result.messages[0])
     messages.extend(result.messages)
-    if media.resource_budget is not None:
-        try:
-            budget = parse_resource_budget(media.resource_budget)
-            assert_running_media_budget(
-                project_name=inp.project_name,
-                env_file=inp.env_file,
-                compose_files=inp.compose_files,
-                cwd=inp.repo_root,
-                budget=budget,
-                slice_unit=media.slice_unit,
-            )
-        except (MediaPrerequisiteError, ResourceBudgetError, MediaHealthError) as exc:
-            raise HealthError(str(exc)) from exc
-        messages.append("OK: media running resource budget")
+    # ON expectation already requires a validated budget; never skip verification.
+    try:
+        budget = parse_resource_budget(media.resource_budget)
+        assert_running_media_budget(
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            cwd=inp.repo_root,
+            budget=budget,
+            slice_unit=media.slice_unit,
+        )
+    except (MediaPrerequisiteError, ResourceBudgetError, MediaHealthError, TypeError) as exc:
+        raise HealthError(str(exc)) from exc
+    messages.append("OK: media running resource budget")
 
 
 def run_health(inp: HealthInput) -> HealthResult:
