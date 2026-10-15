@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import image_audit_candidate7_history as hist
 
-MARKER = "[native-once-20261015-img7suc]"
+MARKER = "[native-once-20261015-img7smk]"
 EXPECTED_SUBJECT = "test(security): SEC-03C/08/09 candidate7 successor audit " + MARKER
 
 
@@ -474,13 +474,16 @@ def test_workflow_has_fetch_depth_zero_and_successor_marker() -> None:
     assert "fetch-depth: 0" in text
     assert "persist-credentials: false" in text
     assert MARKER in text
-    assert "[native-once-20261014-img7d0]" not in text.split("EXPECTED_SUBJECT", 1)[1]
+    assert "[native-once-20261015-img7suc]" not in text.split("EXPECTED_SUBJECT", 1)[1]
     assert "prove_successor" in text or "image_audit_candidate7_history.py" in text
     assert "FETCHNOW_AUDIT_PREDECESSOR_SHA" in text
     assert "38631542113" in text
+    assert "38641657351" in text
+    assert "image_audit_candidate7_smoke.py" in text
     assert "message.splitlines()[0]" in text
     assert "subject == expected" in text
-    assert "compatibility smoke" in text.lower() or "Compatibility smoke" in text
+    assert "Compatibility smoke" in text
+    assert "scripts/image_audit_candidate7_smoke.py" in hist.AUDIT_ONLY_PATH_PREFIXES
 
 
 def test_authorize_subject_ignores_trailers() -> None:

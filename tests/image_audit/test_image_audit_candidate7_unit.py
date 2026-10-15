@@ -245,8 +245,8 @@ def test_summarize_and_reconcile() -> None:
 
 def test_workflow_marker_and_pins() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "[native-once-20261015-img7suc]" in text
-    assert "[native-once-20261014-img7d0]" not in text.split("EXPECTED_SUBJECT", 1)[1]
+    assert "[native-once-20261015-img7smk]" in text
+    assert "[native-once-20261015-img7suc]" not in text.split("EXPECTED_SUBJECT", 1)[1]
     assert "fetch-depth: 0" in text
     assert "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" in text
     assert "0.74.0" in text

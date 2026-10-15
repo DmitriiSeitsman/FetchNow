@@ -9,6 +9,7 @@ name: SEC-03C/08/09 candidate-7 native image audit
 # Native PASS: 38627426197 @ 686369bd085bd073cb44bd791cb1c0e5beba8323
 # Audit predecessor: 38637415562 @ 48d9fc5bda2ca739e6ea7cd6c938f3b5603f8c67
 # Prior tech FAIL: 38631542113 — shallow checkout missing baseline (historical).
+# Prior successor FAIL: 38641657351 — compatibility smoke (dpkg format expansion); scan NOT_RUN.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -30,7 +31,7 @@ jobs:
         id: subject
         env:
           EXPECTED_SUBJECT: >-
-            test(security): SEC-03C/08/09 candidate7 successor audit [native-once-20261015-img7suc]
+            test(security): SEC-03C/08/09 candidate7 successor audit [native-once-20261015-img7smk]
         run: |
           python3 - <<'PY'
           import json
@@ -230,103 +231,29 @@ jobs:
         run: |
           set -euo pipefail
           tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
-          api="fetchnow-api:${tag}"
-          web="fetchnow-web:${tag}"
-          gateway="fetchnow-gateway:${tag}"
-
-          # --- Inventory pins (fail-closed) ---
-          docker run --rm --entrypoint /bin/sh "$api" -c \
-            'dpkg-query -W -f="${Package} ${Version}\n" libpcre2-8-0 libssl3t64 openssl openssl-provider-legacy' \
-            | tee "$RUNNER_TEMP/cand7-api-dpkg.txt"
-          grep -qx 'libpcre2-8-0 10.46-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
-          grep -qx 'libssl3t64 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
-          grep -qx 'openssl 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
-          grep -qx 'openssl-provider-legacy 3.5.7-1~deb13u3' "$RUNNER_TEMP/cand7-api-dpkg.txt"
-
-          docker run --rm --entrypoint /bin/sh "$web" -c 'apk info -e -v pcre2 tiff libexpat' \
-            | tee "$RUNNER_TEMP/cand7-web-apk.txt"
-          docker run --rm --entrypoint /bin/sh "$gateway" -c 'apk info -e -v pcre2 tiff libexpat' \
-            | tee "$RUNNER_TEMP/cand7-gateway-apk.txt"
-          grep -qx 'pcre2-10.49-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
-          grep -qx 'tiff-4.7.2-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
-          grep -qx 'libexpat-2.8.5-r0' "$RUNNER_TEMP/cand7-web-apk.txt"
-          grep -qx 'pcre2-10.49-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
-          grep -qx 'tiff-4.7.2-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
-          grep -qx 'libexpat-2.8.5-r0' "$RUNNER_TEMP/cand7-gateway-apk.txt"
-
-          # --- nginx -t + HTTP smoke (same Image IDs) ---
-          docker run --rm --entrypoint /bin/sh "$web" -c 'nginx -t'
-          docker run --rm --entrypoint /bin/sh "$gateway" -c 'nginx -t'
-          docker rm -f cand7-web-smoke 2>/dev/null || true
-          docker run -d --name cand7-web-smoke -p 18080:8080 "$web"
-          for _ in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ || true)
-            [ "$code" = "200" ] && break
-            sleep 1
-          done
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" = "200"
-          docker rm -f cand7-web-smoke
-
-          # Gateway config smoke (upstream may 502 without API — process must run + -t).
-          docker rm -f cand7-gw-smoke 2>/dev/null || true
-          docker run -d --name cand7-gw-smoke "$gateway"
-          sleep 1
-          docker exec cand7-gw-smoke nginx -t
-          docker rm -f cand7-gw-smoke
-
-          # --- ffmpeg stream-copy + ffprobe inside API image ---
-          mkdir -p "$RUNNER_TEMP/cand7-media"
-          docker run --rm -v "$RUNNER_TEMP/cand7-media:/m" --entrypoint /bin/sh "$api" -c '
-            set -euo pipefail
-            ffmpeg -y -f lavfi -i color=c=black:s=160x120:d=0.2 -c:v libx264 -pix_fmt yuv420p /m/src.mp4
-            ffmpeg -y -i /m/src.mp4 -c copy /m/out.mp4
-            ffmpeg -y -f lavfi -i color=c=black:s=160x120:d=0.2 -c:v libvpx-vp9 /m/src.webm
-            ffmpeg -y -i /m/src.webm -c copy /m/out.webm
-            ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 /m/out.mp4 | grep -q h264
-            ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 /m/out.webm | grep -q vp9
-          '
-
-          # --- API live/ready + worker binary in disposable env ---
-          docker rm -f cand7-pg cand7-api 2>/dev/null || true
-          docker network rm cand7-smoke 2>/dev/null || true
-          docker network create cand7-smoke
-          docker run -d --name cand7-pg --network cand7-smoke \
-            -e POSTGRES_PASSWORD=fetchnow -e POSTGRES_USER=fetchnow -e POSTGRES_DB=fetchnow \
-            postgres:16.15-alpine3.24
-          for _ in $(seq 1 40); do
-            docker exec cand7-pg pg_isready -U fetchnow -d fetchnow && break
-            sleep 1
-          done
-          docker run --rm --network cand7-smoke --entrypoint /bin/sh "$api" -c '
-            set -euo pipefail
-            export DATABASE_URL=postgresql+asyncpg://fetchnow:fetchnow@cand7-pg:5432/fetchnow
-            export APP_ENV=development
-            alembic upgrade head
-          '
-          docker run -d --name cand7-api --network cand7-smoke -p 18000:8000 \
-            -e DATABASE_URL=postgresql+asyncpg://fetchnow:fetchnow@cand7-pg:5432/fetchnow \
-            -e APP_ENV=development \
-            "$api"
-          for _ in $(seq 1 40); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/live || true)
-            [ "$code" = "200" ] && break
-            sleep 1
-          done
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/live)" = "200"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/api/v1/health/ready)" = "200"
-          docker run --rm --entrypoint /bin/sh "$api" -c \
-            'command -v fetchnow-api; command -v fetchnow-worker'
-          docker rm -f cand7-api cand7-pg
-          docker network rm cand7-smoke
-
-          # --- gosu binary identity (candidate postgres; not live retained) ---
-          cid=$(docker create postgres:16.15-alpine3.24 true)
-          docker cp "$cid:/usr/local/bin/gosu" "$RUNNER_TEMP/cand7-gosu"
-          docker rm -f "$cid"
-          echo "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0  $RUNNER_TEMP/cand7-gosu" \
-            | sha256sum -c -
-          printf '%s\n' "gosu_sha256_ok" | tee "$RUNNER_TEMP/cand7-gosu-proof.txt"
-
+          # Same Image IDs that will be scanned — smoke helper owns inventory,
+          # media (uid 10001 volume), api/worker/gateway HTTP, and gosu proof.
+          PYTHONPATH=scripts python3.12 scripts/image_audit_candidate7_smoke.py \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --work-dir "$RUNNER_TEMP" \
+            --api-image "fetchnow-api:${tag}" \
+            --web-image "fetchnow-web:${tag}" \
+            --gateway-image "fetchnow-gateway:${tag}" \
+            --postgres-image postgres:16.15-alpine3.24
+          test -s "$RUNNER_TEMP/cand7-api-dpkg.txt"
+          test -s "$RUNNER_TEMP/cand7-web-apk.txt"
+          test -s "$RUNNER_TEMP/cand7-gateway-apk.txt"
+          test -s "$RUNNER_TEMP/cand7-gosu-proof.txt"
+          test -s "$RUNNER_TEMP/cand7-smoke-report.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "cand7-smoke-report.json").read_text()
+          )
+          assert report.get("ok") is True, report
+          print("smoke_ok partial=", json.dumps(report.get("partial"), sort_keys=True))
+          PY
       - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
         run: |
           set -euo pipefail
@@ -409,6 +336,7 @@ jobs:
             ${{ runner.temp }}/cand7-web-apk.txt
             ${{ runner.temp }}/cand7-gateway-apk.txt
             ${{ runner.temp }}/cand7-gosu-proof.txt
+            ${{ runner.temp }}/cand7-smoke-report.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -417,8 +345,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${FETCHNOW_IMAGE_AUDIT_TAG}"
-          docker rm -f cand7-web-smoke cand7-gw-smoke cand7-api cand7-pg 2>/dev/null || true
-          docker network rm cand7-smoke 2>/dev/null || true
+          # Smoke helper already cleaned its own containers/networks/volumes.
+          # Only remove job-tagged images and Trivy scratch here.
           docker image rm -f \
             "fetchnow-api:${tag}" \
             "fetchnow-web:${tag}" \

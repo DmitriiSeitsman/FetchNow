@@ -30,6 +30,7 @@ AUDIT_ONLY_PATH_PREFIXES: tuple[str, ...] = (
     ".github/workflows/sec03c-candidate7-image-audit.yml",
     "scripts/image_audit_candidate7.py",
     "scripts/image_audit_candidate7_history.py",
+    "scripts/image_audit_candidate7_smoke.py",
     "tests/image_audit/",
     "docs/operations/sec-03c-candidate7-image-audit.md",
 )

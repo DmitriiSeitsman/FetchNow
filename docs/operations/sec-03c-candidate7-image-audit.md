@@ -9,11 +9,13 @@ images for the SEC-08/09 candidate tip.
 |---|---|
 | Aggregate | `scripts/image_audit_candidate7.py` |
 | History proof | `scripts/image_audit_candidate7_history.py` (`prove_successor_history`) |
+| Compatibility smoke | `scripts/image_audit_candidate7_smoke.py` (literal dpkg argv; uid 10001 media) |
 | Canonical four-target gate | `scripts/image_audit.py` (unchanged; still exactly four) |
 | Workflow | `.github/workflows/sec03c-candidate7-image-audit.yml` (`fetch-depth: 0`) |
 | Native PASS (unchanged baseline) | run `38627426197` @ `686369bd…` |
 | Audit predecessor | run `38637415562` @ `48d9fc5…` |
 | Prior technical FAIL | run `38631542113` (shallow checkout missing baseline) |
+| Prior successor smoke FAIL | run `38641657351` (dpkg format expansion; scan NOT_RUN) |
 | Scanner | Trivy 0.74.0 Linux-64bit `2ae6fe3ee734…` |
 | Postgres pin | `postgres:16.15-alpine3.24` (Compose) |
 
