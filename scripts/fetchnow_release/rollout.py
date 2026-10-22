@@ -139,6 +139,7 @@ class RolloutInput:
     # Explicit media activation (default OFF = source-only).
     media_activation: bool = False
     resource_budget: object | None = None
+    media_storage_contract: object | None = None
     required_deny_cidrs: tuple[str, ...] = ()
     required_deny_ips: tuple[str, ...] = ()
     media_denied_host: str = ""
@@ -687,6 +688,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                             landlock_probe_command=inp.landlock_probe_command,
                             slice_unit=inp.media_slice_unit,
                             denied_host=inp.media_denied_host,
+                            storage_contract_raw=inp.media_storage_contract,
                         )
                         if (
                             requested.resource_budget != media_state.resource_budget
@@ -814,6 +816,7 @@ def rollout_release(inp: RolloutInput) -> RolloutResult:
                 landlock_probe_command=inp.landlock_probe_command,
                 slice_unit=inp.media_slice_unit,
                 denied_host=inp.media_denied_host,
+                storage_contract_raw=inp.media_storage_contract,
             )
             previous_media = previous_media_for_journal(deploy)
             media_journal = journal_media_block(

@@ -27,6 +27,7 @@ class ResourceBudget:
     concurrency: int
     shared_ceiling: bool
     notes: str
+    memory_swap_max_bytes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +39,7 @@ class ResourceBudget:
             "concurrency": self.concurrency,
             "shared_ceiling": self.shared_ceiling,
             "notes": self.notes,
+            "memory_swap_max_bytes": self.memory_swap_max_bytes,
         }
 
 
@@ -66,6 +68,9 @@ def parse_resource_budget(raw: object) -> ResourceBudget:
         raise ResourceBudgetError("approved must be a boolean")
     if type(raw["shared_ceiling"]) is not bool:
         raise ResourceBudgetError("shared_ceiling must be a boolean")
+    swap = raw.get("memory_swap_max_bytes", 0)
+    if type(swap) is not int or swap != 0:
+        raise ResourceBudgetError("memory_swap_max_bytes must be integer zero")
     if not isinstance(per_raw, dict) or not per_raw:
         raise ResourceBudgetError(
             "per_container_memory_bytes must be a non-empty object"

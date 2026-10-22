@@ -213,9 +213,11 @@ def _parse_optional_media_plan(raw: object) -> dict[str, Any] | None:
         "resource_budget",
         "slice_unit",
         "denied_host",
+        "storage_contract",
         "previous_resource_budget",
         "previous_slice_unit",
         "previous_denied_host",
+        "previous_storage_contract",
         "previous_current_state",
     ):
         if key in raw:
@@ -224,6 +226,18 @@ def _parse_optional_media_plan(raw: object) -> dict[str, Any] | None:
         from .resource_budget import parse_resource_budget
 
         out["resource_budget"] = parse_resource_budget(out["resource_budget"]).to_dict()
+    if out.get("storage_contract") is not None:
+        from .media_storage import parse_media_storage_contract
+
+        out["storage_contract"] = parse_media_storage_contract(
+            out["storage_contract"]
+        ).to_dict()
+    if out.get("previous_storage_contract") is not None:
+        from .media_storage import parse_media_storage_contract
+
+        out["previous_storage_contract"] = parse_media_storage_contract(
+            out["previous_storage_contract"]
+        ).to_dict()
     if out.get("previous_current_state") is not None:
         from .current_state import parse_current_state_v2
 

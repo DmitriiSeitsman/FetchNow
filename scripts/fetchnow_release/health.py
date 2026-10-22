@@ -66,6 +66,7 @@ class HealthMediaExpectation:
     check_worker_flags: bool = True
     resource_budget: dict[str, object] | None = None
     slice_unit: str = "fetchnow-media-executor.slice"
+    storage_contract: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class HealthInput:
     # exclusively from validated schema-v2 current state and its release manifest.
     deploy_root: Path | None = None
     # When set (PRD1C3A image-ID activation), require exact inspect IDs for
-    # api/worker/delivery/web/gateway instead of tag-string matching alone. This internal
+    # api/worker/delivery/web/gateway instead of tag-string matching alone. Internal
     # field is used by rollout/recovery; managed standalone health must not set it.
     expected_image_ids: dict[str, str] | None = None
     # Public HTTPS gate config. Real staging/production paths resolve the fixed
@@ -128,7 +129,15 @@ def validate_health_media_expectation(
     try:
         parse_resource_budget(media.resource_budget)
     except ResourceBudgetError as exc:
-        raise HealthError(f"ON media expectation resource_budget invalid: {exc}") from exc
+        raise HealthError(
+            f"ON media expectation resource_budget invalid: {exc}"
+        ) from exc
+    from .media_storage import MediaStorageError, parse_media_storage_contract
+
+    try:
+        parse_media_storage_contract(media.storage_contract)
+    except MediaStorageError as exc:
+        raise HealthError(f"ON media expectation storage invalid: {exc}") from exc
     return media
 
 
@@ -152,6 +161,7 @@ def health_media_from_plan(
             check_worker_flags=check_worker_flags,
             resource_budget=plan.resource_budget,
             slice_unit=plan.slice_unit,
+            storage_contract=plan.storage_contract,
         )
     )
 
@@ -222,9 +232,10 @@ def _inspect(container_id: str) -> dict[str, Any]:
     if result.returncode != 0:
         raise HealthError(f"docker inspect failed for {container_id}")
     data = json.loads(result.stdout_text)
-    if not data:
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
         raise HealthError(f"empty inspect for {container_id}")
-    return data[0]
+    row: dict[str, Any] = data[0]
+    return row
 
 
 def _managed_image_ids(inp: HealthInput, revision: str) -> dict[str, str]:
@@ -310,6 +321,7 @@ def _managed_media_expectation(
             check_worker_flags=True,
             resource_budget=state.resource_budget,
             slice_unit=state.slice_unit,
+            storage_contract=state.storage_contract,
         )
     )
 
@@ -374,6 +386,12 @@ def _assert_media_probes(
         MediaPrerequisiteError,
         assert_running_media_budget,
     )
+    from .media_storage import (
+        MediaStorageError,
+        assert_media_storage_ready,
+        assert_running_storage_mounts,
+        parse_media_storage_contract,
+    )
     from .resource_budget import ResourceBudgetError, parse_resource_budget
 
     result = run_media_health(
@@ -402,7 +420,21 @@ def _assert_media_probes(
             budget=budget,
             slice_unit=media.slice_unit,
         )
-    except (MediaPrerequisiteError, ResourceBudgetError, MediaHealthError, TypeError) as exc:
+        contract = parse_media_storage_contract(media.storage_contract)
+        assert_media_storage_ready(contract)
+        assert_running_storage_mounts(
+            project_name=inp.project_name,
+            env_file=inp.env_file,
+            compose_files=inp.compose_files,
+            contract=contract,
+        )
+    except (
+        MediaPrerequisiteError,
+        ResourceBudgetError,
+        MediaStorageError,
+        MediaHealthError,
+        TypeError,
+    ) as exc:
         raise HealthError(str(exc)) from exc
     messages.append("OK: media running resource budget")
 
@@ -472,7 +504,8 @@ def run_health(inp: HealthInput) -> HealthResult:
                 raise HealthError(f"missing service container: {expected}")
             if len(by_service[expected]) != 1:
                 raise HealthError(
-                    f"service {expected} has {len(by_service[expected])} containers; expected 1"
+                    f"service {expected} has {len(by_service[expected])} "
+                    "containers; expected 1"
                 )
 
         unknown = sorted(
@@ -518,7 +551,8 @@ def run_health(inp: HealthInput) -> HealthResult:
             project_label = labels.get("com.docker.compose.project")
             if project_label != inp.project_name:
                 raise HealthError(
-                    f"{svc_name} project label {project_label!r} != {inp.project_name!r}"
+                    f"{svc_name} project label {project_label!r} "
+                    f"!= {inp.project_name!r}"
                 )
             service_label = labels.get("com.docker.compose.service")
             if service_label != svc_name:
@@ -551,17 +585,16 @@ def run_health(inp: HealthInput) -> HealthResult:
                         )
                 else:
                     if svc_name in {"api", "worker", "delivery"}:
-                        if f":{rev}" not in image_ref and not image_ref.endswith(
-                            f":{rev}"
+                        if (
+                            f":{rev}" not in image_ref
+                            and not image_ref.endswith(f":{rev}")
+                            and not image_ref.endswith(rev)
+                            and f"fetchnow-api:{rev}" not in image_ref
                         ):
-                            if (
-                                not image_ref.endswith(rev)
-                                and f"fetchnow-api:{rev}" not in image_ref
-                            ):
-                                raise HealthError(
-                                    f"{svc_name} image reference {image_ref!r} "
-                                    f"missing tag :{rev}"
-                                )
+                            raise HealthError(
+                                f"{svc_name} image reference {image_ref!r} "
+                                f"missing tag :{rev}"
+                            )
                     elif svc_name == "web":
                         if (
                             f"fetchnow-web:{rev}" not in image_ref
@@ -570,14 +603,14 @@ def run_health(inp: HealthInput) -> HealthResult:
                             raise HealthError(
                                 f"web image {image_ref!r} missing tag :{rev}"
                             )
-                    elif svc_name == "gateway":
-                        if (
-                            f"fetchnow-gateway:{rev}" not in image_ref
-                            and not image_ref.endswith(f":{rev}")
-                        ):
-                            raise HealthError(
-                                f"gateway image {image_ref!r} missing tag :{rev}"
-                            )
+                    elif (
+                        svc_name == "gateway"
+                        and f"fetchnow-gateway:{rev}" not in image_ref
+                        and not image_ref.endswith(f":{rev}")
+                    ):
+                        raise HealthError(
+                            f"gateway image {image_ref!r} missing tag :{rev}"
+                        )
 
             if svc_name == "api":
                 api_image_id = image_id
@@ -612,7 +645,8 @@ def run_health(inp: HealthInput) -> HealthResult:
             http_results.append(result)
             if not result.ok:
                 raise HealthError(
-                    f"HTTP {path} failed after {result.attempts} attempts: {result.detail}"
+                    f"HTTP {path} failed after {result.attempts} attempts: "
+                    f"{result.detail}"
                 )
             messages.append(f"OK: HTTP {path} status=ok attempts={result.attempts}")
 

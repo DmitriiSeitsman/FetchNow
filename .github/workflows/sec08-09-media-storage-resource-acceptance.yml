@@ -1,0 +1,244 @@
+name: SEC-08/09 media storage/resource native acceptance
+
+# Disposable native gate for storage + resource budget corrective pass.
+# workflow_dispatch ONLY — never starts on push.
+# Does not authorize production migration, VEX/residual activation, or deploy.
+#
+# Overall PASS requires every required case PASS. Filesystem-only harness exit
+# 78 is not treated as a green gate. Infrastructure disk shortfall is BLOCKED.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit SHA that must match github.sha
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Exact ref/SHA gate (no commit-subject / Co-authored-by matching)
+        id: gate
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          echo "head_sha=${head_sha}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "expected=${EXPECTED_SHA}"
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "ref=${GITHUB_REF}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}"
+          allowed=false
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" \
+             && "${GITHUB_REF}" == "refs/heads/codex/security-sec-09-network-isolation" \
+             && "${head_sha}" == "${GITHUB_SHA}" \
+             && "${head_sha}" == "${EXPECTED_SHA}" ]]; then
+            allowed=true
+          fi
+          echo "allowed=${allowed}"
+          {
+            echo "allowed=${allowed}"
+            echo "head_sha=${head_sha}"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "${allowed}" != "true" ]]; then
+            echo "refusing: exact SHA/ref/event gate failed" >&2
+            exit 1
+          fi
+
+  native:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ needs.authorize.outputs.head_sha }}
+
+      - name: Confirm exact HEAD after checkout
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git status --porcelain | tee "$RUNNER_TEMP/git-status.txt"
+          test ! -s "$RUNNER_TEMP/git-status.txt"
+
+      - name: Host prerequisites (rootful Docker, cgroup v2/systemd, Landlock)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          uname -s | grep -qx 'Linux'
+          docker version
+          docker info --format '{{.CgroupDriver}} {{.CgroupVersion}}' | tee "$RUNNER_TEMP/docker-cgroup.txt"
+          grep -E 'systemd (2|v2)' "$RUNNER_TEMP/docker-cgroup.txt"
+          python3 - <<'PY'
+          import ctypes, ctypes.util, platform, sys
+          if platform.machine() not in {"x86_64", "amd64"}:
+              sys.exit("unsupported machine")
+          libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+          abi = libc.syscall(444, None, 0, 1)
+          print(f"landlock_abi={abi}")
+          if abi < 6:
+              raise SystemExit(f"Landlock ABI {abi} < 6")
+          PY
+          df -B1 / | tee "$RUNNER_TEMP/df-root.txt"
+          free -b | tee "$RUNNER_TEMP/free.txt"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv 0.12.19 (checksum-pinned)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          asset=uv-x86_64-unknown-linux-gnu.tar.gz
+          want=23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/astral-sh/uv/releases/download/0.12.19/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          uv_bin="$RUNNER_TEMP/${asset%.tar.gz}/uv"
+          test -x "$uv_bin"
+          # GITHUB_PATH applies to subsequent steps; use absolute path in this step.
+          echo "$RUNNER_TEMP/${asset%.tar.gz}" >> "$GITHUB_PATH"
+          "$uv_bin" --version | tee "$RUNNER_TEMP/uv-version.txt"
+          grep -q '0.12.19' "$RUNNER_TEMP/uv-version.txt"
+
+      - name: Create off-checkout venv
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          command -v uv
+          uv --version | grep -q '0.12.19'
+          uv venv "$RUNNER_TEMP/media-storage-venv" --python 3.12
+          "$RUNNER_TEMP/media-storage-venv/bin/python" -c "import sys; print(sys.version)"
+          case "$RUNNER_TEMP/media-storage-venv" in
+            "$GITHUB_WORKSPACE"*) echo "venv must be outside checkout" >&2; exit 1 ;;
+          esac
+
+      - name: Native media storage/resource acceptance (S1–S9)
+        id: accept
+        timeout-minutes: 150
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/media-storage-resource-evidence"
+          if [[ -e "$evidence_dir" ]]; then
+            echo "refusing pre-existing evidence directory: $evidence_dir" >&2
+            exit 1
+          fi
+          test -x "$RUNNER_TEMP/media-storage-venv/bin/python"
+          case "$RUNNER_TEMP/media-storage-venv" in
+            "$GITHUB_WORKSPACE"*) echo "venv must be outside checkout" >&2; exit 1 ;;
+          esac
+          # Root required for loop/mount, temporary /run slice, Landlock/cgroup.
+          # Do not use continue-on-error; NOT_RUN/BLOCKED/FAIL must stay non-zero.
+          # Do not treat filesystem-only harness exit 78 as PASS.
+          set +e
+          sudo --preserve-env=PATH \
+            env \
+              PYTHONPATH=scripts \
+              FETCHNOW_NATIVE_MEDIA_STORAGE_RESOURCE_ACCEPTANCE_EXECUTE=1 \
+            "$RUNNER_TEMP/media-storage-venv/bin/python" \
+            scripts/native_media_storage_resource_acceptance.py \
+            --evidence-dir "$evidence_dir"
+          rc=$?
+          set -e
+          echo "accept_rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "accept exit=$rc"
+          if [[ ! -f "$evidence_dir/result.json" ]]; then
+            mkdir -p "$evidence_dir"
+            printf '%s\n' '{"status":"FAIL","detail":"missing result.json"}' \
+              > "$evidence_dir/result.json"
+            echo "missing result.json" >&2
+            exit 1
+          fi
+          export ACCEPT_RC="$rc"
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "media-storage-resource-evidence"
+          data = json.loads((evidence / "result.json").read_text())
+          print(json.dumps({
+              "status": data.get("status"),
+              "case_counts": data.get("case_counts"),
+          }, indent=2))
+          status = data.get("status")
+          # Never invent PASS: require both status and orchestrator rc.
+          want = {"PASS": 0, "FAIL": 1, "NOT_RUN": 2, "BLOCKED": 2}.get(status)
+          rc = int(os.environ["ACCEPT_RC"])
+          if want is None or rc != want:
+              print(f"status/rc mismatch status={status!r} rc={rc}", file=sys.stderr)
+              sys.exit(1 if rc == 0 else rc)
+          sys.exit(rc)
+          PY
+
+      - name: Collect host-side logs
+        if: always()
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/media-storage-resource-evidence"
+          mkdir -p "$evidence_dir/host-logs"
+          docker version > "$evidence_dir/host-logs/docker-version.txt"
+          {
+            echo "event=${GITHUB_EVENT_NAME}"
+            echo "ref=${GITHUB_REF}"
+            echo "sha=${GITHUB_SHA}"
+            echo "attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "accept_rc=${{ steps.accept.outputs.accept_rc }}"
+          } > "$evidence_dir/host-logs/run-meta.txt"
+          # Recompute evidence hashes including host logs when result exists.
+          if [[ -f "$evidence_dir/result.json" ]]; then
+            python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "media-storage-resource-evidence"
+          manifest = {}
+          for path in sorted(evidence.rglob("*")):
+              if path.is_file() and path.name != "evidence_sha256.json":
+                  h = hashlib.sha256(path.read_bytes()).hexdigest()
+                  manifest[str(path.relative_to(evidence))] = h
+          (evidence / "evidence_sha256.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          # Include the manifest file itself.
+          manifest[str(Path("evidence_sha256.json"))] = hashlib.sha256(
+              (evidence / "evidence_sha256.json").read_bytes()
+          ).hexdigest()
+          (evidence / "evidence_sha256.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PY
+          fi
+
+      - name: Upload evidence (app-readable paths under RUNNER_TEMP)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-storage-resource-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/media-storage-resource-evidence
+          if-no-files-found: error
+          retention-days: 30

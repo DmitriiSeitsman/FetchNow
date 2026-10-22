@@ -21,8 +21,10 @@ from fetchnow_release.media_state import (  # noqa: E402
     parse_media_activation_state,
     write_media_activation_state,
 )
+from fetchnow_release.media_storage import (  # noqa: E402
+    disposable_test_storage_contract,
+)
 from fetchnow_release.resource_budget import disposable_test_budget  # noqa: E402
-
 
 REV = "a" * 40
 
@@ -56,6 +58,9 @@ def _on_raw(**overrides: object) -> dict:
         "resource_budget": budget,
         "slice_unit": "fetchnow-media-executor.slice",
         "denied_host": "127.0.0.1",
+        "storage_contract": disposable_test_storage_contract(
+            host_bind_root="/var/lib/fetchnow-test-media-storage"
+        ),
     }
     raw.update(overrides)
     return raw
@@ -66,6 +71,8 @@ def test_active_media_requires_valid_approved_budget() -> None:
     assert parsed.activation is True
     assert parsed.resource_budget is not None
     assert parsed.resource_budget["approved"] is True
+    assert parsed.storage_contract is not None
+    assert parsed.storage_contract["approved"] is True
 
     with pytest.raises(MediaStateError, match="resource_budget"):
         parse_media_activation_state(_on_raw(resource_budget=None))
@@ -84,6 +91,14 @@ def test_active_media_requires_valid_approved_budget() -> None:
     del malformed["aggregate_memory_max_bytes"]
     with pytest.raises(MediaStateError, match="resource_budget"):
         parse_media_activation_state(_on_raw(resource_budget=malformed))
+
+    with pytest.raises(MediaStateError, match="storage_contract"):
+        parse_media_activation_state(_on_raw(storage_contract=None))
+
+    missing_storage = _on_raw()
+    del missing_storage["storage_contract"]
+    with pytest.raises(MediaStateError, match="storage_contract"):
+        parse_media_activation_state(missing_storage)
 
 
 def test_inactive_media_allows_missing_budget_roundtrip(tmp_path: Path) -> None:
@@ -120,6 +135,7 @@ def test_on_health_expectation_requires_budget() -> None:
             media_image_ids=ids,
             denied_host="127.0.0.1",
             resource_budget=disposable_test_budget().to_dict(),
+            storage_contract=disposable_test_storage_contract(host_bind_root="/test/media"),
         )
     )
     assert ok.activation is True

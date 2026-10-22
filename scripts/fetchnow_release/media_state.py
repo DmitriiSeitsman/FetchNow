@@ -58,6 +58,7 @@ class MediaActivationState:
     resource_budget: dict[str, Any] | None = None
     slice_unit: str = "fetchnow-media-executor.slice"
     denied_host: str = ""
+    storage_contract: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class MediaActivationState:
             "resource_budget": self.resource_budget,
             "slice_unit": self.slice_unit,
             "denied_host": self.denied_host,
+            "storage_contract": self.storage_contract,
         }
 
 
@@ -178,6 +180,26 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
                 raise MediaStateError(
                     f"inactive resource_budget invalid: {exc}"
                 ) from exc
+    storage_raw = raw.get("storage_contract")
+    storage_stored: dict[str, Any] | None = None
+    if activation:
+        if storage_raw is None:
+            raise MediaStateError(
+                "activation requires storage_contract (dedicated media filesystem)"
+            )
+        if not isinstance(storage_raw, dict):
+            raise MediaStateError("storage_contract must be an object")
+        from .media_storage import MediaStorageError, parse_media_storage_contract
+
+        try:
+            storage_stored = parse_media_storage_contract(storage_raw).to_dict()
+        except MediaStorageError as exc:
+            raise MediaStateError(f"activation storage_contract invalid: {exc}") from exc
+    elif storage_raw is not None:
+        if not isinstance(storage_raw, dict):
+            raise MediaStateError("storage_contract must be an object when present")
+        storage_stored = dict(storage_raw)
+
     return MediaActivationState(
         schema_version=schema,
         activation=activation,
@@ -191,6 +213,7 @@ def parse_media_activation_state(raw: object) -> MediaActivationState:
         resource_budget=budget_stored,
         slice_unit=str(raw.get("slice_unit") or "fetchnow-media-executor.slice"),
         denied_host=str(raw.get("denied_host") or ""),
+        storage_contract=storage_stored,
     )
 
 

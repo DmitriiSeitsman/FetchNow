@@ -748,7 +748,12 @@ class DownloadExecutor:
                     DownloadErrorCode.MUXING_FAILED,
                     internal_reason=reason,
                 ) from None
-            except HandoffError:
+            except HandoffError as exc:
+                if exc.code == "storage_exhausted":
+                    raise DownloadError(
+                        DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                        internal_reason="EXECUTOR_STORAGE_EXHAUSTED",
+                    ) from None
                 raise DownloadError(
                     DownloadErrorCode.MUXING_FAILED,
                     internal_reason="EXECUTOR_INPUT_REJECTED",
@@ -837,7 +842,12 @@ class DownloadExecutor:
             dest = workspace.mux / f"artifact.{container}"
             try:
                 copy_regular(job_dir / OUTPUT_MUX, dest, max_bytes=max_bytes)
-            except HandoffError:
+            except HandoffError as exc:
+                if exc.code == "storage_exhausted":
+                    raise DownloadError(
+                        DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                        internal_reason="EXECUTOR_OUTPUT_STORAGE_EXHAUSTED",
+                    ) from None
                 raise DownloadError(
                     DownloadErrorCode.MUXED_OUTPUT_INVALID,
                     internal_reason="EXECUTOR_OUTPUT_REJECTED",
@@ -1039,7 +1049,12 @@ class DownloadExecutor:
                 DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
                 internal_reason=reason,
             )
-        except HandoffError:
+        except HandoffError as exc:
+            if exc.code == "storage_exhausted":
+                raise_download_error(
+                    DownloadErrorCode.DOWNLOAD_STORAGE_UNAVAILABLE,
+                    internal_reason="NET_EXECUTOR_STORAGE_EXHAUSTED",
+                )
             raise_download_error(
                 DownloadErrorCode.DOWNLOAD_TOOL_FAILED,
                 internal_reason="NET_EXECUTOR_HANDOFF",

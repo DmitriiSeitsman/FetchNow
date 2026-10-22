@@ -1776,6 +1776,7 @@ def _media_on_plan(rev: str):
         DEFAULT_NET_WORK_ROOT,
         MediaActivationPlan,
     )
+    from fetchnow_release.media_storage import disposable_test_storage_contract
     from fetchnow_release.resource_budget import disposable_test_budget
 
     media_ids = {
@@ -1804,6 +1805,9 @@ def _media_on_plan(rev: str):
         required_deny_ips=("169.254.169.254",),
         resource_budget=disposable_test_budget().to_dict(),
         denied_host="127.0.0.1",
+        storage_contract=disposable_test_storage_contract(
+            host_bind_root="/var/lib/fetchnow-test-media-storage"
+        ),
     )
     return plan, media_ids
 

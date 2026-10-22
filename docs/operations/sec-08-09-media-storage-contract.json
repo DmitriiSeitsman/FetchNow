@@ -1,0 +1,45 @@
+{
+  "schema": "fetchnow-media-storage-contract-proposal/v1",
+  "document_id": "fetchnow-media-storage-contract-20261016",
+  "approved": false,
+  "status": "OWNER_OPS_APPROVAL_PENDING",
+  "recorded_at_utc": "2026-10-16T10:00:00Z",
+  "backend": "host_managed_bind_filesystem",
+  "why_this_limits_media_writes": "A fixed-capacity dedicated filesystem returns ENOSPC/EDQUOT to media writers once full; bind mounts force worker tmp, executor-work, and media-net-work onto that FS so copies cannot spill onto the shared root ext4 used by PostgreSQL and neighbors. This does not stop Docker logs or other host writers from filling root.",
+  "activation_contract": {
+    "schema": "fetchnow-media-storage-contract/v1",
+    "approved": false,
+    "backend": "host_managed_bind_filesystem",
+    "capacity_bytes": 39728447488,
+    "host_bind_root": null,
+    "fs_uuid": null,
+    "source_device": null,
+    "fs_type": "ext4",
+    "require_dedicated_device": true,
+    "reject_root_fs": true,
+    "layout": {
+      "tmp": "tmp",
+      "executor": "executor",
+      "media_net": "media-net"
+    },
+    "notes": "Fill host_bind_root/fs_uuid/source_device only after host inventory. Do not invent device/UUID. approved remains false until owner/ops authorization. capacity_bytes is the calculated peak+reserve and must not be reduced silently."
+  },
+  "peak_breakdown": {
+    "max_artifact_bytes": 3221225472,
+    "peak_working_multiplier": 9,
+    "retained_artifact_headroom": 2,
+    "fs_reserve_bytes": 4294967296,
+    "capacity_bytes": 39728447488
+  },
+  "host_facts_still_required": [
+    "Whether a free disk/partition/LV of >= capacity_bytes exists on the target host",
+    "Exact device path and filesystem UUID after mkfs (operator-provisioned)",
+    "Mount point chosen for host_bind_root (must not be on root FS)",
+    "Confirmation Docker data-root remains on a separate volume from media FS"
+  ],
+  "authority_limits": {
+    "installed": false,
+    "mkfs_mount_authorized": false,
+    "production_ready": false
+  }
+}

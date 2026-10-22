@@ -40,7 +40,9 @@ services:
       MEDIA_EXECUTOR_SOCKET: /run/fetchnow-executor/ctrl/worker.sock
       MEDIA_EXECUTOR_WORK_ROOT: /var/lib/fetchnow/executor
     pids_limit: 128
-    mem_limit: 1024m
+    # Default aligned with unapproved budget proposal (768M). Activation
+    # media-settings.json overrides with the exact approved byte budget.
+    mem_limit: 768m
 
   worker:
     environment:

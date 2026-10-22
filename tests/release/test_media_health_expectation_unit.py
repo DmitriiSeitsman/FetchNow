@@ -22,6 +22,7 @@ from fetchnow_release.media_activation import (  # noqa: E402
     MEDIA_SIDECAR_START_ORDER,
     MediaActivationPlan,
 )
+from fetchnow_release.media_storage import disposable_test_storage_contract  # noqa: E402
 from fetchnow_release.resource_budget import disposable_test_budget  # noqa: E402
 from fetchnow_release.stabilize import StabilizeError, stabilize_full_health  # noqa: E402
 
@@ -67,6 +68,9 @@ def _active_plan() -> MediaActivationPlan:
         },
         required_deny_cidrs=("172.16.0.0/12",),
         required_deny_ips=("127.0.0.1",),
+        storage_contract=disposable_test_storage_contract(
+            host_bind_root="/var/lib/fetchnow-test-media-storage"
+        ),
         resource_budget=budget,
         slice_unit="fetchnow-test-media.slice",
         denied_host="127.0.0.1",

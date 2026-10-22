@@ -24,6 +24,9 @@ from fetchnow_release import media_prerequisites as prereq  # noqa: E402
 from fetchnow_release import media_rollout as media  # noqa: E402
 from fetchnow_release.bounded_subprocess import BoundedResult  # noqa: E402
 from fetchnow_release.docker_checks import compose_config_json  # noqa: E402
+from fetchnow_release.media_storage import (  # noqa: E402
+    disposable_test_storage_contract,
+)
 from fetchnow_release.override import write_images_override  # noqa: E402
 from fetchnow_release.resource_budget import disposable_test_budget  # noqa: E402
 
@@ -51,6 +54,9 @@ def active_plan():
         resource_budget=disposable_test_budget().to_dict(),
         slice_unit="fetchnow-test-media.slice",
         denied_host="195.209.215.87",
+        storage_contract=disposable_test_storage_contract(
+            host_bind_root="/var/lib/fetchnow-test-media-storage"
+        ),
     )
 
 
@@ -77,7 +83,8 @@ def test_immutable_override_last_and_settings_explicit(tmp_path):
         "media-settings.json",
         "images.yaml",
     ]
-    payload = json.loads(result[-2].read_text())["services"]
+    settings = json.loads(result[-2].read_text())
+    payload = settings["services"]
     assert payload["worker"]["environment"] == plan.executor_settings
     for service, memory in plan.resource_budget["per_container_memory_bytes"].items():
         memory_str = str(memory)
@@ -94,6 +101,10 @@ def test_immutable_override_last_and_settings_explicit(tmp_path):
         assert payload[service]["cgroup_parent"] == plan.slice_unit
     assert payload["media-executor"]["environment"]["MEDIA_EXECUTOR_MAX_JOBS"] == "1"
     assert "MEDIA_EXECUTOR_MAX_JOBS" not in payload["egress-proxy"]
+    volumes = settings["volumes"]
+    assert volumes["tmp"]["driver_opts"]["device"].endswith("/tmp")
+    assert volumes["executor-work"]["driver_opts"]["device"].endswith("/executor")
+    assert volumes["media-net-work"]["driver_opts"]["device"].endswith("/media-net")
     assert (
         activation.compose_for_media_plan(release, base_compose=result, plan=plan)
         == result
@@ -231,10 +242,11 @@ def test_actual_ancestor_limits_must_match_budget(tmp_path, monkeypatch):
     directory.mkdir()
     budget = disposable_test_budget()
     (directory / "memory.max").write_text(str(budget.aggregate_memory_max_bytes))
+    (directory / "memory.swap.max").write_text("0")
     (directory / "pids.max").write_text(str(budget.aggregate_tasks_max))
     (directory / "cpu.max").write_text("50000 100000")
     prereq.assert_slice_budget("/test.slice", budget)
-    for file in ("memory.max", "pids.max", "cpu.max"):
+    for file in ("memory.max", "memory.swap.max", "pids.max", "cpu.max"):
         original = (directory / file).read_text()
         (directory / file).write_text("max 100000" if file == "cpu.max" else "max")
         with pytest.raises(prereq.MediaPrerequisiteError):
@@ -278,7 +290,9 @@ def test_docker_version_prevents_unsupported_writable_cgroups(monkeypatch):
         prereq.assert_rootful_docker_writable_cgroups()
 
 
-@pytest.mark.parametrize("bad", [None, "memory", "scope", "namespace", "concurrency"])
+@pytest.mark.parametrize(
+    "bad", [None, "memory", "swap", "scope", "namespace", "concurrency"]
+)
 def test_running_budget_validates_real_container_contract(monkeypatch, bad):
     budget = disposable_test_budget()
     monkeypatch.setattr(
@@ -315,6 +329,8 @@ def test_running_budget_validates_real_container_contract(monkeypatch, bad):
             "HostConfig": {
                 "Memory": budget.per_container_memory_bytes[service]
                 * (2 if bad == "memory" else 1),
+                "MemorySwap": budget.per_container_memory_bytes[service]
+                * (2 if bad == "swap" else 1),
                 "CgroupParent": "test.slice",
                 "CgroupnsMode": "host" if bad == "namespace" else "private",
                 "CapDrop": ["ALL"],
@@ -490,7 +506,8 @@ def test_compose_config_validation_failure_prevents_mutation(monkeypatch, tmp_pa
     def boom(**_kwargs):
         calls.append("compose-validate-fail")
         raise activation.MediaActivationError(
-            "media_compose_validate: compose config failed: limits.memory must be a string"
+            "media_compose_validate: compose config failed: "
+            "limits.memory must be a string"
         )
 
     monkeypatch.setattr(rollout, "assert_media_compose_config", boom)
@@ -538,8 +555,9 @@ def test_failed_bootstrap_removes_sidecars_and_retracts_owned_current(
     monkeypatch, tmp_path
 ):
     from dataclasses import replace
+
     from fetchnow_release import bootstrap_cleanup
-    from fetchnow_release.current_state import write_current_state, current_path
+    from fetchnow_release.current_state import current_path, write_current_state
 
     rollout, current, inp, calls = patch_transaction(monkeypatch, tmp_path)
     monkeypatch.setattr(rollout, "load_and_resolve_current_state", lambda *a, **k: None)
@@ -580,7 +598,7 @@ def test_failed_bootstrap_removes_sidecars_and_retracts_owned_current(
 
 
 def test_failed_bootstrap_never_retracts_foreign_authority(monkeypatch, tmp_path):
-    from fetchnow_release.current_state import write_current_state, current_path
+    from fetchnow_release.current_state import current_path, write_current_state
 
     rollout, current, inp, calls = patch_transaction(monkeypatch, tmp_path)
     write_current_state(inp.deploy_root, current)
@@ -848,7 +866,16 @@ def _disposable_env(tmp_path: Path) -> Path:
     return env
 
 
-def test_real_generated_on_compose_config_accepts_string_memory(tmp_path: Path) -> None:
+def test_real_generated_on_compose_config_accepts_string_memory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fetchnow_release import media_storage
+
+    monkeypatch.setattr(
+        media_storage,
+        "_storage_probe",
+        lambda argv: BoundedResult(tuple(argv), 0, b"", b""),
+    )
     compose_version = _require_compose_cli()
     release, source = _real_release_tree(tmp_path)
     env = _disposable_env(tmp_path)
@@ -892,7 +919,16 @@ def test_real_generated_on_compose_config_accepts_string_memory(tmp_path: Path) 
     print(f"compose_version={compose_version}")
 
 
-def test_real_generated_off_and_previous_on_compose_config(tmp_path: Path) -> None:
+def test_real_generated_off_and_previous_on_compose_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fetchnow_release import media_storage
+
+    monkeypatch.setattr(
+        media_storage,
+        "_storage_probe",
+        lambda argv: BoundedResult(tuple(argv), 0, b"", b""),
+    )
     _require_compose_cli()
     release, source = _real_release_tree(tmp_path)
     env = _disposable_env(tmp_path)

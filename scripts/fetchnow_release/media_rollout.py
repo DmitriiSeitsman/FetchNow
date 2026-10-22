@@ -37,6 +37,7 @@ from .media_state import (
     load_media_activation_state,
     write_media_activation_state,
 )
+from .media_storage import assert_running_storage_mounts, parse_media_storage_contract
 from .release_mode import RELEASE_MODE_CANONICAL, RELEASE_MODE_MEDIA
 from .resource_budget import ResourceBudgetError, parse_resource_budget
 
@@ -56,6 +57,7 @@ def resolve_media_plan_for_rollout(
     landlock_probe_command: list[str] | None = None,
     slice_unit: str = "fetchnow-media-executor.slice",
     denied_host: str = "",
+    storage_contract_raw: object | None = None,
 ) -> tuple[MediaActivationPlan, dict[str, Any] | None]:
     """Build activation or source-only plan; fail closed on prereq/deny gaps."""
     if not media_activation:
@@ -75,11 +77,18 @@ def resolve_media_plan_for_rollout(
         raise MediaRolloutError(
             "media activation requires an explicit approved resource_budget"
         )
+    if storage_contract_raw is None:
+        raise MediaRolloutError(
+            "media activation requires an explicit approved media_storage_contract "
+            "(dedicated filesystem boundary)"
+        )
     try:
         report = check_media_prerequisites(
             budget_raw=budget_raw,
             slice_unit=slice_unit,
             landlock_probe_command=landlock_probe_command,
+            storage_contract_raw=storage_contract_raw,
+            require_storage=True,
         )
     except (MediaPrerequisiteError, ResourceBudgetError) as exc:
         raise MediaRolloutError(str(exc)) from exc
@@ -109,11 +118,14 @@ def resolve_media_plan_for_rollout(
     # We intentionally do not read or rewrite MEDIA_MUXING_ENABLED.
     if not denied_host:
         raise MediaRolloutError("media activation requires a denied_host proof target")
+    if report.storage is None:
+        raise MediaRolloutError("media storage contract unproven")
     plan = replace(
         plan,
         resource_budget=report.budget.to_dict(),
         slice_unit=slice_unit,
         denied_host=denied_host,
+        storage_contract=report.storage.to_dict(),
     )
     return plan, plan.to_dict()
 
@@ -145,6 +157,7 @@ def previous_media_for_journal(deploy_root: Path) -> dict[str, Any] | None:
         "resource_budget": state.resource_budget,
         "slice_unit": state.slice_unit,
         "denied_host": state.denied_host,
+        "storage_contract": state.storage_contract,
     }
 
 
@@ -165,7 +178,7 @@ def journal_media_block(
         )
         block["previous_overlays"] = list(previous.get("overlays") or [])
         block["previous_profiles"] = list(previous.get("profiles") or [])
-        for key in ("resource_budget", "slice_unit", "denied_host"):
+        for key in ("resource_budget", "slice_unit", "denied_host", "storage_contract"):
             block["previous_" + key] = previous.get(key)
     return block
 
@@ -240,6 +253,14 @@ def activate_media_before_worker(
         slice_unit=plan.slice_unit,
     )
 
+    assert_running_storage_mounts(
+        project_name=project_name,
+        env_file=env_file,
+        compose_files=compose_files,
+        contract=parse_media_storage_contract(plan.storage_contract),
+        sidecars_only=True,
+    )
+
     # Sidecar protocol/proxy proof before worker flags ON. Worker flags are
     # checked after app-tier activation (expect_flags_enabled=True then).
     health = run_media_health(
@@ -287,6 +308,7 @@ def commit_media_state(
             resource_budget=plan.resource_budget,
             slice_unit=plan.slice_unit,
             denied_host=plan.denied_host,
+            storage_contract=plan.storage_contract,
         ),
     )
 
@@ -360,8 +382,13 @@ def restore_previous_media(
 
     prev_profiles = tuple((plan_media or {}).get("previous_profiles") or ())
     previous = media_plan_from_journal(plan_media or {}, previous=True)
+    # Restore previous ON authority/settings/images only. Never format/unmount
+    # the host media filesystem as part of transactional rollback.
     check_media_prerequisites(
-        budget_raw=previous.resource_budget, slice_unit=previous.slice_unit
+        budget_raw=previous.resource_budget,
+        slice_unit=previous.slice_unit,
+        storage_contract_raw=previous.storage_contract,
+        require_storage=previous.storage_contract is not None,
     )
     compose_files = _compose_and_validate_media_plan(
         previous_release,
@@ -419,6 +446,7 @@ def media_plan_from_journal(
                     "resource_budget",
                     "slice_unit",
                     "denied_host",
+                    "storage_contract",
                 )
             },
         }
@@ -438,6 +466,9 @@ def media_plan_from_journal(
         resource_budget=budget.to_dict(),
         slice_unit=state.slice_unit,
         denied_host=state.denied_host,
+        storage_contract=(
+            dict(state.storage_contract) if state.storage_contract is not None else None
+        ),
     )
 
 
@@ -461,7 +492,10 @@ def verify_media_plan(
         )
         return
     check_media_prerequisites(
-        budget_raw=plan.resource_budget, slice_unit=plan.slice_unit
+        budget_raw=plan.resource_budget,
+        slice_unit=plan.slice_unit,
+        storage_contract_raw=plan.storage_contract,
+        require_storage=plan.storage_contract is not None,
     )
     assert_running_media_budget(
         project_name=project_name,
@@ -470,6 +504,12 @@ def verify_media_plan(
         cwd=cwd,
         budget=parse_resource_budget(plan.resource_budget),
         slice_unit=plan.slice_unit,
+    )
+    assert_running_storage_mounts(
+        project_name=project_name,
+        env_file=env_file,
+        compose_files=compose_files,
+        contract=parse_media_storage_contract(plan.storage_contract),
     )
     env = load_env_file(env_file)
     assert_deny_coverage(

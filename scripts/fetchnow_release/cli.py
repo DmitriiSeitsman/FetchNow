@@ -1,4 +1,4 @@
-"""CLI for FetchNow release preflight, health, prepare, verify & rollout (PRD1C1–C3A)."""
+"""CLI for FetchNow release preflight, prepare, health and rollout."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from .config_rollout import ConfigRolloutInput, run_config_rollout
 from .deploy_plan import DeployPlanInput, emit_deploy_plan, run_deploy_plan
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
-from .preflight import PreflightInput, run_preflight
-from .prepare import PrepareInput, prepare_release
 from .migrate import MigrationInput, run_migration
 from .migration_recover import MigrationRecoverInput, recover_migration
+from .preflight import PreflightInput, run_preflight
+from .prepare import PrepareInput, prepare_release
 from .recover import RecoverInput, recover_deployment
 from .rollout import RolloutInput, rollout_release
 from .verify_release import verify_prepared_release
@@ -29,10 +29,7 @@ def _compose_files(args: argparse.Namespace, repo: Path) -> tuple[Path, ...]:
     files: list[Path] = []
     for item in args.compose_files:
         path = Path(item)
-        if not path.is_absolute():
-            path = (repo / path).resolve()
-        else:
-            path = path.resolve()
+        path = (repo / path).resolve() if not path.is_absolute() else path.resolve()
         if not path.is_file():
             raise SystemExit(f"ERROR: compose file not found: {path}")
         files.append(path)
@@ -175,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to approved resource_budget JSON (required with --media-activation)",
     )
     roll.add_argument(
+        "--media-storage-json",
+        type=Path,
+        default=None,
+        help="Approved storage contract JSON (required with --media-activation)",
+    )
+    roll.add_argument(
         "--required-deny-cidr",
         action="append",
         default=[],
@@ -191,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     roll.add_argument(
         "--media-denied-host",
         default="",
-        help="Host used for proxy deny proof CONNECT (required with --media-activation)",
+        help="Proxy deny proof host (required with --media-activation)",
     )
 
     config_roll = sub.add_parser(
@@ -294,6 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Dispatch branches return distinct result dataclasses. Each assignment is
+    # narrowed to its concrete type below, rather than inferred from branch one.
+    result: object
     parser = build_parser()
     args = parser.parse_args(argv)
     repo = (args.repo_root or _repo_root()).resolve()
@@ -420,6 +426,12 @@ def main(argv: list[str] | None = None) -> int:
 
             budget_path = args.media_budget_json.expanduser().resolve()
             budget = json.loads(budget_path.read_text(encoding="utf-8"))
+        storage = None
+        if args.media_storage_json is not None:
+            import json
+
+            storage_path = args.media_storage_json.expanduser().resolve()
+            storage = json.loads(storage_path.read_text(encoding="utf-8"))
         result = rollout_release(
             RolloutInput(
                 project_name=args.project_name,
@@ -432,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
                 wait_lock=bool(args.wait_lock),
                 media_activation=bool(args.media_activation),
                 resource_budget=budget,
+                media_storage_contract=storage,
                 required_deny_cidrs=tuple(args.required_deny_cidrs or ()),
                 required_deny_ips=tuple(args.required_deny_ips or ()),
                 media_denied_host=str(args.media_denied_host or ""),

@@ -6,12 +6,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .c2_constants import SOURCE_DIRNAME
+from .c2_constants import MEDIA_BUILD_SERVICES, SOURCE_DIRNAME
 from .journal_io import atomic_write_text
 from .manifest import ReleaseManifest
 from .media_state import validate_executor_settings
 from .release_mode import (
-    MEDIA_BUILD_SERVICES,
     RELEASE_MODE_MEDIA,
     ReleaseModeError,
     parse_release_mode,
@@ -61,6 +60,7 @@ class MediaActivationPlan:
     resource_budget: dict[str, object] | None = None
     slice_unit: str = "fetchnow-media-executor.slice"
     denied_host: str = ""
+    storage_contract: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -75,6 +75,7 @@ class MediaActivationPlan:
             "resource_budget": self.resource_budget,
             "slice_unit": self.slice_unit,
             "denied_host": self.denied_host,
+            "storage_contract": self.storage_contract,
         }
 
 
@@ -205,9 +206,16 @@ def compose_memory_byte_string(memory_bytes: int) -> str:
 
 def write_media_settings_override(directory: Path, plan: MediaActivationPlan) -> Path:
     """Explicit transaction settings; JSON is a YAML subset, no env mutation."""
+    from .media_storage import (
+        MediaStorageError,
+        compose_bind_volume_specs,
+        parse_media_storage_contract,
+    )
+
     services: dict[str, object] = {
         "worker": {"environment": validate_executor_settings(plan.executor_settings)}
     }
+    volumes: dict[str, object] | None = None
     if plan.activation:
         budget = parse_resource_budget(plan.resource_budget)
         for service, memory in budget.per_container_memory_bytes.items():
@@ -219,6 +227,7 @@ def write_media_settings_override(directory: Path, plan: MediaActivationPlan) ->
             pids = MEDIA_SIDECAR_PIDS_LIMIT[service]
             config: dict[str, object] = {
                 "mem_limit": memory_str,
+                "memswap_limit": memory_str,
                 "pids_limit": pids,
                 "cgroup_parent": plan.slice_unit,
                 "deploy": {
@@ -235,11 +244,21 @@ def write_media_settings_override(directory: Path, plan: MediaActivationPlan) ->
                     "MEDIA_EXECUTOR_MAX_JOBS": str(budget.concurrency)
                 }
             services[service] = config
+        if plan.storage_contract is None:
+            raise MediaActivationError(
+                "media activation requires storage_contract for bind-mounted media FS"
+            )
+        try:
+            storage = parse_media_storage_contract(plan.storage_contract)
+        except MediaStorageError as exc:
+            raise MediaActivationError(str(exc)) from exc
+        volumes = compose_bind_volume_specs(storage)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "media-settings.json"
-    atomic_write_text(
-        path, json.dumps({"services": services}, sort_keys=True) + "\n", mode=0o600
-    )
+    payload: dict[str, object] = {"services": services}
+    if volumes is not None:
+        payload["volumes"] = volumes
+    atomic_write_text(path, json.dumps(payload, sort_keys=True) + "\n", mode=0o600)
     return path
 
 
@@ -312,6 +331,18 @@ def assert_media_compose_config(
         ) from exc
     if not plan.activation:
         return
+    from .media_storage import (
+        MediaStorageError,
+        assert_rendered_storage_volumes,
+        parse_media_storage_contract,
+    )
+
+    try:
+        assert_rendered_storage_volumes(
+            rendered, parse_media_storage_contract(plan.storage_contract)
+        )
+    except MediaStorageError as exc:
+        raise MediaActivationError(f"{phase}: {exc}") from exc
     services = rendered.get("services")
     if not isinstance(services, dict):
         raise MediaActivationError(f"{phase}: compose config missing services")

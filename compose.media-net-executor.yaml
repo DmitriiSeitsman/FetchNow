@@ -41,6 +41,9 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 64
+    # Must share the media aggregate slice with both executors.
+    cgroup_parent: fetchnow-media-executor.slice
+    # Default aligned with unapproved budget proposal (256M).
     mem_limit: 256m
     tmpfs:
       - /tmp:mode=1777,size=16m
@@ -83,7 +86,8 @@ services:
       MEDIA_NET_YTDLP_PATH: /opt/venv/bin/yt-dlp
       MEDIA_NET_PROXY_URL: http://egress-proxy:8888
     pids_limit: 128
-    mem_limit: 1536m
+    # Default aligned with unapproved budget proposal (1152M).
+    mem_limit: 1152m
     depends_on:
       - egress-proxy
 

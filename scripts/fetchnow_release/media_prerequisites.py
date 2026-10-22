@@ -12,8 +12,10 @@ import os
 import platform
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .bounded_subprocess import (
     BoundedCancelledError,
@@ -21,6 +23,12 @@ from .bounded_subprocess import (
     BoundedTimeoutError,
     OutputLimitExceededError,
     run_docker_probe,
+)
+from .media_storage import (
+    MediaStorageContract,
+    MediaStorageError,
+    assert_media_storage_ready,
+    parse_media_storage_contract,
 )
 from .redact import redact
 from .resource_budget import ResourceBudget, ResourceBudgetError, parse_resource_budget
@@ -45,6 +53,7 @@ class MediaPrerequisiteReport:
     control_group: str
     budget: ResourceBudget
     messages: tuple[str, ...]
+    storage: MediaStorageContract | None = None
 
 
 def _probe(argv: list[str]) -> BoundedResult:
@@ -233,16 +242,18 @@ def assert_slice_budget(control_group: str, budget: ResourceBudget) -> None:
     try:
         memory = int((path / "memory.max").read_text().strip())
         tasks = int((path / "pids.max").read_text().strip())
+        swap = int((path / "memory.swap.max").read_text().strip())
         quota, period = (path / "cpu.max").read_text().split()
         cpu = int(quota) * 1000 // int(period)
     except (OSError, ValueError, ZeroDivisionError) as exc:
         raise MediaPrerequisiteError(
             "finite memory/cpu/tasks ancestor limits unproven"
         ) from exc
-    if (memory, cpu, tasks) != (
+    if (memory, cpu, tasks, swap) != (
         budget.aggregate_memory_max_bytes,
         budget.aggregate_cpu_quota_milli,
         budget.aggregate_tasks_max,
+        budget.memory_swap_max_bytes,
     ):
         raise MediaPrerequisiteError(
             "actual slice limits do not match the approved budget"
@@ -275,6 +286,12 @@ def check_media_prerequisites(
     landlock_probe_command: list[str] | None = None,
     skip_landlock: bool = False,
     scope_control_groups: tuple[str, ...] | None = None,
+    storage_contract_raw: object | None = None,
+    # Activation/rollout must pass require_storage=True. Unit tests that only
+    # exercise slice/Landlock may leave this false.
+    require_storage: bool = False,
+    storage_findmnt: Callable[..., Any] | None = None,
+    storage_statfs: Callable[..., Any] | None = None,
 ) -> MediaPrerequisiteReport:
     """Fail-closed prerequisite gate for explicit media activation."""
     messages: list[str] = []
@@ -282,6 +299,25 @@ def check_media_prerequisites(
         budget = parse_resource_budget(budget_raw)
     except ResourceBudgetError as exc:
         raise MediaPrerequisiteError(str(exc)) from exc
+
+    storage: MediaStorageContract | None = None
+    if require_storage:
+        if storage_contract_raw is None:
+            raise MediaPrerequisiteError(
+                "media_storage_contract required for media activation "
+                "(dedicated filesystem boundary NOT_PROVEN)"
+            )
+        try:
+            storage = parse_media_storage_contract(storage_contract_raw)
+            kwargs: dict[str, Any] = {}
+            if storage_findmnt is not None:
+                kwargs["findmnt"] = storage_findmnt
+            if storage_statfs is not None:
+                kwargs["statfs"] = storage_statfs
+            messages.extend(assert_media_storage_ready(storage, **kwargs))
+        except MediaStorageError as exc:
+            raise MediaPrerequisiteError(str(exc)) from exc
+
     rootless, driver, version = assert_rootful_docker_writable_cgroups()
     messages.append(
         f"OK: docker rootful cgroup_driver={driver} cgroup_version={version}"
@@ -316,6 +352,7 @@ def check_media_prerequisites(
         control_group=control_group,
         budget=budget,
         messages=tuple(messages),
+        storage=storage,
     )
 
 
@@ -347,6 +384,7 @@ def assert_running_media_budget(
                 result.returncode != 0
                 or not state["Running"]
                 or host["Memory"] != memory
+                or host.get("MemorySwap") != memory
                 or host["CgroupParent"] != slice_unit
             ):
                 raise ValueError("container limits/parent mismatch")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -11,6 +12,10 @@ class HandoffError(Exception):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _storage_exhausted(exc: OSError) -> bool:
+    return exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 
 
 def _open_regular(path: Path, *, max_bytes: int) -> tuple[int, int]:
@@ -51,6 +56,8 @@ def copy_regular(source: Path, dest: Path, *, max_bytes: int) -> int:
         out = os.open(dest, out_flags, 0o644)
     except OSError as exc:
         os.close(fd)
+        if _storage_exhausted(exc):
+            raise HandoffError("storage_exhausted") from exc
         raise HandoffError("create_failed") from exc
     try:
         remaining = size
@@ -60,7 +67,12 @@ def copy_regular(source: Path, dest: Path, *, max_bytes: int) -> int:
                 raise HandoffError("short_read")
             view = memoryview(block)
             while view:
-                written = os.write(out, view)
+                try:
+                    written = os.write(out, view)
+                except OSError as exc:
+                    if _storage_exhausted(exc):
+                        raise HandoffError("storage_exhausted") from exc
+                    raise
                 if written <= 0:
                     raise HandoffError("short_write")
                 view = view[written:]

@@ -1,0 +1,88 @@
+{
+  "schema": "fetchnow-media-resource-budget-proposal/v1",
+  "document_id": "fetchnow-media-resource-budget-proposal-20261016",
+  "approved": false,
+  "status": "OWNER_APPROVAL_PENDING",
+  "recorded_at_utc": "2026-10-16T10:00:00Z",
+  "supersedes": "fetchnow-media-resource-budget-proposal-20261015",
+  "host_context": {
+    "inventory_utc": "2026-10-15T20:22:07Z",
+    "total_ram_gib_approx": 15.61,
+    "available_ram_gib_snapshot_approx": 13.93,
+    "swap": "absent_at_snapshot",
+    "note": "Idle RAM snapshot is not peak-load approval and does not authorize activation."
+  },
+  "existing_overlay_memory_limits_gib": {
+    "api": 0.375,
+    "worker": 1.0,
+    "delivery": 0.375,
+    "web": 0.0625,
+    "gateway": 0.0625,
+    "postgres_declared": 0.5,
+    "sum_app_facing_approx_gib": 2.375,
+    "note": "App-facing deploy limits remain outside the media slice."
+  },
+  "recommended_budget": {
+    "approved": false,
+    "aggregate_slice_name": "fetchnow-media-executor.slice",
+    "aggregate_memory_max_bytes": 2281701376,
+    "aggregate_memory_max_human": "2176M",
+    "aggregate_cpu_quota_milli": 1000,
+    "aggregate_cpu_quota_human": "100%",
+    "aggregate_tasks_max": 512,
+    "memory_swap_max_bytes": 0,
+    "per_container_memory_bytes": {
+      "media-executor": 805306368,
+      "media-net-executor": 1207959552,
+      "egress-proxy": 268435456
+    },
+    "per_container_memory_human": {
+      "media-executor": "768M",
+      "media-net-executor": "1152M",
+      "egress-proxy": "256M"
+    },
+    "concurrency": 1,
+    "shared_ceiling": false,
+    "notes": "No shared overcommit: aggregate MemoryMax equals sum of the three per-container hard limits (768+1152+256=2176M). MEDIA_EXECUTOR_MAX_JOBS=concurrency is enforced per executor process by release settings + runtime reservation; offline and network executors can still run simultaneously, so the aggregate must cover both plus egress-proxy. Worker retains its own 1024M deploy limit outside this slice. OWNER APPROVAL PENDING / NOT INSTALLED."
+  },
+  "disk_budget": {
+    "approved": false,
+    "contract_document_id": "fetchnow-media-storage-contract-20261016",
+    "capacity_bytes": 39728447488,
+    "capacity_human": "37 GiB (exact 39728447488)",
+    "max_artifact_bytes": 3221225472,
+    "peak_model": {
+      "media_net_active": 3221225472,
+      "worker_tree_v_a_out": 9663676416,
+      "offline_executor_tree": 9663676416,
+      "handoff_amplification": 6442450944,
+      "retained_published_x2": 6442450944,
+      "fs_reserve": 4294967296
+    },
+    "notes": "Single dedicated host filesystem for tmp+executor+media-net. Capacity equals calculated peak+reserve; not free-disk, max_bytes, or post-reap reject."
+  },
+  "concurrency_enforcement": {
+    "product_download_concurrency": "MEDIA_DOWNLOAD_CONCURRENCY exactly 1 (Settings)",
+    "executor_max_jobs": "MEDIA_EXECUTOR_MAX_JOBS set from budget.concurrency on media-executor and media-net-executor; asserted by assert_running_media_budget; enforced in ExecutorServer reservation",
+    "does_not_serialize_offline_vs_network": true,
+    "implication": "Memory and disk peaks assume both executors may be busy at once."
+  },
+  "egress_proxy_slice_membership": {
+    "required": true,
+    "static_overlay_cgroup_parent": "fetchnow-media-executor.slice",
+    "generated_settings_cgroup_parent": "plan.slice_unit for all three budgeted services",
+    "post_start_proof": "assert_running_media_budget requires HostConfig.CgroupParent == slice_unit for egress-proxy"
+  },
+  "rationale": [
+    "Removes the prior shared_ceiling overcommit that assumed concurrency=1 prevents simultaneous offline+network peaks.",
+    "Aligns slice template, compose overlay mem_limit defaults, generated media-settings, and this proposal on one numeric contract.",
+    "CPUQuota 100% and TasksMax 512 leave headroom for API/worker/postgres while allowing both executors under the slice.",
+    "Disk capacity is derived from MAX_ARTIFACT_BYTES=3GiB with handoff amplification and retained publish copies; product limits/retention are not reduced."
+  ],
+  "authority_limits": {
+    "installed": false,
+    "production_numeric_budget_approved": false,
+    "slice_unit_modified_in_repo_as_installed_truth": false,
+    "deploy_authorized": false
+  }
+}

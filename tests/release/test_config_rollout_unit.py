@@ -1057,6 +1057,7 @@ def _write_on_media_authority(deploy: Path) -> None:
         MediaActivationState,
         write_media_activation_state,
     )
+    from fetchnow_release.media_storage import disposable_test_storage_contract
     from fetchnow_release.resource_budget import disposable_test_budget
 
     (deploy / "state").mkdir(parents=True, exist_ok=True)
@@ -1088,6 +1089,9 @@ def _write_on_media_authority(deploy: Path) -> None:
             updated_at_utc="2026-01-01T00:00:00Z",
             resource_budget=disposable_test_budget().to_dict(),
             denied_host="127.0.0.1",
+            storage_contract=disposable_test_storage_contract(
+                host_bind_root="/var/lib/fetchnow-test-media-storage"
+            ),
         ),
     )
 
