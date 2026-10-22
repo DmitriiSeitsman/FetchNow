@@ -40,3 +40,44 @@ gh workflow run sec08-09-media-storage-resource-acceptance.yml \
 ```
 
 Exact `expected_sha` must equal the checked-out HEAD. No push trigger. No second remote run after the result of one authorized dispatch.
+
+## Local harness correction after run 39841546437
+
+Run 39841546437 remains FAIL (`KeyError: 'id'` after prepare); S4–S8
+remain NOT_RUN for that historical artifact. No new native run is implied.
+
+- Prepared image identities now come from the canonical `load_manifest` and
+  typed `ImageRecord.image_id`. The complete media manifest, revision and
+  linux/amd64 platform are validated before any identities are recorded.
+- S5 has a separate disposable OFF project, database, env and deployment root.
+  Its legacy volume and sentinel are retained until scoped cleanup stops its
+  containers. The positive fixture starts with new contract-backed bind
+  volumes; this is test setup, NOT a production data migration mechanism.
+- S4/S5 require the actual expected domain reason. An arbitrary exception,
+  unrelated refusal, missing JSON field or unresolved journal is not PASS.
+  The S4 evidence field no longer collides with `record(..., detail=...)`.
+- S7 runs fixture generation as worker 10001, then MP4 **and** WebM mux/probe
+  through the production UDS executor. There is no optional WebM success.
+  The network image has no ffprobe: its separate check is explicitly a local
+  tool-uid write/read on the contract filesystem, **not** yt-dlp/egress or
+  Landlock acceptance. Network policy retains its separate acceptance gates.
+- S8 prepares a distinct revision B and uses the existing one-shot gateway
+  injection. PASS requires a reached injection, delegated real rollback and
+  `rolled_back`; idempotency or an unrelated failed rollout cannot pass.
+  All previous operational media-authority fields must be restored; its
+  publication timestamp may change.
+- Cleanup validates and handles both recorded disposable projects, stopping
+  their containers before deleting their volumes. Failed inventory/cleanup
+  cannot be recorded as successful S9.
+
+New offline regressions exercise the real manifest serializer/parser and
+orchestration with Docker/release transports stubbed. These tests do not
+prove native mounts, UDS peer credentials, Landlock, cgroups or rollback on
+live Docker. No commit/push/dispatch/SSH/production installation is authorized
+by this local corrective pass. Production numeric approval and effective
+residual activation are unchanged; READY FOR ROLLOUT remains NO.
+
+Local verification for this correction: `tests/release` + `tests/pg_backup`
+**767 passed** (fresh); Ruff on the five touched Python files and mypy on
+the three harness/driver modules passed; `git diff --check` passed.
+Backend broad/native/Trivy were not rerun; there are no new native image IDs.

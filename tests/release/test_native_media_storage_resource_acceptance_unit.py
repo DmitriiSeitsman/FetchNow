@@ -8,14 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "native_media_storage_resource_acceptance.py"
 HARNESS = ROOT / "scripts" / "native_media_storage_acceptance_harness.sh"
 WORKFLOW = (
-    ROOT
-    / ".github"
-    / "workflows"
-    / "sec08-09-media-storage-resource-acceptance.yml"
+    ROOT / ".github" / "workflows" / "sec08-09-media-storage-resource-acceptance.yml"
 )
 
 
@@ -63,9 +62,7 @@ def test_filesystem_harness_default_still_exits_78():
 
 def test_overall_status_requires_all_pass():
     mod = _load_mod()
-    cases = [
-        mod.CaseResult(name=n, status="PASS") for n in mod.REQUIRED_CASES[:-1]
-    ]
+    cases = [mod.CaseResult(name=n, status="PASS") for n in mod.REQUIRED_CASES[:-1]]
     cases.append(mod.CaseResult(name=mod.REQUIRED_CASES[-1], status="BLOCKED"))
     assert mod.overall_status(cases) == "BLOCKED"
     cases[-1] = mod.CaseResult(name=mod.REQUIRED_CASES[-1], status="NOT_RUN")
@@ -79,15 +76,11 @@ def test_overall_status_requires_all_pass():
 def test_mark_remaining_and_completeness():
     mod = _load_mod()
     recorded = [mod.CaseResult(name="S1_environment_identity", status="PASS")]
-    rest = mod.mark_remaining_not_run(
-        mod.REQUIRED_CASES, recorded, reason="stopped"
-    )
+    rest = mod.mark_remaining_not_run(mod.REQUIRED_CASES, recorded, reason="stopped")
     names = {c.name for c in recorded + rest}
     assert names == set(mod.REQUIRED_CASES)
     assert all(c.status == "NOT_RUN" for c in rest)
-    blocked = mod.mark_remaining_blocked(
-        mod.REQUIRED_CASES, recorded, reason="disk"
-    )
+    blocked = mod.mark_remaining_blocked(mod.REQUIRED_CASES, recorded, reason="disk")
     assert all(c.status == "BLOCKED" for c in blocked)
 
 
@@ -130,6 +123,76 @@ def test_cleanup_refuses_wrong_workdir_identity(tmp_path, monkeypatch):
     s9 = next(c for c in orch.cases if c.name == "S9_cleanup")
     assert s9.status == "FAIL"
     assert orch.work.exists()
+
+
+def test_cleanup_tracks_both_projects_and_stops_before_removing_volumes(
+    tmp_path, monkeypatch
+):
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    projects = ["fetchnow-rollout-test-11111111", "fetchnow-rollout-test-22222222"]
+    orch.project = projects[0]
+    for project in projects:
+        orch.track("compose_project", project)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        stdout = ""
+        if argv[:2] == ["docker", "ps"]:
+            stdout = "container-" + argv[-1].split("=")[-1]
+        elif argv[:3] == ["docker", "volume", "ls"]:
+            prefix = argv[-1].removeprefix("name=")
+            stdout = prefix + "tmp\nunrelated_tmp\n"
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(mod, "run", run)
+    orch.cleanup()
+    for project in projects:
+        stop = calls.index(["docker", "rm", "-f", "container-" + project])
+        remove = calls.index(["docker", "volume", "rm", project + "_tmp"])
+        assert stop < remove
+    assert not any(
+        argv == ["docker", "volume", "rm", "unrelated_tmp"] for argv in calls
+    )
+    assert orch.cleanup_ok
+
+
+def test_cleanup_refuses_unvalidated_project_before_any_commands(tmp_path, monkeypatch):
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    orch.track("compose_project", "fetchnow-production")
+    calls = []
+    monkeypatch.setattr(mod, "run", lambda *a, **kw: calls.append(a))
+    with pytest.raises(ValueError, match="forbidden project"):
+        orch.cleanup()
+    assert not calls and not orch.cleanup_ok
+    assert next(c for c in orch.cases if c.name == "S9_cleanup").status == "FAIL"
+
+
+def test_cleanup_inventory_error_is_not_empty_success(tmp_path, monkeypatch):
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    orch.project = "fetchnow-rollout-test-11111111"
+    calls = []
+
+    def fail_inventory(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["check"] is True
+        raise RuntimeError("docker inventory unavailable")
+
+    monkeypatch.setattr(mod, "run", fail_inventory)
+    with pytest.raises(RuntimeError, match="inventory unavailable"):
+        orch.cleanup()
+    assert len(calls) == 1 and calls[0][:2] == ["docker", "ps"]
+    assert not orch.cleanup_ok
+    assert next(c for c in orch.cases if c.name == "S9_cleanup").status == "FAIL"
 
 
 def test_workflow_native_requires_dispatch_not_auto_push():
@@ -185,7 +248,11 @@ def test_workflow_shell_syntax():
 
 
 def test_orchestrator_shell_syntax():
-    for path in (SCRIPT, HARNESS, ROOT / "scripts" / "native_media_storage_resource_release_path.py"):
+    for path in (
+        SCRIPT,
+        HARNESS,
+        ROOT / "scripts" / "native_media_storage_resource_release_path.py",
+    ):
         if path.suffix == ".sh":
             proc = subprocess.run(
                 ["bash", "-n", str(path)], capture_output=True, text=True, check=False

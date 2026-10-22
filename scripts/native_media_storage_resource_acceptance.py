@@ -42,6 +42,7 @@ from fetchnow_release.media_storage import (
     assert_path_on_contract_fs,
     parse_media_storage_contract,
 )
+from fetchnow_release.rollout_project import assert_rollout_project
 
 EXECUTE_ENV = "FETCHNOW_NATIVE_MEDIA_STORAGE_RESOURCE_ACCEPTANCE_EXECUTE"
 REQUIRED_CASES = (
@@ -284,7 +285,10 @@ class AcceptanceOrchestrator:
 
     # --- S1 -----------------------------------------------------------------
     def case_s1(self) -> None:
-        if platform.system() != "Linux" or platform.machine() not in {"x86_64", "amd64"}:
+        if platform.system() != "Linux" or platform.machine() not in {
+            "x86_64",
+            "amd64",
+        }:
             self.record(
                 "S1_environment_identity",
                 "NOT_RUN",
@@ -294,7 +298,9 @@ class AcceptanceOrchestrator:
         if os.geteuid() != 0:
             self.record("S1_environment_identity", "NOT_RUN", "requires root")
             raise RuntimeError("S1 NOT_RUN")
-        docker = run(["docker", "version", "--format", "{{.Server.Version}}"], check=True)
+        docker = run(
+            ["docker", "version", "--format", "{{.Server.Version}}"], check=True
+        )
         version = docker.stdout.strip()
         major = int(version.split(".", 1)[0])
         if major < 24:
@@ -330,9 +336,9 @@ class AcceptanceOrchestrator:
         disk = free_bytes(Path("/"))
         mem = Path("/proc/meminfo").read_text(encoding="utf-8")
         mem_total = int(
-            next(line for line in mem.splitlines() if line.startswith("MemTotal:")).split()[
-                1
-            ]
+            next(
+                line for line in mem.splitlines() if line.startswith("MemTotal:")
+            ).split()[1]
         )
         self.record(
             "S1_environment_identity",
@@ -386,8 +392,14 @@ class AcceptanceOrchestrator:
             raise RuntimeError(f"mount source {source!r} != {loop!r}")
         return img, loop, mnt, uuid
 
-    def _safe_unmount(self, mnt: Path | None, loop: str | None, img: Path | None) -> None:
-        if mnt is not None and mnt.exists() and run(["mountpoint", "-q", str(mnt)]).returncode == 0:
+    def _safe_unmount(
+        self, mnt: Path | None, loop: str | None, img: Path | None
+    ) -> None:
+        if (
+            mnt is not None
+            and mnt.exists()
+            and run(["mountpoint", "-q", str(mnt)]).returncode == 0
+        ):
             src = run(
                 ["findmnt", "-n", "-M", str(mnt), "-o", "SOURCE"], check=False
             ).stdout.strip()
@@ -536,7 +548,9 @@ class AcceptanceOrchestrator:
                 parent=parent,
             )
         except Exception as exc:  # noqa: BLE001
-            self._blocked_reason = f"contract FS provisioning failed: {type(exc).__name__}: {exc}"
+            self._blocked_reason = (
+                f"contract FS provisioning failed: {type(exc).__name__}: {exc}"
+            )
             self.record(
                 "S2_contract_geometry_fs",
                 "BLOCKED",
@@ -625,7 +639,13 @@ class AcceptanceOrchestrator:
         # Order: containers/project → slice → mounts/loops → workdir.
         # Early abort after unmount/detach failure: no recursive deletion.
         try:
+            projects = {t.value for t in self.tracked if t.kind == "compose_project"}
             if self.project:
+                projects.add(self.project)
+            # Validate the entire set before issuing any destructive command.
+            for project in projects:
+                assert_rollout_project(project)
+            for project in sorted(projects):
                 ids = run(
                     [
                         "docker",
@@ -633,8 +653,9 @@ class AcceptanceOrchestrator:
                         "-a",
                         "-q",
                         "--filter",
-                        f"label=com.docker.compose.project={self.project}",
-                    ]
+                        f"label=com.docker.compose.project={project}",
+                    ],
+                    check=True,
                 ).stdout.split()
                 if ids and run(["docker", "rm", "-f", *ids]).returncode != 0:
                     self.cleanup_ok = False
@@ -647,21 +668,22 @@ class AcceptanceOrchestrator:
                         "ls",
                         "-q",
                         "--filter",
-                        f"name={self.project}_",
-                    ]
+                        f"name={project}_",
+                    ],
+                    check=True,
                 ).stdout.split()
                 for vol in vols:
-                    if not vol.startswith(self.project + "_"):
+                    if not vol.startswith(project + "_"):
                         continue
                     if run(["docker", "volume", "rm", vol]).returncode != 0:
                         self.cleanup_ok = False
                         self.cleanup_detail = f"volume rm failed: {vol}"
                         return
-                for t in list(self.tracked):
-                    if t.kind == "image":
-                        ref = t.meta.get("reference")
-                        if isinstance(ref, str) and ref.startswith("fetchnow-"):
-                            run(["docker", "image", "rm", ref], check=False)
+            for t in list(self.tracked):
+                if t.kind == "image":
+                    ref = t.meta.get("reference")
+                    if isinstance(ref, str) and ref.startswith("fetchnow-"):
+                        run(["docker", "image", "rm", ref], check=False)
             if self.slice_unit and self.slice_path:
                 run(["systemctl", "stop", self.slice_unit], check=False)
                 try:
@@ -688,9 +710,7 @@ class AcceptanceOrchestrator:
                     line == self.work.as_posix() for line in mounts.splitlines()
                 ):
                     self.cleanup_ok = False
-                    self.cleanup_detail = (
-                        "nested mount remains; NO recursive deletion"
-                    )
+                    self.cleanup_detail = "nested mount remains; NO recursive deletion"
                     return
                 try:
                     shutil.rmtree(self.work)
@@ -698,6 +718,10 @@ class AcceptanceOrchestrator:
                     self.cleanup_ok = False
                     self.cleanup_detail = f"workdir rmtree failed: {exc}"
                     return
+        except Exception as exc:
+            self.cleanup_ok = False
+            self.cleanup_detail = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             upsert_case(
                 self.cases,
@@ -929,10 +953,10 @@ def main(argv: list[str] | None = None) -> int:
             uid_s, gid_s = args.evidence_owner.split(":", 1)
             owner = (int(uid_s), int(gid_s))
         except ValueError as exc:
-            raise SystemExit(f"invalid --evidence-owner: {args.evidence_owner!r}") from exc
-    orch = AcceptanceOrchestrator(
-        args.evidence_dir.resolve(), evidence_owner=owner
-    )
+            raise SystemExit(
+                f"invalid --evidence-owner: {args.evidence_owner!r}"
+            ) from exc
+    orch = AcceptanceOrchestrator(args.evidence_dir.resolve(), evidence_owner=owner)
     return orch.run()
 
 
