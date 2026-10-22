@@ -132,10 +132,14 @@ def test_cleanup_refuses_wrong_workdir_identity(tmp_path, monkeypatch):
     assert orch.work.exists()
 
 
-def test_workflow_is_dispatch_only_no_push_trigger():
+def test_workflow_native_requires_dispatch_not_auto_push():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in text
-    assert "\n  push:" not in text
+    # Path-filtered push may exist for GitHub workflow indexing only.
+    assert "registration/push event only; native not authorized" in text
+    assert 'GITHUB_EVENT_NAME}" == "workflow_dispatch"' in text or (
+        'GITHUB_EVENT_NAME" == "workflow_dispatch"' in text
+    )
     assert "pull_request:" not in text
     assert "\n    continue-on-error:" not in text
     assert "\n      continue-on-error:" not in text

@@ -1,7 +1,9 @@
 name: SEC-08/09 media storage/resource native acceptance
 
 # Disposable native gate for storage + resource budget corrective pass.
-# workflow_dispatch ONLY — never starts on push.
+# Native execution is workflow_dispatch-only (authorize refuses push).
+# A path-filtered push exists solely so GitHub indexes this workflow on a
+# non-default branch; push must never run the native job.
 # Does not authorize production migration, VEX/residual activation, or deploy.
 #
 # Overall PASS requires every required case PASS. Filesystem-only harness exit
@@ -13,6 +15,10 @@ on:
         description: Exact commit SHA that must match github.sha
         required: true
         type: string
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+    paths:
+      - .github/workflows/sec08-09-media-storage-resource-acceptance.yml
 
 permissions:
   contents: read
@@ -45,9 +51,11 @@ jobs:
           echo "ref=${GITHUB_REF}"
           echo "attempt=${GITHUB_RUN_ATTEMPT}"
           allowed=false
+          # Push is registration-only: never authorize native on push.
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" \
              && "${GITHUB_REF}" == "refs/heads/codex/security-sec-09-network-isolation" \
              && "${head_sha}" == "${GITHUB_SHA}" \
+             && -n "${EXPECTED_SHA}" \
              && "${head_sha}" == "${EXPECTED_SHA}" ]]; then
             allowed=true
           fi
@@ -56,6 +64,10 @@ jobs:
             echo "allowed=${allowed}"
             echo "head_sha=${head_sha}"
           } >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "registration/push event only; native not authorized" >&2
+            exit 0
+          fi
           if [[ "${allowed}" != "true" ]]; then
             echo "refusing: exact SHA/ref/event gate failed" >&2
             exit 1
