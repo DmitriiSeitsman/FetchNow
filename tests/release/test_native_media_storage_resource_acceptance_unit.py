@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -193,6 +194,150 @@ def test_cleanup_inventory_error_is_not_empty_success(tmp_path, monkeypatch):
     assert len(calls) == 1 and calls[0][:2] == ["docker", "ps"]
     assert not orch.cleanup_ok
     assert next(c for c in orch.cases if c.name == "S9_cleanup").status == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "S3_container_mounts",
+        "S4_missing_or_wrong_fs",
+        "S5_legacy_volume_refusal",
+        "S6_sidecar_resources",
+        "S7_media_operations",
+        "S8_transaction_rollback",
+    ],
+)
+def test_orchestrator_failure_is_attributed_to_actual_release_case(
+    tmp_path, monkeypatch, case
+):
+    """Real orchestrator/error export, with ALL native execution stubbed."""
+    mod = _load_mod()
+    evidence, work = tmp_path / "evidence", tmp_path / "work"
+    work.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    monkeypatch.setattr(
+        orch, "case_s1", lambda: orch.record("S1_environment_identity", "PASS")
+    )
+    monkeypatch.setattr(
+        orch, "case_s2_fault", lambda: orch.record("S2_fault_injection_enospc", "PASS")
+    )
+
+    def contract_ready():
+        orch.record("S2_contract_geometry_fs", "PASS")
+        return True
+
+    monkeypatch.setattr(orch, "case_s2_contract", contract_ready)
+    monkeypatch.setattr(mod.tempfile, "mkdtemp", lambda **kw: str(work))
+
+    def git_only(argv, **kwargs):
+        assert argv == ["git", "status", "--porcelain"]
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(mod, "run", git_only)
+    primary = "expected migration refusal; got: EGRESS_DENY_CIDRS/EGRESS_DENY_IPS empty"
+
+    def fail():
+        orch.begin_case(case)
+        raise RuntimeError(primary)
+
+    monkeypatch.setattr(orch, "_run_release_path", fail)
+    monkeypatch.setattr(orch, "cleanup", lambda: orch.record("S9_cleanup", "PASS"))
+    assert orch.run() == 1
+    result = json.loads((evidence / "result.json").read_text())
+    failure = json.loads((evidence / "primary_failure.json").read_text())
+    statuses = {c["name"]: c["status"] for c in result["cases"]}
+    assert failure == {
+        "stage": "release_path",
+        "case": case,
+        "error_type": "RuntimeError",
+        "error_detail": primary,
+    }
+    assert statuses[case] == "FAIL"
+    assert all(
+        statuses[n] == "NOT_RUN"
+        for n in mod.REQUIRED_CASES
+        if n.startswith(("S3", "S4", "S5", "S6", "S7", "S8")) and n != case
+    )
+    assert result["case_counts"] == {"PASS": 4, "FAIL": 1, "NOT_RUN": 5, "BLOCKED": 0}
+    assert result["current_release_case"] == case
+    assert result["status"] == "FAIL"
+
+
+@pytest.mark.parametrize("status", ["PASS", "FAIL"])
+def test_release_failure_cannot_hide_behind_old_case_result(tmp_path, status):
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    orch.begin_case("S5_legacy_volume_refusal")
+    orch.record("S5_legacy_volume_refusal", status, "original evidence")
+    orch._record_release_failure(RuntimeError("primary"))
+    assert len(orch.cases) == 1 and orch.cases[0].status == "FAIL"
+    if status == "FAIL":
+        assert orch.cases[0].detail == "original evidence"
+    else:
+        assert "primary" in orch.cases[0].detail
+
+
+def test_image_evidence_serializes_id_platform_revision_binding(tmp_path):
+    from fetchnow_release.manifest import ImageRecord, ReleaseManifest, write_manifest
+    from fetchnow_release.release_mode import (
+        expected_image_services,
+        image_reference_for_service,
+    )
+    from native_media_storage_resource_release_path import record_prepared_images
+
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    orch = mod.AcceptanceOrchestrator(evidence)
+    for rev in ("a" * 40, "b" * 40):
+        images = tuple(
+            ImageRecord(
+                service,
+                image_reference_for_service(service, rev),
+                "sha256:" + rev[0] * 64,
+                rev,
+                "linux/amd64",
+            )
+            for service in sorted(expected_image_services("media"))
+        )
+        manifest = ReleaseManifest(
+            schema_version=1,
+            source_contract_version=4,
+            revision=rev,
+            tree_oid="c" * 40,
+            created_at_utc="2026-01-01T00:00:00Z",
+            archive_commit_verified=True,
+            source_repository="FetchNow",
+            compose_version="2.0.0",
+            docker_version="29.0.0",
+            build_platform="linux/amd64",
+            images=images,
+            contract_hashes={"compose.yaml": "d" * 64},
+            tool_version="test",
+            status="prepared",
+            compose_overlay="compose.staging.yaml",
+            release_mode="media",
+        )
+        path = tmp_path / (rev + ".json")
+        write_manifest(path, manifest)
+        record_prepared_images(path, rev, orch.image_ids, orch.track)
+    orch.begin_case("S5_legacy_volume_refusal")
+    partial = json.loads((evidence / "partial_result.json").read_text())
+    final = json.loads(orch.write_final("FAIL").read_text())
+    assert partial["tracked"] == final["tracked_identities"]
+    rows = final["tracked_identities"]
+    assert len(rows) == 12
+    assert {r["meta"]["revision"] for r in rows} == {"a" * 40, "b" * 40}
+    for row in rows:
+        assert row["kind"] == "image"
+        assert row["meta"]["platform"] == "linux/amd64"
+        assert row["value"] == "sha256:" + row["meta"]["revision"][0] * 64
+        assert row["meta"]["reference"] == image_reference_for_service(
+            row["meta"]["service"],
+            row["meta"]["revision"],
+        )
 
 
 def test_workflow_native_requires_dispatch_not_auto_push():

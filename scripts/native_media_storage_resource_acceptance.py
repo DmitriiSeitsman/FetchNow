@@ -156,12 +156,17 @@ def free_bytes(path: Path) -> int:
 
 def overall_status(cases: list[CaseResult]) -> str:
     by_name = {c.name: c for c in cases}
-    for required in REQUIRED_CASES:
-        c = by_name.get(required)
-        if c is None:
-            return "FAIL"
-        if c.status != "PASS":
-            return "FAIL" if c.status == "FAIL" else c.status
+    if any(required not in by_name for required in REQUIRED_CASES):
+        return "FAIL"
+    statuses = {by_name[name].status for name in REQUIRED_CASES}
+    # Execution order differs from REQUIRED_CASES (S5 runs before S3 completes).
+    # A known failure must dominate unreached cases, never be reported NOT_RUN.
+    if statuses - {"PASS", "FAIL", "NOT_RUN", "BLOCKED"} or "FAIL" in statuses:
+        return "FAIL"
+    if "BLOCKED" in statuses:
+        return "BLOCKED"
+    if "NOT_RUN" in statuses:
+        return "NOT_RUN"
     return "PASS"
 
 
@@ -223,6 +228,7 @@ class AcceptanceOrchestrator:
         self.cleanup_ok = True
         self.cleanup_detail = ""
         self._blocked_reason: str | None = None
+        self.current_release_case: str | None = None
 
     def record(self, name: str, status: str, detail: str = "", **evidence: Any) -> None:
         self.cases.append(
@@ -233,9 +239,53 @@ class AcceptanceOrchestrator:
     def track(self, kind: str, value: str, **meta: Any) -> None:
         self.tracked.append(TrackedIdentity(kind=kind, value=value, meta=dict(meta)))
 
+    def begin_case(self, name: str) -> None:
+        if name not in REQUIRED_CASES or name[:2] not in {
+            "S3",
+            "S4",
+            "S5",
+            "S6",
+            "S7",
+            "S8",
+        }:
+            raise ValueError(f"invalid release case: {name}")
+        self.current_release_case = name
+        self._write_partial()
+
+    def _record_release_failure(self, exc: Exception) -> None:
+        case = self.current_release_case or "S3_container_mounts"
+        existing = next((c for c in self.cases if c.name == case), None)
+        # Explicit FAIL evidence is retained. Any later exception must also
+        # overturn a prematurely recorded PASS, never disappear in deduplication.
+        if existing is None or existing.status != "FAIL":
+            upsert_case(
+                self.cases,
+                CaseResult(
+                    name=case,
+                    status="FAIL",
+                    detail=f"aborted: {type(exc).__name__}: {exc}",
+                ),
+            )
+        self._write_partial()
+        (self.evidence / "primary_failure.json").write_text(
+            json.dumps(
+                {
+                    "stage": "release_path",
+                    "case": case,
+                    "error_type": type(exc).__name__,
+                    "error_detail": str(exc)[:4000],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def _write_partial(self) -> None:
         payload = {
             "status": "IN_PROGRESS",
+            "current_release_case": self.current_release_case,
             "cases": [c.to_dict() for c in self.cases],
             "tracked": [
                 {"kind": t.kind, "value": t.value, "meta": t.meta} for t in self.tracked
@@ -250,6 +300,7 @@ class AcceptanceOrchestrator:
             "schema": "fetchnow-native-media-storage-resource-acceptance/v1",
             "status": status,
             "source_sha": self.source_sha,
+            "current_release_case": self.current_release_case,
             "required_cases": list(REQUIRED_CASES),
             "cases": [c.to_dict() for c in self.cases],
             "case_counts": {
@@ -633,6 +684,7 @@ class AcceptanceOrchestrator:
             image_ids=self.image_ids,
             set_project=set_project,
             set_slice=set_slice,
+            begin_case=self.begin_case,
         )
 
     def cleanup(self) -> None:
@@ -774,26 +826,7 @@ class AcceptanceOrchestrator:
                     try:
                         self._run_release_path()
                     except Exception as exc:  # noqa: BLE001
-                        if not any(c.name == "S3_container_mounts" for c in self.cases):
-                            self.record(
-                                "S3_container_mounts",
-                                "FAIL",
-                                f"aborted: {type(exc).__name__}: {exc}",
-                            )
-                        # Persist sanitized primary failure for evidence upload.
-                        (self.evidence / "primary_failure.json").write_text(
-                            json.dumps(
-                                {
-                                    "stage": "release_path",
-                                    "error_type": type(exc).__name__,
-                                    "error_detail": str(exc)[:4000],
-                                },
-                                indent=2,
-                                sort_keys=True,
-                            )
-                            + "\n",
-                            encoding="utf-8",
-                        )
+                        self._record_release_failure(exc)
                         self.cases.extend(
                             mark_remaining_not_run(
                                 REQUIRED_BEFORE_CLEANUP,

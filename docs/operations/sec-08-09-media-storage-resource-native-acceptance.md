@@ -121,3 +121,44 @@ Fresh local verification for this tag correction: `tests/release` +
 on the changed harness module, stdlib-only import (`python -S`) and
 `git diff --check` passed. Native S1–S9 and image-security remain NOT_RUN
 for this uncommitted correction; production installation is NOT_PERFORMED.
+
+## Local env/evidence correction after run 39849296885
+
+Run 39849296885 at `70eb1e343b3f564fa48187f3952fbb61e2acff77`
+remains FAIL. Revision isolation crossed the previous occupied-image failure.
+The new abort was the legacy ON attempt's empty `EGRESS_DENY_*`, before the
+expected migration refusal. Its historical S3 FAIL attribution and S5 NOT_RUN
+are not rewritten. Cleanup passed; no S5 migration, S7 or S8 proof was obtained.
+
+- Both projects now use one `write_fixture_env` helper. It writes executor
+  flags OFF and identical disposable deny coverage, then loads the actual env
+  and calls the production `assert_deny_coverage`. The same required targets
+  are passed to each ON rollout; no egress guard or production default changes.
+- Offline orchestration regression calls that production coverage validator
+  before ON. Intentionally empty legacy deny settings must NOT count as a
+  successful legacy migration refusal. Missing/empty/incomplete subnet/host
+  coverage is tested for both fixture roles.
+- The release path reports the current S3–S8 case to the orchestrator before
+  its work starts. Failures are attached to that case and to
+  `primary_failure.json.case`; unreached cases stay NOT_RUN. Existing explicit
+  failure evidence is kept, and an exception cannot hide behind an earlier PASS.
+  Because execution order differs from the required-case list, aggregate FAIL
+  now dominates BLOCKED/NOT_RUN regardless of position. It never becomes a
+  NOT_RUN exit merely because an earlier-listed case was not completed.
+- Every tracked prepared image now carries service, full Image ID, reference,
+  platform and OCI/source revision from the validated canonical manifest.
+  These bindings remain in both partial and final evidence for all prepared
+  revisions; they are not inferred from the host architecture or a tag string.
+
+Tests exercise the real orchestrator's error/summary/export path for each
+release case, with native operations stubbed, and serialize two revisions'
+image identities through partial/final evidence. These are offline proofs,
+not native Docker/mount/cgroup/UDS acceptance. No commit/push/dispatch, Trivy,
+SSH, host provisioning, production changes or approval changes are included.
+READY FOR ROLLOUT remains NO.
+
+Local verification of the env/evidence correction: targeted harness tests
+**72 passed**; full `tests/release` + `tests/pg_backup` **792 passed** (fresh).
+Ruff on the four touched Python files, mypy on both harness modules,
+stdlib-only imports (`python -S`) and `git diff --check` passed. No native,
+Trivy, broad backend or production checks were executed for this correction.

@@ -17,7 +17,11 @@ import native_media_storage_resource_release_path as mod
 import pytest
 from fetchnow_release import image_build
 from fetchnow_release.bounded_subprocess import BoundedResult
-from fetchnow_release.env_file import load_env_file
+from fetchnow_release.egress_deny_coverage import (
+    EgressDenyCoverageError,
+    assert_deny_coverage,
+)
+from fetchnow_release.env_file import load_env_file, replace_env_file_key
 from fetchnow_release.manifest import (
     ImageRecord,
     ManifestError,
@@ -79,6 +83,70 @@ def test_manifest_uses_real_serializer_image_id(tmp_path):
     assert ids == {image.service: image.image_id for image in manifest.images}
     assert len(tracked) == 6
     assert all(entry[1]["reference"] for entry in tracked)
+    assert [entry[1] for entry in tracked] == [
+        {
+            "reference": image.reference,
+            "service": image.service,
+            "revision": REV,
+            "platform": "linux/amd64",
+        }
+        for image in manifest.images
+    ]
+
+
+@pytest.mark.parametrize("role,revision", [("legacy", LEGACY_REV), ("positive", REV)])
+def test_both_fixture_envs_have_real_coverage_and_flags_off(tmp_path, role, revision):
+    path = tmp_path / role
+    mod.write_fixture_env(
+        path,
+        project=f"fetchnow-rollout-test-{role}12345678",
+        revision=revision,
+        gateway_port="127.0.0.1:18000",
+        deploy_root=tmp_path / "deploy",
+    )
+    values = load_env_file(path)
+    assert values["FETCHNOW_RELEASE_REVISION"] == revision
+    assert values["MEDIA_EXECUTOR_ENABLED"] == "false"
+    assert values["MEDIA_NET_EXECUTOR_ENABLED"] == "false"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert_deny_coverage(
+        deny_cidrs=values["EGRESS_DENY_CIDRS"],
+        deny_ips=values["EGRESS_DENY_IPS"],
+        required_cidrs=mod.FIXTURE_DENY_CIDRS,
+        required_ips=mod.FIXTURE_DENY_IPS,
+    )
+
+
+@pytest.mark.parametrize("role", ["legacy", "positive"])
+@pytest.mark.parametrize("defect", ["missing", "empty", "wrong_subnet", "wrong_host"])
+def test_fixture_egress_missing_empty_or_incomplete_fails_real_guard(
+    tmp_path, role, defect
+):
+    path = tmp_path / role
+    mod.write_fixture_env(
+        path,
+        project="fetchnow-rollout-test-11111111",
+        revision=REV,
+        gateway_port="127.0.0.1:18000",
+        deploy_root=tmp_path / "deploy",
+    )
+    values = load_env_file(path)
+    if defect == "missing":
+        values.pop("EGRESS_DENY_CIDRS")
+        values.pop("EGRESS_DENY_IPS")
+    elif defect == "empty":
+        values.update(EGRESS_DENY_CIDRS="", EGRESS_DENY_IPS="")
+    elif defect == "wrong_subnet":
+        values["EGRESS_DENY_CIDRS"] = "192.0.2.0/24"
+    else:
+        values["EGRESS_DENY_IPS"] = "192.0.2.1"
+    with pytest.raises(EgressDenyCoverageError):
+        assert_deny_coverage(
+            deny_cidrs=values.get("EGRESS_DENY_CIDRS", ""),
+            deny_ips=values.get("EGRESS_DENY_IPS", ""),
+            required_cidrs=mod.FIXTURE_DENY_CIDRS,
+            required_ips=mod.FIXTURE_DENY_IPS,
+        )
 
 
 @pytest.mark.parametrize(
@@ -219,7 +287,9 @@ def test_fixture_revision_identity_or_runtime_drift_refused(
         mod.create_fixture_revisions(tmp_path, tmp_path / "docs" / "marker", "fixture")
 
 
-@pytest.mark.parametrize("broken_negative", [None, "KeyError", "unrelated"])
+@pytest.mark.parametrize(
+    "broken_negative", [None, "KeyError", "unrelated", "empty_legacy_deny"]
+)
 def test_projects_are_separate_and_legacy_never_removed_in_use(
     tmp_path, monkeypatch, broken_negative
 ):
@@ -241,7 +311,7 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
     revisions = iter([LEGACY_REV, REV])
     monkeypatch.setattr(mod, "commit", lambda *a: next(revisions))
     monkeypatch.setattr(mod, "wait_for_postgres", lambda *a: None)
-    calls, volumes, records, tracks, unmounts = [], {}, [], [], []
+    calls, volumes, records, tracks, unmounts, starts = [], {}, [], [], [], []
     images, running, cid_images, prepares = {}, {}, {}, []
     envs = {}
     sentinel = []
@@ -296,6 +366,17 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
         assert values["FETCHNOW_RELEASE_REVISION"] == inp.expected_revision
         assert values["COMPOSE_PROJECT_NAME"] == inp.project_name
         envs[inp.project_name] = inp.expected_revision
+        assert values["MEDIA_EXECUTOR_ENABLED"] == "false"
+        assert values["MEDIA_NET_EXECUTOR_ENABLED"] == "false"
+        assert_deny_coverage(
+            deny_cidrs=values.get("EGRESS_DENY_CIDRS", ""),
+            deny_ips=values.get("EGRESS_DENY_IPS", ""),
+            required_cidrs=mod.FIXTURE_DENY_CIDRS,
+            required_ips=mod.FIXTURE_DENY_IPS,
+        )
+        if broken_negative == "empty_legacy_deny" and inp.project_name == projects[1]:
+            replace_env_file_key(inp.env_file, "EGRESS_DENY_CIDRS", "")
+            replace_env_file_key(inp.env_file, "EGRESS_DENY_IPS", "")
         # This is the genuine production guard, not a stub that always succeeds.
         image_build.assert_tag_collision_safe(
             inp.expected_revision, release_mode="media"
@@ -335,6 +416,16 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
             authority.parent.mkdir(parents=True, exist_ok=True)
             authority.write_bytes(inp.project_name.encode())
             return RolloutResult(True, False, ())
+        values = load_env_file(inp.env_file)
+        try:
+            assert_deny_coverage(
+                deny_cidrs=values.get("EGRESS_DENY_CIDRS", ""),
+                deny_ips=values.get("EGRESS_DENY_IPS", ""),
+                required_cidrs=inp.required_deny_cidrs,
+                required_ips=inp.required_deny_ips,
+            )
+        except EgressDenyCoverageError as exc:
+            return RolloutResult(False, False, (f"FAIL: {exc}",))
         if inp.project_name == projects[1]:
             if broken_negative == "KeyError":
                 raise KeyError("id")
@@ -395,6 +486,7 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
             image_ids={},
             set_project=lambda p: None,
             set_slice=lambda *a: None,
+            begin_case=starts.append,
         )
     assert not any(argv[:3] == ["docker", "volume", "rm"] for argv in calls)
     assert {a[1] for a, _ in tracks if a[0] == "compose_project"} == set(projects)
@@ -411,6 +503,7 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
         )
     if broken_negative:
         assert not any(a[1] == "PASS" for a, _ in records)
+        assert starts == ["S3_container_mounts", "S5_legacy_volume_refusal"]
     else:
         assert {a[0] for a, _ in records} == {
             "S5_legacy_volume_refusal",
@@ -420,6 +513,12 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
         legacy = next(e for a, e in records if a[0] == "S5_legacy_volume_refusal")
         assert legacy["legacy_revision"] == LEGACY_REV
         assert legacy["positive_revision"] == REV
+        assert starts == [
+            "S3_container_mounts",
+            "S5_legacy_volume_refusal",
+            "S4_missing_or_wrong_fs",
+            "S3_container_mounts",
+        ]
 
 
 @pytest.mark.parametrize(

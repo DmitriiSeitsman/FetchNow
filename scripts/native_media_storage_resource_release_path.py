@@ -15,7 +15,8 @@ from unittest.mock import patch
 
 from fetchnow_release.c3_constants import STATUS_ROLLED_BACK
 from fetchnow_release.current_state import current_path
-from fetchnow_release.env_file import replace_env_file_key
+from fetchnow_release.egress_deny_coverage import assert_deny_coverage
+from fetchnow_release.env_file import load_env_file, replace_env_file_key
 from fetchnow_release.journal import utc_now
 from fetchnow_release.manifest import ManifestError, load_manifest
 from fetchnow_release.media_prerequisites import (
@@ -49,6 +50,36 @@ from release_rollout_integration_test import (
     wait_for_postgres,
     write_env,
 )
+
+FIXTURE_DENY_CIDRS = ("172.16.0.0/12",)
+FIXTURE_DENY_IPS = ("127.0.0.1",)
+
+
+def write_fixture_env(
+    path: Path, *, project: str, revision: str, gateway_port: str, deploy_root: Path
+) -> None:
+    """Both disposable projects need ALL prerequisites except the tested defect."""
+    write_env(
+        path,
+        project=project,
+        revision=revision,
+        gateway_port=gateway_port,
+        deploy_root=deploy_root,
+    )
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            "MEDIA_EXECUTOR_ENABLED=false\n"
+            "MEDIA_NET_EXECUTOR_ENABLED=false\n"
+            f"EGRESS_DENY_CIDRS={','.join(FIXTURE_DENY_CIDRS)}\n"
+            f"EGRESS_DENY_IPS={','.join(FIXTURE_DENY_IPS)}\n"
+        )
+    values = load_env_file(path)
+    assert_deny_coverage(
+        deny_cidrs=values.get("EGRESS_DENY_CIDRS", ""),
+        deny_ips=values.get("EGRESS_DENY_IPS", ""),
+        required_cidrs=FIXTURE_DENY_CIDRS,
+        required_ips=FIXTURE_DENY_IPS,
+    )
 
 
 def _run(
@@ -90,7 +121,14 @@ def record_prepared_images(
         raise ManifestError("acceptance requires linux/amd64 image identities")
     for image in manifest.images:
         image_ids[image.service] = image.image_id
-        track("image", image.image_id, reference=image.reference)
+        track(
+            "image",
+            image.image_id,
+            reference=image.reference,
+            service=image.service,
+            revision=image.oci_revision,
+            platform=image.platform,
+        )
 
 
 def require_refusal(result: RolloutResult, *, reason: str) -> str:
@@ -212,8 +250,11 @@ def run_release_cases(
     image_ids: dict[str, str],
     set_project: Callable[[str], None],
     set_slice: Callable[[str, Path], None],
+    begin_case: Callable[[str], None] | None = None,
 ) -> None:
     """Execute S3–S8 against a validated contract filesystem."""
+    start = begin_case if begin_case is not None else lambda _name: None
+    start("S3_container_mounts")
     clone = work / "clone"
     deploy = work / "deploy"
     deploy.mkdir(parents=True, exist_ok=True)
@@ -245,21 +286,13 @@ def run_release_cases(
 
     env = work / "env"
     port = f"127.0.0.1:{18000 + secrets.randbelow(1800)}"
-    write_env(
+    write_fixture_env(
         env,
         project=project,
         revision=revision,
         gateway_port=port,
         deploy_root=deploy,
     )
-    with env.open("a", encoding="utf-8") as stream:
-        stream.write(
-            "MEDIA_EXECUTOR_ENABLED=false\n"
-            "MEDIA_NET_EXECUTOR_ENABLED=false\n"
-            "EGRESS_DENY_CIDRS=172.16.0.0/12\n"
-            "EGRESS_DENY_IPS=127.0.0.1\n"
-        )
-
     budget = parse_resource_budget(budget_raw)
     slice_unit = f"fetchnow-media-storage-accept-{suffix}.slice"
     unit = Path("/run/systemd/system") / slice_unit
@@ -327,8 +360,8 @@ def run_release_cases(
             media_activation=active,
             resource_budget=budget_raw if active else None,
             media_storage_contract=contract if active else None,
-            required_deny_cidrs=("172.16.0.0/12",),
-            required_deny_ips=("127.0.0.1",),
+            required_deny_cidrs=FIXTURE_DENY_CIDRS,
+            required_deny_ips=FIXTURE_DENY_IPS,
             media_denied_host="127.0.0.1",
             media_slice_unit=slice_unit,
         )
@@ -341,7 +374,7 @@ def run_release_cases(
     track("compose_project", legacy_project)
     legacy_env, legacy_deploy = work / "legacy-env", work / "legacy-deploy"
     legacy_port = f"127.0.0.1:{20000 + secrets.randbelow(1800)}"
-    write_env(
+    write_fixture_env(
         legacy_env,
         project=legacy_project,
         revision=legacy_revision,
@@ -388,7 +421,7 @@ def run_release_cases(
     off = rollout_release(inp(revision, active=False, bootstrap=True))
     if not off.ok:
         record(
-            "S8_transaction_rollback",
+            "S3_container_mounts",
             "FAIL",
             f"canonical OFF failed: {off.messages}",
         )
@@ -396,6 +429,7 @@ def run_release_cases(
     authority_off = current_path(deploy).read_bytes()
 
     # --- S5 legacy volume ---------------------------------------------------
+    start("S5_legacy_volume_refusal")
     legacy_name = f"{legacy_project}_tmp"
     sentinel_text = "legacy-sentinel-" + secrets.token_hex(16)
     legacy_volume = json.loads(
@@ -470,6 +504,7 @@ def run_release_cases(
     # Do not remove an in-use volume or migrate it for the positive fixture.
 
     # --- S4 wrong / missing FS ----------------------------------------------
+    start("S4_missing_or_wrong_fs")
     wrong_parent = work / "wrong-fs"
     wrong_parent.mkdir()
     _w_img, w_loop, w_mnt, w_uuid = provision_loop_fs(
@@ -511,9 +546,10 @@ def run_release_cases(
     )
 
     # --- OFF→ON success -----------------------------------------------------
+    start("S3_container_mounts")
     on = rollout_release(inp(revision, active=True))
     if not on.ok:
-        record("S8_transaction_rollback", "FAIL", f"OFF→ON failed: {on.messages}")
+        record("S3_container_mounts", "FAIL", f"OFF→ON failed: {on.messages}")
         raise RuntimeError("ON FAIL")
     media = load_media_activation_state(deploy)
     if media is None or not media.activation:
@@ -575,6 +611,7 @@ def run_release_cases(
         raise RuntimeError("S3 FAIL") from exc
 
     # --- S6 -----------------------------------------------------------------
+    start("S6_sidecar_resources")
     try:
         assert_running_media_budget(
             project_name=project,
@@ -623,6 +660,7 @@ def run_release_cases(
         raise RuntimeError("S6 FAIL") from exc
 
     # --- S7 -----------------------------------------------------------------
+    start("S7_media_operations")
     mount_point = Path(contract["host_bind_root"])
     media_compose = [
         "docker",
@@ -710,6 +748,7 @@ def run_release_cases(
     )
 
     # --- S8 rollback --------------------------------------------------------
+    start("S8_transaction_rollback")
     authority_on = current_path(deploy).read_bytes()
     media_before = load_media_activation_state(deploy)
     sentinel_path = mount_point / "tmp" / "rollback-sentinel.bin"
