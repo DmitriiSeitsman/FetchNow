@@ -21,9 +21,12 @@ RUN npm run build
 FROM nginx:1.31.6-alpine3.24 AS runtime
 
 # SEC-03C: pin Alpine v3.24 main fixes (same branch; no edge/distro switch).
-# libexpat: CVE-2026-93990; pcre2: CVE-2026-103111; tiff: CVE-2026-4775.
+# libexpat: CVE-2026-93990 fixed in >=2.8.5-r0; v3.24 main now ships 2.9.0-r0
+# (also includes CVE-2026-77214 / CVE-2026-102633). pcre2: CVE-2026-103111;
+# tiff: CVE-2026-4775. Sources: pkgs.alpinelinux.org + security.alpinelinux.org
+# + dl-cdn.alpinelinux.org APKINDEX (v3.24/main/x86_64).
 RUN apk add --no-cache \
-        'libexpat=2.8.5-r0' \
+        'libexpat=2.9.0-r0' \
         'pcre2=10.49-r0' \
         'tiff=4.7.2-r0'
 

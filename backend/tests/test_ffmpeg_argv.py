@@ -26,7 +26,13 @@ def test_stream_copy_fixed_argv() -> None:
     assert "-map" in argv
     assert "0:v:0" in argv
     assert "1:a:0" in argv
-    assert argv[argv.index("-protocol_whitelist") + 1] == "file"
+    assert argv.count("-protocol_whitelist") == 2
+    assert argv.count("-i") == 2
+    # Each -i must be immediately preceded by file-only whitelist (input opts reset).
+    for idx, part in enumerate(argv):
+        if part == "-i":
+            assert argv[idx - 2] == "-protocol_whitelist"
+            assert argv[idx - 1] == "file"
     assert argv[argv.index("-map_metadata") + 1] == "-1"
     assert "-map_metadata:s" in argv
     assert argv[argv.index("-map_metadata:s") + 1] == "-1"

@@ -156,10 +156,15 @@ jobs:
         run: |
           set -euo pipefail
           evidence_dir="$RUNNER_TEMP/media-storage-resource-evidence"
-          if [[ -e "$evidence_dir" ]]; then
-            echo "refusing pre-existing evidence directory: $evidence_dir" >&2
+          host_logs="$RUNNER_TEMP/media-storage-host-logs"
+          if [[ -e "$evidence_dir" || -e "$host_logs" ]]; then
+            echo "refusing pre-existing evidence/host-log directories" >&2
             exit 1
           fi
+          # Host logs stay runner-owned. Evidence is created by root then chowned
+          # back to this uid:gid for upload (no 777 / broad chown).
+          mkdir -m 0750 "$host_logs"
+          owner="$(id -u):$(id -g)"
           test -x "$RUNNER_TEMP/media-storage-venv/bin/python"
           case "$RUNNER_TEMP/media-storage-venv" in
             "$GITHUB_WORKSPACE"*) echo "venv must be outside checkout" >&2; exit 1 ;;
@@ -174,16 +179,16 @@ jobs:
               FETCHNOW_NATIVE_MEDIA_STORAGE_RESOURCE_ACCEPTANCE_EXECUTE=1 \
             "$RUNNER_TEMP/media-storage-venv/bin/python" \
             scripts/native_media_storage_resource_acceptance.py \
-            --evidence-dir "$evidence_dir"
+            --evidence-dir "$evidence_dir" \
+            --evidence-owner "$owner"
           rc=$?
           set -e
           echo "accept_rc=$rc" >> "$GITHUB_OUTPUT"
           echo "accept exit=$rc"
-          if [[ ! -f "$evidence_dir/result.json" ]]; then
-            mkdir -p "$evidence_dir"
-            printf '%s\n' '{"status":"FAIL","detail":"missing result.json"}' \
-              > "$evidence_dir/result.json"
-            echo "missing result.json" >&2
+          # Evidence must be readable by the runner after ownership transfer.
+          if [[ ! -r "$evidence_dir/result.json" ]]; then
+            echo "evidence export failed: result.json unreadable by runner" >&2
+            # Visible non-zero; do not invent PASS.
             exit 1
           fi
           export ACCEPT_RC="$rc"
@@ -195,6 +200,7 @@ jobs:
           print(json.dumps({
               "status": data.get("status"),
               "case_counts": data.get("case_counts"),
+              "cleanup_ok": data.get("cleanup_ok"),
           }, indent=2))
           status = data.get("status")
           # Never invent PASS: require both status and orchestrator rc.
@@ -206,51 +212,62 @@ jobs:
           sys.exit(rc)
           PY
 
-      - name: Collect host-side logs
+      - name: Collect host-side logs into runner-owned directory
         if: always()
         timeout-minutes: 5
         run: |
           set -euo pipefail
           evidence_dir="$RUNNER_TEMP/media-storage-resource-evidence"
-          mkdir -p "$evidence_dir/host-logs"
-          docker version > "$evidence_dir/host-logs/docker-version.txt"
+          host_logs="$RUNNER_TEMP/media-storage-host-logs"
+          mkdir -p "$host_logs"
+          docker version > "$host_logs/docker-version.txt"
           {
             echo "event=${GITHUB_EVENT_NAME}"
             echo "ref=${GITHUB_REF}"
             echo "sha=${GITHUB_SHA}"
             echo "attempt=${GITHUB_RUN_ATTEMPT}"
             echo "accept_rc=${{ steps.accept.outputs.accept_rc }}"
-          } > "$evidence_dir/host-logs/run-meta.txt"
-          # Recompute evidence hashes including host logs when result exists.
-          if [[ -f "$evidence_dir/result.json" ]]; then
+          } > "$host_logs/run-meta.txt"
+          # Merge sanitized host logs into evidence only when runner owns it.
+          if [[ -d "$evidence_dir" && -w "$evidence_dir" ]]; then
+            mkdir -p "$evidence_dir/host-logs"
+            cp -p "$host_logs/docker-version.txt" "$evidence_dir/host-logs/"
+            cp -p "$host_logs/run-meta.txt" "$evidence_dir/host-logs/"
             python3 - <<'PY'
           import hashlib, json, os
           from pathlib import Path
           evidence = Path(os.environ["RUNNER_TEMP"]) / "media-storage-resource-evidence"
           manifest = {}
           for path in sorted(evidence.rglob("*")):
-              if path.is_file() and path.name != "evidence_sha256.json":
-                  h = hashlib.sha256(path.read_bytes()).hexdigest()
-                  manifest[str(path.relative_to(evidence))] = h
-          (evidence / "evidence_sha256.json").write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-          )
-          # Include the manifest file itself.
-          manifest[str(Path("evidence_sha256.json"))] = hashlib.sha256(
-              (evidence / "evidence_sha256.json").read_bytes()
-          ).hexdigest()
-          (evidence / "evidence_sha256.json").write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-          )
-          print(json.dumps(manifest, indent=2, sort_keys=True))
+              if not path.is_file():
+                  continue
+              if path.name in {"evidence_sha256.json", "evidence_manifest.sha256"}:
+                  continue
+              manifest[str(path.relative_to(evidence))] = hashlib.sha256(
+                  path.read_bytes()
+              ).hexdigest()
+          man = evidence / "evidence_sha256.json"
+          man.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          digest = hashlib.sha256(man.read_bytes()).hexdigest()
+          (evidence / "evidence_manifest.sha256").write_text(digest + "\n")
+          print(json.dumps({"files": manifest, "evidence_manifest_sha256": digest}, indent=2))
           PY
+          else
+            echo "evidence dir not writable by runner; host-logs kept separate" >&2
+            # Export failure must be visible and non-zero when accept produced evidence
+            # under root that could not be transferred.
+            if [[ -d "$evidence_dir" ]]; then
+              exit 1
+            fi
           fi
 
-      - name: Upload evidence (app-readable paths under RUNNER_TEMP)
+      - name: Upload evidence (runner-readable)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: media-storage-resource-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/media-storage-resource-evidence
+          path: |
+            ${{ runner.temp }}/media-storage-resource-evidence
+            ${{ runner.temp }}/media-storage-host-logs
           if-no-files-found: error
           retention-days: 30

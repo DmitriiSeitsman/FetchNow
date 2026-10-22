@@ -186,9 +186,24 @@ def mark_remaining_blocked(
     return extra
 
 
+REQUIRED_BEFORE_CLEANUP = tuple(n for n in REQUIRED_CASES if n != "S9_cleanup")
+
+
+def upsert_case(cases: list[CaseResult], case: CaseResult) -> None:
+    """Replace an existing case by name, or append. Used so S9 cannot stay NOT_RUN."""
+    for i, existing in enumerate(cases):
+        if existing.name == case.name:
+            cases[i] = case
+            return
+    cases.append(case)
+
+
 class AcceptanceOrchestrator:
-    def __init__(self, evidence_dir: Path) -> None:
+    def __init__(
+        self, evidence_dir: Path, *, evidence_owner: tuple[int, int] | None = None
+    ) -> None:
         self.evidence = evidence_dir
+        self.evidence_owner = evidence_owner
         self.cases: list[CaseResult] = []
         self.tracked: list[TrackedIdentity] = []
         self.work: Path | None = None
@@ -266,18 +281,6 @@ class AcceptanceOrchestrator:
             json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         return path
-
-    def write_evidence_manifest(self) -> dict[str, str]:
-        manifest: dict[str, str] = {}
-        for path in sorted(self.evidence.rglob("*")):
-            if path.is_file():
-                rel = str(path.relative_to(self.evidence))
-                manifest[rel] = sha256_file(path)
-        (self.evidence / "evidence_sha256.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        # Re-hash including the manifest file itself would recurse; keep separate.
-        return manifest
 
     # --- S1 -----------------------------------------------------------------
     def case_s1(self) -> None:
@@ -696,17 +699,21 @@ class AcceptanceOrchestrator:
                     self.cleanup_detail = f"workdir rmtree failed: {exc}"
                     return
         finally:
-            if not any(c.name == "S9_cleanup" for c in self.cases):
-                self.record(
-                    "S9_cleanup",
-                    "PASS" if self.cleanup_ok else "FAIL",
-                    self.cleanup_detail
+            upsert_case(
+                self.cases,
+                CaseResult(
+                    name="S9_cleanup",
+                    status="PASS" if self.cleanup_ok else "FAIL",
+                    detail=self.cleanup_detail
                     or "scoped cleanup of recorded identities only",
-                    tracked_count=len(self.tracked),
-                )
+                    evidence={"tracked_count": len(self.tracked)},
+                ),
+            )
+            self._write_partial()
 
     def run(self) -> int:
         self.evidence.mkdir(parents=True, exist_ok=False)
+        created_work = False
         try:
             self.case_s1()
             dirty = run(["git", "status", "--porcelain"], cwd=_ROOT, check=True).stdout
@@ -718,123 +725,172 @@ class AcceptanceOrchestrator:
                 )
                 self.cases.extend(
                     mark_remaining_not_run(
-                        REQUIRED_CASES,
+                        REQUIRED_BEFORE_CLEANUP,
                         self.cases,
                         reason="dirty worktree",
                     )
                 )
-                status = overall_status(self.cases)
-                self.write_final(status)
-                return 2
-            self.work = Path(
-                tempfile.mkdtemp(prefix="fetchnow-media-storage-resource-")
-            )
-            self.track("workdir", str(self.work))
-            self.case_s2_fault()
-            ready = self.case_s2_contract()
-            if not ready:
-                # S9 cleanup still runs in finally; do not mark it BLOCKED.
-                blocked_targets = tuple(
-                    n for n in REQUIRED_CASES if n != "S9_cleanup"
-                )
-                self.cases.extend(
-                    mark_remaining_blocked(
-                        blocked_targets,
-                        self.cases,
-                        reason=self._blocked_reason or "contract FS unavailable",
-                    )
-                )
             else:
-                try:
-                    self._run_release_path()
-                except Exception as exc:  # noqa: BLE001
-                    # Ensure unfinished required cases are NOT_RUN/FAIL appropriately.
-                    if not any(c.name == "S3_container_mounts" for c in self.cases):
-                        self.record(
-                            "S3_container_mounts",
-                            "FAIL",
-                            f"aborted: {type(exc).__name__}: {exc}",
-                        )
+                self.work = Path(
+                    tempfile.mkdtemp(prefix="fetchnow-media-storage-resource-")
+                )
+                created_work = True
+                self.track("workdir", str(self.work))
+                self.case_s2_fault()
+                ready = self.case_s2_contract()
+                if not ready:
                     self.cases.extend(
-                        mark_remaining_not_run(
-                            REQUIRED_CASES,
+                        mark_remaining_blocked(
+                            REQUIRED_BEFORE_CLEANUP,
                             self.cases,
-                            reason=f"aborted after {type(exc).__name__}",
+                            reason=self._blocked_reason or "contract FS unavailable",
                         )
                     )
+                else:
+                    try:
+                        self._run_release_path()
+                    except Exception as exc:  # noqa: BLE001
+                        if not any(c.name == "S3_container_mounts" for c in self.cases):
+                            self.record(
+                                "S3_container_mounts",
+                                "FAIL",
+                                f"aborted: {type(exc).__name__}: {exc}",
+                            )
+                        # Persist sanitized primary failure for evidence upload.
+                        (self.evidence / "primary_failure.json").write_text(
+                            json.dumps(
+                                {
+                                    "stage": "release_path",
+                                    "error_type": type(exc).__name__,
+                                    "error_detail": str(exc)[:4000],
+                                },
+                                indent=2,
+                                sort_keys=True,
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                        self.cases.extend(
+                            mark_remaining_not_run(
+                                REQUIRED_BEFORE_CLEANUP,
+                                self.cases,
+                                reason=f"aborted after {type(exc).__name__}",
+                            )
+                        )
         except Exception as exc:  # noqa: BLE001
-            if not self.cases or self.cases[-1].name == "S1_environment_identity":
-                pass
+            (self.evidence / "primary_failure.json").write_text(
+                json.dumps(
+                    {
+                        "stage": "orchestrator",
+                        "error_type": type(exc).__name__,
+                        "error_detail": str(exc)[:4000],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             self.cases.extend(
                 mark_remaining_not_run(
-                    REQUIRED_CASES,
+                    REQUIRED_BEFORE_CLEANUP,
                     self.cases,
                     reason=f"aborted: {type(exc).__name__}: {exc}",
                 )
             )
         finally:
-            # S9 always attempted when we created resources.
-            if not any(c.name == "S9_cleanup" for c in self.cases):
+            if created_work or self.work is not None:
                 try:
                     self.cleanup()
                 except Exception as exc:  # noqa: BLE001
                     self.cleanup_ok = False
                     self.cleanup_detail = f"{type(exc).__name__}: {exc}"
-                    self.record("S9_cleanup", "FAIL", self.cleanup_detail)
-            if not self.cleanup_ok and any(
-                c.name == "S9_cleanup" and c.status == "PASS" for c in self.cases
-            ):
-                # Correct a premature PASS if later failure occurred.
-                for i, c in enumerate(self.cases):
-                    if c.name == "S9_cleanup":
-                        self.cases[i] = CaseResult(
-                            "S9_cleanup", "FAIL", self.cleanup_detail
-                        )
+                    upsert_case(
+                        self.cases,
+                        CaseResult(
+                            name="S9_cleanup",
+                            status="FAIL",
+                            detail=self.cleanup_detail,
+                        ),
+                    )
+            elif not any(c.name == "S9_cleanup" for c in self.cases):
+                # No disposable resources created; cleanup not applicable.
+                upsert_case(
+                    self.cases,
+                    CaseResult(
+                        name="S9_cleanup",
+                        status="NOT_RUN",
+                        detail="no disposable resources created",
+                    ),
+                )
 
-        # Deduplicate case names keeping first decisive status.
-        seen: set[str] = set()
-        deduped: list[CaseResult] = []
+        # Deduplicate keeping first status except S9 (always last upsert wins).
+        by_name: dict[str, CaseResult] = {}
+        order: list[str] = []
         for c in self.cases:
-            if c.name in seen:
-                continue
-            seen.add(c.name)
-            deduped.append(c)
-        self.cases = deduped
-        # Fill any still-missing required cases.
+            if c.name not in by_name:
+                order.append(c.name)
+            if c.name == "S9_cleanup" or c.name not in by_name:
+                by_name[c.name] = c
+        self.cases = [by_name[n] for n in order]
         self.cases.extend(
             mark_remaining_not_run(
-                REQUIRED_CASES, self.cases, reason="never reached"
+                REQUIRED_BEFORE_CLEANUP, self.cases, reason="never reached"
             )
         )
+        if not any(c.name == "S9_cleanup" for c in self.cases):
+            self.cases.append(
+                CaseResult(
+                    name="S9_cleanup",
+                    status="NOT_RUN",
+                    detail="cleanup never recorded",
+                )
+            )
 
         status = overall_status(self.cases)
-        if not self.cleanup_ok:
+        if not self.cleanup_ok and any(
+            c.name == "S9_cleanup" and c.status == "FAIL" for c in self.cases
+        ):
             status = "FAIL"
         result_path = self.write_final(status)
-        # Hash evidence after result written; then append manifest hash file.
-        manifest = {
-            str(p.relative_to(self.evidence)): sha256_file(p)
-            for p in sorted(self.evidence.rglob("*"))
-            if p.is_file()
-        }
-        (self.evidence / "evidence_sha256.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        # Final manifest including evidence_sha256.json itself.
-        manifest2 = {
-            str(p.relative_to(self.evidence)): sha256_file(p)
-            for p in sorted(self.evidence.rglob("*"))
-            if p.is_file()
-        }
-        (self.evidence / "evidence_sha256.json").write_text(
-            json.dumps(manifest2, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        self._write_evidence_manifest()
+        self._transfer_evidence_ownership()
         print(f"result={status} path={result_path}")
         if status == "PASS":
             return 0
         if status in {"NOT_RUN", "BLOCKED"}:
             return 2
         return 1
+
+    def _write_evidence_manifest(self) -> None:
+        """Hash all published evidence files; do not nest a self-hash."""
+        manifest: dict[str, str] = {}
+        for path in sorted(self.evidence.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name in {"evidence_sha256.json", "evidence_manifest.sha256"}:
+                continue
+            manifest[str(path.relative_to(self.evidence))] = sha256_file(path)
+        man_path = self.evidence / "evidence_sha256.json"
+        man_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        digest = sha256_file(man_path)
+        (self.evidence / "evidence_manifest.sha256").write_text(
+            digest + "\n", encoding="utf-8"
+        )
+        print(f"evidence_manifest_sha256={digest}")
+
+    def _transfer_evidence_ownership(self) -> None:
+        """Hand evidence to the non-root runner UID without world-writable modes."""
+        if self.evidence_owner is None or os.geteuid() != 0:
+            return
+        uid, gid = self.evidence_owner
+        if uid <= 0 or gid < 0:
+            raise RuntimeError("refusing invalid evidence owner")
+        for path in sorted(self.evidence.rglob("*"), reverse=True):
+            os.chown(path, uid, gid)
+        os.chown(self.evidence, uid, gid)
 
 
 def default_guard_exit() -> int:
@@ -859,10 +915,24 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Nonexistent directory for machine-readable evidence",
     )
+    parser.add_argument(
+        "--evidence-owner",
+        default="",
+        help="uid:gid that must own evidence after root execution (runner upload)",
+    )
     args = parser.parse_args(argv)
     if os.environ.get(EXECUTE_ENV) != "1":
         return default_guard_exit()
-    orch = AcceptanceOrchestrator(args.evidence_dir.resolve())
+    owner: tuple[int, int] | None = None
+    if args.evidence_owner:
+        try:
+            uid_s, gid_s = args.evidence_owner.split(":", 1)
+            owner = (int(uid_s), int(gid_s))
+        except ValueError as exc:
+            raise SystemExit(f"invalid --evidence-owner: {args.evidence_owner!r}") from exc
+    orch = AcceptanceOrchestrator(
+        args.evidence_dir.resolve(), evidence_owner=owner
+    )
     return orch.run()
 
 

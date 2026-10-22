@@ -207,3 +207,44 @@ def test_required_cases_cover_s1_s9():
     for token in ("S1_", "S2_", "S3_", "S4_", "S5_", "S6_", "S7_", "S8_", "S9_"):
         assert token in joined
     assert mod.EXECUTE_ENV.endswith("EXECUTE")
+    assert "S9_cleanup" not in mod.REQUIRED_BEFORE_CLEANUP
+
+
+def test_s9_upsert_overrides_not_run_placeholder():
+    mod = _load_mod()
+    cases = [
+        mod.CaseResult(name="S3_container_mounts", status="FAIL", detail="x"),
+        mod.CaseResult(name="S9_cleanup", status="NOT_RUN", detail="placeholder"),
+    ]
+    mod.upsert_case(
+        cases,
+        mod.CaseResult(name="S9_cleanup", status="PASS", detail="cleaned"),
+    )
+    s9 = [c for c in cases if c.name == "S9_cleanup"]
+    assert len(s9) == 1
+    assert s9[0].status == "PASS"
+    assert s9[0].detail == "cleaned"
+
+
+def test_evidence_manifest_excludes_self_hash(tmp_path):
+    mod = _load_mod()
+    evidence = tmp_path / "ev"
+    evidence.mkdir()
+    (evidence / "result.json").write_text('{"status":"FAIL"}\n', encoding="utf-8")
+    (evidence / "primary_failure.json").write_text("{}\n", encoding="utf-8")
+    orch = mod.AcceptanceOrchestrator(evidence)
+    orch._write_evidence_manifest()
+    man = (evidence / "evidence_sha256.json").read_text(encoding="utf-8")
+    assert "result.json" in man
+    assert "primary_failure.json" in man
+    assert '"evidence_sha256.json"' not in man
+    digest = (evidence / "evidence_manifest.sha256").read_text(encoding="utf-8").strip()
+    assert len(digest) == 64
+
+
+def test_workflow_exports_evidence_owner_and_separate_host_logs():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--evidence-owner" in text
+    assert "media-storage-host-logs" in text
+    assert "chmod 777" not in text
+    assert "evidence export failed" in text

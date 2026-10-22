@@ -18,6 +18,7 @@ def mux_argv(
 ) -> list[str]:
     if container not in {"mp4", "webm"}:
         raise ValueError("container")
+    # Input options reset between -i; whitelist must precede each input.
     return [
         ffmpeg,
         "-hide_banner",
@@ -30,6 +31,8 @@ def mux_argv(
         "file",
         "-i",
         str(video),
+        "-protocol_whitelist",
+        "file",
         "-i",
         str(audio),
         "-map",

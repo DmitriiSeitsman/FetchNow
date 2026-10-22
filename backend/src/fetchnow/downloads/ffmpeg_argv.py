@@ -35,6 +35,8 @@ def build_ffmpeg_mux_argv(
             raise ValueError(f"{label} invalid")
         if not os.path.isabs(value):
             raise ValueError(f"{label} invalid")
+    # FFmpeg input options apply only to the next -i and reset between inputs.
+    # Repeat file-only whitelist before every input so both demuxers stay file-bound.
     return [
         executable,
         "-hide_banner",
@@ -47,6 +49,8 @@ def build_ffmpeg_mux_argv(
         "file",
         "-i",
         video_path,
+        "-protocol_whitelist",
+        "file",
         "-i",
         audio_path,
         "-map",
