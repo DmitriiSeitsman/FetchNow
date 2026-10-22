@@ -6,6 +6,7 @@ Docker/release transports are stubbed; these are NOT native containment proof.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -14,6 +15,9 @@ from types import SimpleNamespace
 import native_media_storage_media_inside as media
 import native_media_storage_resource_release_path as mod
 import pytest
+from fetchnow_release import image_build
+from fetchnow_release.bounded_subprocess import BoundedResult
+from fetchnow_release.env_file import load_env_file
 from fetchnow_release.manifest import (
     ImageRecord,
     ManifestError,
@@ -32,13 +36,14 @@ from fetchnow_release.resource_budget import disposable_test_budget
 from fetchnow_release.rollout import RolloutResult
 
 REV = "a" * 40
+LEGACY_REV = "c" * 40
 
 
-def media_manifest() -> ReleaseManifest:
+def media_manifest(*, revision=REV) -> ReleaseManifest:
     return ReleaseManifest(
         schema_version=1,
         source_contract_version=4,
-        revision=REV,
+        revision=revision,
         tree_oid="b" * 40,
         created_at_utc="2026-01-01T00:00:00Z",
         archive_commit_verified=True,
@@ -49,12 +54,13 @@ def media_manifest() -> ReleaseManifest:
         images=tuple(
             ImageRecord(
                 service=service,
-                reference=image_reference_for_service(service, REV),
-                image_id="sha256:" + str(index) * 64,
-                oci_revision=REV,
+                reference=image_reference_for_service(service, revision),
+                image_id="sha256:"
+                + hashlib.sha256((revision + service).encode()).hexdigest(),
+                oci_revision=revision,
                 platform="linux/amd64",
             )
-            for index, service in enumerate(sorted(expected_image_services("media")), 1)
+            for service in sorted(expected_image_services("media"))
         ),
         contract_hashes={"compose.yaml": "c" * 64},
         tool_version="test",
@@ -164,11 +170,60 @@ class ReachedPositiveError(RuntimeError):
     pass
 
 
+def test_fixture_revisions_are_marker_only_real_disposable_git(tmp_path):
+    """Only this test's temp repo is committed; no FetchNow checkout writes."""
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    for argv in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "Fixture Test"],
+        ["git", "config", "user.email", "fixture@example.test"],
+    ):
+        subprocess.run(argv, cwd=clone, check=True, capture_output=True)
+    (clone / "runtime.txt").write_text("unchanged")
+    mod.commit(clone, "disposable test baseline")
+    marker = clone / "docs" / "media-storage-accept-marker.txt"
+    legacy, positive = mod.create_fixture_revisions(clone, marker, "fixture")
+    assert legacy != positive
+    for rev in (legacy, positive):
+        contents = subprocess.run(
+            ["git", "show", f"{rev}:runtime.txt"],
+            cwd=clone,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert contents == "unchanged"
+    assert (
+        mod._run(["git", "status", "--porcelain"], cwd=clone, check=True).stdout == ""
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["same", "empty_delta", "runtime_delta", "not_ancestor"]
+)
+def test_fixture_revision_identity_or_runtime_drift_refused(
+    tmp_path, monkeypatch, failure
+):
+    commits = iter([LEGACY_REV, LEGACY_REV if failure == "same" else REV])
+    monkeypatch.setattr(mod, "commit", lambda *a: next(commits))
+
+    def run(argv, **kwargs):
+        if failure == "not_ancestor":
+            raise RuntimeError("git merge-base failed")
+        stdout = "backend/Dockerfile\n" if failure == "runtime_delta" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(mod, "_run", run)
+    with pytest.raises(RuntimeError):
+        mod.create_fixture_revisions(tmp_path, tmp_path / "docs" / "marker", "fixture")
+
+
 @pytest.mark.parametrize("broken_negative", [None, "KeyError", "unrelated"])
 def test_projects_are_separate_and_legacy_never_removed_in_use(
     tmp_path, monkeypatch, broken_negative
 ):
-    """Exercise real orchestration + typed manifests until the positive ON gate."""
+    """Real schema + occupied-tag guard; Docker metadata transport is stubbed."""
     work = tmp_path / "work"
     work.mkdir()
     projects = ["fetchnow-rollout-test-11111111", "fetchnow-rollout-test-22222222"]
@@ -183,15 +238,40 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
     monkeypatch.setattr(
         mod, "ensure_rollout_fixture_compatibility_policy", lambda p: None
     )
-    monkeypatch.setattr(mod, "commit", lambda *a: REV)
+    revisions = iter([LEGACY_REV, REV])
+    monkeypatch.setattr(mod, "commit", lambda *a: next(revisions))
     monkeypatch.setattr(mod, "wait_for_postgres", lambda *a: None)
     calls, volumes, records, tracks, unmounts = [], {}, [], [], []
+    images, running, cid_images, prepares = {}, {}, {}, []
+    envs = {}
     sentinel = []
+
+    def probe(argv, **kwargs):
+        """No Docker calls: exercise production image-ID/ancestor resolution."""
+        stdout, rc = "", 0
+        if argv[:3] == ["docker", "image", "inspect"]:
+            image = images.get(argv[3])
+            if image is None:
+                rc = 1
+            else:
+                stdout = image if argv[-1] == "{{.Id}}" else json.dumps({"Id": image})
+        elif argv[:2] == ["docker", "ps"]:
+            image = argv[argv.index("--filter") + 1].removeprefix("ancestor=")
+            stdout = "\n".join(f"{cid} {name}" for cid, name in running.get(image, []))
+        elif argv[:2] == ["docker", "inspect"]:
+            stdout = json.dumps(cid_images[argv[2]])
+        else:
+            raise AssertionError(f"unexpected metadata probe: {argv}")
+        return BoundedResult(tuple(argv), rc, stdout.encode(), b"")
+
+    monkeypatch.setattr(image_build, "_probe", probe)
 
     def fake_run(argv, **kwargs):
         calls.append(argv)
         stdout, rc = "", 0
-        if argv[:3] == ["docker", "volume", "inspect"]:
+        if argv[:3] == ["git", "diff", "--name-only"]:
+            stdout = "docs/media-storage-accept-marker.txt\n"
+        elif argv[:3] == ["docker", "volume", "inspect"]:
             if argv[-1] not in volumes:
                 rc = 1
             else:
@@ -212,20 +292,45 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
     monkeypatch.setattr(mod, "_run", fake_run)
 
     def prepare(inp):
-        path = inp.deploy_root / "releases" / REV / "release.json"
+        values = load_env_file(inp.env_file)
+        assert values["FETCHNOW_RELEASE_REVISION"] == inp.expected_revision
+        assert values["COMPOSE_PROJECT_NAME"] == inp.project_name
+        envs[inp.project_name] = inp.expected_revision
+        # This is the genuine production guard, not a stub that always succeeds.
+        image_build.assert_tag_collision_safe(
+            inp.expected_revision, release_mode="media"
+        )
+        manifest = media_manifest(revision=inp.expected_revision)
+        path = inp.deploy_root / "releases" / inp.expected_revision / "release.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_manifest(path, media_manifest())
+        write_manifest(path, manifest)
+        for image in manifest.images:
+            images[image.reference] = image.image_id
+        prepares.append((inp.project_name, inp.expected_revision, path))
         return SimpleNamespace(ok=True)
 
     monkeypatch.setattr(mod, "prepare_release", prepare)
 
     def rollout(inp):
+        assert inp.expected_revision == envs[inp.project_name]
         if not inp.media_activation:
             if inp.project_name == projects[0]:
                 assert volumes[f"{projects[0]}_tmp"]["type"] == "none"
                 assert volumes[f"{projects[0]}_tmp"]["o"] == "bind"
             else:
                 volumes[f"{projects[1]}_tmp"] = {}
+                image = images[image_reference_for_service("api", LEGACY_REV)]
+                cid = "legacy-container"
+                running[image] = [(cid, inp.project_name + "-api")]
+                cid_images[cid] = image
+                # Reproduce the historical failure: rebuilding that same
+                # revision MUST still be refused while legacy is running.
+                with pytest.raises(
+                    image_build.ImageBuildError, match="refusing to overwrite"
+                ):
+                    image_build.assert_tag_collision_safe(
+                        LEGACY_REV, release_mode="media"
+                    )
             authority = mod.current_path(inp.deploy_root)
             authority.parent.mkdir(parents=True, exist_ok=True)
             authority.write_bytes(inp.project_name.encode())
@@ -293,6 +398,17 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
         )
     assert not any(argv[:3] == ["docker", "volume", "rm"] for argv in calls)
     assert {a[1] for a, _ in tracks if a[0] == "compose_project"} == set(projects)
+    assert [(p, r) for p, r, _ in prepares] == [
+        (projects[1], LEGACY_REV),
+        (projects[0], REV),
+    ]
+    assert envs == {projects[1]: LEGACY_REV, projects[0]: REV}
+    # Positive prepare must not retarget any legacy reference or stale its manifest.
+    for _, _, path in prepares:
+        manifest = mod.load_manifest(path)
+        assert all(
+            images[image.reference] == image.image_id for image in manifest.images
+        )
     if broken_negative:
         assert not any(a[1] == "PASS" for a, _ in records)
     else:
@@ -301,6 +417,9 @@ def test_projects_are_separate_and_legacy_never_removed_in_use(
             "S4_missing_or_wrong_fs",
         }
         assert len(unmounts) == 1
+        legacy = next(e for a, e in records if a[0] == "S5_legacy_volume_refusal")
+        assert legacy["legacy_revision"] == LEGACY_REV
+        assert legacy["positive_revision"] == REV
 
 
 @pytest.mark.parametrize(

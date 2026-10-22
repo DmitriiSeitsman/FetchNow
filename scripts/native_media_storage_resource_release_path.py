@@ -34,6 +34,7 @@ from fetchnow_release.media_storage import (
 )
 from fetchnow_release.prepare import PrepareInput, prepare_release
 from fetchnow_release.resource_budget import parse_resource_budget
+from fetchnow_release.revision import validate_full_sha
 from fetchnow_release.rollout import RolloutInput, RolloutResult, rollout_release
 from fetchnow_release.rollout_project import make_rollout_project_name
 from fetchnow_release.stabilize import StabilizationPolicy
@@ -136,6 +137,36 @@ def create_contract_volumes(
         track("docker_volume", name, role="positive_contract")
 
 
+def create_fixture_revisions(clone: Path, marker: Path, suffix: str) -> tuple[str, str]:
+    """Different projects need different revision tags, not two builds of one tag.
+
+    Only the disposable documentation marker may differ. Do not weaken the
+    release engine's occupied-image guard or reuse a stale manifest after retag.
+    """
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(suffix + "-legacy", encoding="utf-8")
+    legacy = validate_full_sha(commit(clone, f"test: legacy storage fixture {suffix}"))
+    marker.write_text(suffix + "-positive", encoding="utf-8")
+    positive = validate_full_sha(
+        commit(clone, f"test: positive storage fixture {suffix}")
+    )
+    if legacy == positive:
+        raise RuntimeError("legacy and positive fixture revisions must differ")
+    _run(
+        ["git", "merge-base", "--is-ancestor", legacy, positive], cwd=clone, check=True
+    )
+    changed = _run(
+        ["git", "diff", "--name-only", "--no-renames", legacy, positive],
+        cwd=clone,
+        check=True,
+    ).stdout.splitlines()
+    if changed != [marker.relative_to(clone).as_posix()]:
+        raise RuntimeError(
+            "fixture revisions must differ only in the documentation marker"
+        )
+    return legacy, positive
+
+
 def probe_distinct_revision_rollback(
     *,
     clone: Path,
@@ -208,9 +239,9 @@ def run_release_cases(
     track("compose_project", project)
     suffix = secrets.token_hex(6)
     marker = clone / "docs" / "media-storage-accept-marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(suffix, encoding="utf-8")
-    revision = commit(clone, f"test: media storage acceptance {suffix}")
+    legacy_revision, revision = create_fixture_revisions(clone, marker, suffix)
+    track("fixture_revision", legacy_revision, role="legacy")
+    track("fixture_revision", revision, role="positive")
 
     env = work / "env"
     port = f"127.0.0.1:{18000 + secrets.randbelow(1800)}"
@@ -313,11 +344,11 @@ def run_release_cases(
     write_env(
         legacy_env,
         project=legacy_project,
-        revision=revision,
+        revision=legacy_revision,
         gateway_port=legacy_port,
         deploy_root=legacy_deploy,
     )
-    prepare(revision, p=legacy_project, e=legacy_env, d=legacy_deploy)
+    prepare(legacy_revision, p=legacy_project, e=legacy_env, d=legacy_deploy)
     legacy_compose = compose_argv(legacy_project, legacy_env, clone)
     _run(legacy_compose + ["up", "-d", "postgres"], cwd=clone, check=True, timeout=300)
     wait_for_postgres(legacy_compose, clone)
@@ -329,7 +360,7 @@ def run_release_cases(
     )
     legacy_off = rollout_release(
         inp(
-            revision,
+            legacy_revision,
             active=False,
             bootstrap=True,
             p=legacy_project,
@@ -390,7 +421,7 @@ def run_release_cases(
     )
     attempt = rollout_release(
         inp(
-            revision,
+            legacy_revision,
             active=True,
             p=legacy_project,
             e=legacy_env,
@@ -432,6 +463,8 @@ def run_release_cases(
         "PASS",
         "migration-required refusal; sentinel preserved",
         volume=legacy_name,
+        legacy_revision=legacy_revision,
+        positive_revision=revision,
         refuse_detail=refuse_detail[:500],
     )
     # Do not remove an in-use volume or migrate it for the positive fixture.

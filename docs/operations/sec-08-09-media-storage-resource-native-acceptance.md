@@ -81,3 +81,43 @@ Local verification for this correction: `tests/release` + `tests/pg_backup`
 **767 passed** (fresh); Ruff on the five touched Python files and mypy on
 the three harness/driver modules passed; `git diff --check` passed.
 Backend broad/native/Trivy were not rerun; there are no new native image IDs.
+
+## Local revision/tag correction after run 39846098215
+
+Run 39846098215 at `ed4ddd81027726b2d904f1514c7f646980084e22`
+remains FAIL: the positive prepare tried to rebuild revision tags still used
+by the legacy project's running containers. Image identities were recorded;
+S4–S8 were NOT_RUN and S9 passed. This was a fixture lifecycle defect, not
+permission to bypass the image builder's occupied-image guard.
+
+The fixture now creates separate synthetic legacy L and positive A revisions
+inside its disposable clone. Their Git diff must contain exactly the
+documentation marker, with L an ancestor of A. Each project uses its own
+matching revision in env, prepare, rollout and release manifest. S8 still
+creates a third target B distinct from active A. The legacy/positive
+revision identities are recorded as tracked evidence and in S5 evidence.
+
+The release image builder and overwrite protection are unchanged. Preparing
+both roots under one revision before starting containers was deliberately
+not used: a second build could retarget shared tags and stale the first
+manifest even without running containers.
+
+The orchestration regression now invokes the actual
+`image_build.assert_tag_collision_safe` including image-ID/ancestor lookup;
+only Docker metadata transport and the build/rollout execution are stubbed.
+It verifies the old same-revision rebuild remains refused while legacy is
+running, positive A proceeds, both env/revision bindings agree, and both
+manifests still match their respective unmodified tags. A separate real
+temporary-Git test verifies the marker-only delta. Duplicate revisions,
+non-ancestor revisions, an empty delta or runtime-file changes fail closed.
+
+These are local regressions, not a new native container/image proof. No
+commit, push, CI dispatch, Trivy, SSH, host installation or production change
+is part of this correction; a new native S1–S9 run needs separate authorization.
+READY FOR ROLLOUT remains NO. Previous approvals/activation state are unchanged.
+
+Fresh local verification for this tag correction: `tests/release` +
+`tests/pg_backup` **772 passed**; Ruff on the two touched Python files, mypy
+on the changed harness module, stdlib-only import (`python -S`) and
+`git diff --check` passed. Native S1–S9 and image-security remain NOT_RUN
+for this uncommitted correction; production installation is NOT_PERFORMED.
