@@ -1,0 +1,349 @@
+name: SEC-08/09 final candidate image audit
+
+# One-shot audit of the seven candidate runtime images built from a clean
+# `git archive` of the audited source SHA. Push-only, attempt 1 only.
+# Authorization: the pushed commit's single parent is the audited source SHA
+# and its changed paths are exactly the audit-only manifest. No commit-message
+# matching. NEW_AUDIT_ARTIFACT: no prior Image ID, approval or native PASS
+# transfers. No VEX / residual acceptance / ignore-unfixed / severity lowering.
+on:
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+    paths:
+      - .github/workflows/sec08-09-final-candidate-image-audit.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec08-09-final-candidate-image-audit
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: >-
+      github.event_name == 'push' &&
+      github.run_attempt == 1 &&
+      github.ref == 'refs/heads/codex/security-sec-09-network-isolation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Parent SHA + exact manifest authorization
+        id: gate
+        run: |
+          set -euo pipefail
+          python3 scripts/image_audit_final_candidate.py authorize \
+            --json-out "$RUNNER_TEMP/final-authorize.json"
+
+  audit:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      AUDITED_SOURCE_SHA: 9934ebe63943e7c1007564402e50258865a3a380
+      FETCHNOW_IMAGE_AUDIT_TAG: final-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Audit directories
+        run: |
+          {
+            echo "EVIDENCE_DIR=$RUNNER_TEMP/final-evidence"
+            echo "SRC_DIR=$RUNNER_TEMP/final-src"
+            echo "WORK_DIR=$RUNNER_TEMP/final-trivy-work"
+            echo "CACHE_DIR=$RUNNER_TEMP/final-trivy-cache"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-verify authorization on full checkout
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$AUDITED_SOURCE_SHA"
+          python3 scripts/image_audit_final_candidate.py authorize \
+            --json-out "$EVIDENCE_DIR/authorize.json"
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['allowed'], d" \
+            "$EVIDENCE_DIR/authorize.json"
+
+      - name: Host platform is native linux/amd64
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          docker info --format '{{.Architecture}}' | tee "$EVIDENCE_DIR/docker-arch.txt"
+          grep -Eqx 'x86_64|amd64' "$EVIDENCE_DIR/docker-arch.txt"
+          docker version --format '{{.Server.Version}}' | tee "$EVIDENCE_DIR/docker-version.txt"
+          test -z "$(docker ps -aq)"
+          docker volume ls -q | sort > "$RUNNER_TEMP/baseline-volumes.txt"
+          docker network ls -q --filter type=custom | sort > "$RUNNER_TEMP/baseline-networks.txt"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Offline audit unit tests
+        run: |
+          set -euo pipefail
+          python3.12 -m pip install --require-hashes --no-deps \
+            -r backend/ci/pytest-requirements.txt
+          PYTHONPATH=scripts python3.12 -m pytest -q \
+            tests/image_audit/test_image_audit_final_candidate_unit.py \
+            tests/image_audit/test_image_audit_candidate7_unit.py \
+            tests/image_audit/test_image_audit_candidate7_smoke_unit.py \
+            tests/image_audit/test_image_audit_unit.py
+
+      - name: Clean build context from audited source SHA
+        run: |
+          set -euo pipefail
+          mkdir -p "$SRC_DIR"
+          git archive --format=tar "$AUDITED_SOURCE_SHA" | tar -x -C "$SRC_DIR"
+          PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py source-proof \
+            --repo "$GITHUB_WORKSPACE" \
+            --clean-dir "$SRC_DIR" \
+            --audited-source-sha "$AUDITED_SOURCE_SHA" \
+            --json-out "$EVIDENCE_DIR/source-proof.json"
+
+      - name: Build/pull seven runtime images from clean context
+        id: build
+        run: |
+          set -euo pipefail
+          rev="$AUDITED_SOURCE_SHA"
+          tag="$FETCHNOW_IMAGE_AUDIT_TAG"
+          cd "$SRC_DIR"
+          pg_ref="$(sed -nE 's/^[[:space:]]+image:[[:space:]]+(postgres:[^[:space:]]+)[[:space:]]*$/\1/p' compose.yaml | head -n1)"
+          test "$pg_ref" = "postgres:16.15-alpine3.24"
+          if docker image inspect "$pg_ref" >/dev/null 2>&1; then
+            echo "preexisting" > "$EVIDENCE_DIR/postgres-preexisting.txt"
+          else
+            echo "absent" > "$EVIDENCE_DIR/postgres-preexisting.txt"
+          fi
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-api:${tag}" -f backend/Dockerfile ./backend
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            --build-arg PUBLIC_SITE_URL=http://localhost \
+            --build-arg PUBLIC_SEARCH_INDEXING_ENABLED=false \
+            -t "fetchnow-web:${tag}" -f web/Dockerfile ./web
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-gateway:${tag}" -f deploy/nginx/Dockerfile ./deploy/nginx
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-media-executor:${tag}" -f backend/Dockerfile.media-executor ./backend
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-media-net-executor:${tag}" -f backend/Dockerfile.media-net-executor ./backend
+          docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
+            -t "fetchnow-egress-proxy:${tag}" -f backend/Dockerfile.media-egress-proxy ./backend
+          docker pull --platform linux/amd64 "$pg_ref"
+          docker buildx imagetools inspect "$pg_ref" > "$EVIDENCE_DIR/postgres-registry-index.txt"
+          docker buildx imagetools inspect --raw "$pg_ref" > "$EVIDENCE_DIR/postgres-registry-index.raw.json"
+          cd "$GITHUB_WORKSPACE"
+          PG_REF="$pg_ref" python3.12 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+
+          tag = os.environ["FETCHNOW_IMAGE_AUDIT_TAG"]
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          mapping = {
+              "api": f"fetchnow-api:{tag}",
+              "web": f"fetchnow-web:{tag}",
+              "gateway": f"fetchnow-gateway:{tag}",
+              "media-executor": f"fetchnow-media-executor:{tag}",
+              "media-net-executor": f"fetchnow-media-net-executor:{tag}",
+              "egress-proxy": f"fetchnow-egress-proxy:{tag}",
+              "postgres": os.environ["PG_REF"],
+          }
+          identities = {}
+          for name, ref in mapping.items():
+              raw = subprocess.check_output(
+                  ["docker", "image", "inspect", ref, "--format", "{{json .}}"], text=True
+              )
+              (evidence / f"inspect-{name}.json").write_text(raw, encoding="utf-8")
+              data = json.loads(raw)
+              labels = (data.get("Config") or {}).get("Labels") or {}
+              identities[name] = {
+                  "reference": ref,
+                  "image_id": data.get("Id"),
+                  "config_digest": data.get("Id"),
+                  "platform": f"{data.get('Os')}/{data.get('Architecture')}",
+                  "repo_digests": data.get("RepoDigests") or [],
+                  "revision_label": labels.get("org.opencontainers.image.revision"),
+              }
+              print(name, json.dumps(identities[name], sort_keys=True))
+              if name != "postgres":
+                  assert identities[name]["revision_label"] == os.environ["AUDITED_SOURCE_SHA"], name
+              assert identities[name]["platform"] == "linux/amd64", name
+          (evidence / "pre-scan-identities.json").write_text(
+              json.dumps(identities, indent=2) + "\n", encoding="utf-8"
+          )
+          (evidence / "targets.json").write_text(json.dumps(mapping, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Compatibility smoke (inventory, API/migrate/worker, media, nginx, gosu)
+        run: |
+          set -euo pipefail
+          tag="$FETCHNOW_IMAGE_AUDIT_TAG"
+          PYTHONPATH=scripts python3.12 scripts/image_audit_candidate7_smoke.py \
+            --run-id "final-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --work-dir "$EVIDENCE_DIR" \
+            --api-image "fetchnow-api:${tag}" \
+            --web-image "fetchnow-web:${tag}" \
+            --gateway-image "fetchnow-gateway:${tag}" \
+            --postgres-image postgres:16.15-alpine3.24
+
+      - name: Compatibility smoke (executors + egress proxy)
+        run: |
+          set -euo pipefail
+          PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py smoke-isolated \
+            --targets-file "$EVIDENCE_DIR/targets.json" \
+            --json-out "$EVIDENCE_DIR/isolated-smoke.json"
+
+      - name: Install Trivy 0.74.0 (checksum-pinned Linux-64bit)
+        run: |
+          set -euo pipefail
+          asset=trivy_0.74.0_Linux-64bit.tar.gz
+          want=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$EVIDENCE_DIR/trivy-version.txt"
+          grep -q 'Version: 0.74.0' "$EVIDENCE_DIR/trivy-version.txt"
+
+      - name: Seven-image Trivy audit on one frozen DB snapshot
+        id: audit
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK_DIR" "$CACHE_DIR"
+          set +e
+          PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py audit \
+            --trivy-bin trivy \
+            --cache-dir "$CACHE_DIR" \
+            --targets-file "$EVIDENCE_DIR/targets.json" \
+            --expected-platform linux/amd64 \
+            --work-dir "$WORK_DIR" \
+            --summary-out "$EVIDENCE_DIR/final-summary.json" \
+            --clean-dir "$SRC_DIR" \
+            --source-proof "$EVIDENCE_DIR/source-proof.json" \
+            --audited-source-sha "$AUDITED_SOURCE_SHA" \
+            --audit-harness-sha "$GITHUB_SHA"
+          gate_rc=$?
+          set -e
+          echo "gate_rc=${gate_rc}" >> "$GITHUB_OUTPUT"
+          technical="$(python3.12 -c "import json,sys; print(str(json.load(open(sys.argv[1])).get('status') == 'technical_failure').lower())" "$EVIDENCE_DIR/final-summary.json")"
+          echo "technical=${technical}" >> "$GITHUB_OUTPUT"
+          cp "$WORK_DIR"/*.trivy.json "$EVIDENCE_DIR/" 2>/dev/null || true
+          python3.12 - <<'PY'
+          import json, os
+          from pathlib import Path
+          s = json.loads(Path(os.environ["EVIDENCE_DIR"], "final-summary.json").read_text())
+          print("status:", s.get("status"), "error:", s.get("error_code"))
+          print("verdicts:", json.dumps(s.get("verdicts"), sort_keys=True))
+          print("db:", json.dumps(s.get("db"), sort_keys=True))
+          print("db_freeze:", json.dumps(s.get("db_freeze"), sort_keys=True))
+          for row in s.get("targets", []):
+              ident = row.get("identity") or {}
+              print(row.get("name"), row.get("status"), row.get("error_code"),
+                    ident.get("image_id"), ident.get("platform"), row.get("counts"))
+          hc = s.get("high_critical") or {}
+          print("HC unique:", hc.get("unique_count"), "instances:", hc.get("high_critical_instances"),
+                "fixable:", hc.get("fixable_count"), "unfixed:", hc.get("unfixed_count"))
+          PY
+
+      - name: UNKNOWN caller attribution (same Image IDs)
+        if: steps.audit.outcome == 'success' && steps.audit.outputs.technical == 'false'
+        run: |
+          set -euo pipefail
+          PYTHONPATH=scripts python3.12 scripts/image_audit_final_caller_attribution.py \
+            --targets-file "$EVIDENCE_DIR/targets.json" \
+            --identities-file "$EVIDENCE_DIR/pre-scan-identities.json" \
+            --json-out "$EVIDENCE_DIR/caller-attribution.json"
+
+      - name: Evidence hashes
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -d "$EVIDENCE_DIR" ]]; then
+            (cd "$EVIDENCE_DIR" && find . -maxdepth 1 -type f -print0 \
+              | sort -z | xargs -0 -r sha256sum > "$RUNNER_TEMP/evidence-sha256.txt")
+            mv "$RUNNER_TEMP/evidence-sha256.txt" "$EVIDENCE_DIR/evidence-sha256.txt"
+            cat "$EVIDENCE_DIR/evidence-sha256.txt"
+          fi
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-candidate-image-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Scoped cleanup + verification
+        if: always()
+        run: |
+          set -uo pipefail
+          tag="$FETCHNOW_IMAGE_AUDIT_TAG"
+          mkdir -p "$RUNNER_TEMP/final-cleanup"
+          report="$RUNNER_TEMP/final-cleanup/cleanup.txt"
+          : > "$report"
+          fail=0
+          refs=("fetchnow-api:${tag}" "fetchnow-web:${tag}" "fetchnow-gateway:${tag}"
+                "fetchnow-media-executor:${tag}" "fetchnow-media-net-executor:${tag}"
+                "fetchnow-egress-proxy:${tag}")
+          if [[ "$(cat "$EVIDENCE_DIR/postgres-preexisting.txt" 2>/dev/null)" == "absent" ]]; then
+            refs+=("postgres:16.15-alpine3.24")
+          fi
+          for ref in "${refs[@]}"; do
+            docker image rm "$ref" >/dev/null 2>&1 || true
+            if [[ -n "$(docker image ls -q --no-trunc --filter "reference=${ref}")" ]]; then
+              echo "image_still_present ${ref}" >> "$report"; fail=1
+            else
+              echo "image_absent ${ref}" >> "$report"
+            fi
+          done
+          if [[ -d "$CACHE_DIR" ]]; then
+            "$RUNNER_TEMP/trivy-bin/trivy" --cache-dir "$CACHE_DIR" clean --all >/dev/null 2>&1 || true
+            rm -rf "$CACHE_DIR"
+          fi
+          rm -rf "$WORK_DIR" "$SRC_DIR"
+          for d in "$CACHE_DIR" "$WORK_DIR" "$SRC_DIR"; do
+            if [[ -e "$d" ]]; then echo "dir_still_present ${d}" >> "$report"; fail=1; fi
+          done
+          if [[ -n "$(docker ps -aq)" ]]; then echo "containers_present" >> "$report"; fail=1; fi
+          if [[ -n "$(docker volume ls -q | sort | comm -13 "$RUNNER_TEMP/baseline-volumes.txt" -)" ]]; then
+            echo "new_volumes_present" >> "$report"; fail=1
+          fi
+          if [[ -n "$(docker network ls -q --filter type=custom | sort | comm -13 "$RUNNER_TEMP/baseline-networks.txt" -)" ]]; then
+            echo "new_custom_networks_present" >> "$report"; fail=1
+          fi
+          echo "cleanup_ok=$([[ $fail == 0 ]] && echo true || echo false)" >> "$report"
+          cat "$report"
+          exit "$fail"
+
+      - name: Upload cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-candidate-image-audit-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/final-cleanup
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Gate result (findings are non-zero, not technical)
+        if: always() && steps.audit.outcome == 'success'
+        env:
+          GATE_RC: ${{ steps.audit.outputs.gate_rc }}
+          TECHNICAL: ${{ steps.audit.outputs.technical }}
+        run: |
+          echo "gate_rc=${GATE_RC} technical=${TECHNICAL}"
+          exit "${GATE_RC}"
