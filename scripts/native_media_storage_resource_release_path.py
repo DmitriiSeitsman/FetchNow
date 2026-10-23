@@ -237,6 +237,69 @@ def probe_distinct_revision_rollback(
     return rolled, target_revision, injection
 
 
+def run_rollback_case(
+    *,
+    clone: Path,
+    marker: Path,
+    env: Path,
+    revision: str,
+    deploy: Path,
+    mount_point: Path,
+    prepare: Callable[[str], None],
+    inp: Callable[..., RolloutInput],
+    record: Callable[..., None],
+    start: Callable[[str], None],
+) -> None:
+    """Run the complete S8 path, including authority checks and durable evidence."""
+    start("S8_transaction_rollback")
+    authority_on = current_path(deploy).read_bytes()
+    media_before = load_media_activation_state(deploy)
+    sentinel_path = mount_point / "tmp" / "rollback-sentinel.bin"
+    sentinel_path.write_bytes(b"keep-me")
+
+    rolled, target_revision, injection = probe_distinct_revision_rollback(
+        clone=clone,
+        marker=marker,
+        env=env,
+        revision=revision,
+        prepare=prepare,
+        inp=inp,
+    )
+    authority_after = current_path(deploy).read_bytes()
+    media_after = load_media_activation_state(deploy)
+    still_mounted = _run(["mountpoint", "-q", str(mount_point)]).returncode == 0
+    if (
+        authority_after != authority_on
+        or media_after is None
+        or media_before is None
+        # Rollback republishes the previous authority with a fresh timestamp.
+        # Compare ALL operational fields, not merely activation=true.
+        or {**media_after.to_dict(), "updated_at_utc": None}
+        != {**media_before.to_dict(), "updated_at_utc": None}
+        or not still_mounted
+        or sentinel_path.read_bytes() != b"keep-me"
+    ):
+        record(
+            "S8_transaction_rollback",
+            "FAIL",
+            "rollback mutated authority or storage",
+            still_mounted=still_mounted,
+        )
+        raise RuntimeError("S8 FAIL")
+    record(
+        "S8_transaction_rollback",
+        "PASS",
+        "OFF ok; OFF→ON ok; ON activation failure restored prior ON; "
+        "storage not formatted/unmounted; sentinel kept",
+        rollback_status=rolled.status,
+        injection=injection,
+        previous_revision=revision,
+        target_revision=target_revision,
+        utc=utc_now(),
+        expected_rolled_back=STATUS_ROLLED_BACK,
+    )
+
+
 def run_release_cases(
     *,
     root: Path,
@@ -748,50 +811,15 @@ def run_release_cases(
     )
 
     # --- S8 rollback --------------------------------------------------------
-    start("S8_transaction_rollback")
-    authority_on = current_path(deploy).read_bytes()
-    media_before = load_media_activation_state(deploy)
-    sentinel_path = mount_point / "tmp" / "rollback-sentinel.bin"
-    sentinel_path.write_bytes(b"keep-me")
-
-    rolled, target_revision, injection = probe_distinct_revision_rollback(
+    run_rollback_case(
         clone=clone,
         marker=marker,
         env=env,
         revision=revision,
+        deploy=deploy,
+        mount_point=mount_point,
         prepare=prepare,
         inp=inp,
-    )
-    authority_after = current_path(deploy).read_bytes()
-    media_after = load_media_activation_state(deploy)
-    still_mounted = _run(["mountpoint", "-q", str(mount_point)]).returncode == 0
-    if (
-        authority_after != authority_on
-        or media_after is None
-        or media_before is None
-        # Rollback republishes the previous authority with a fresh timestamp.
-        # Compare ALL operational fields, not merely activation=true.
-        or {**media_after.to_dict(), "updated_at_utc": None}
-        != {**media_before.to_dict(), "updated_at_utc": None}
-        or not still_mounted
-        or sentinel_path.read_bytes() != b"keep-me"
-    ):
-        record(
-            "S8_transaction_rollback",
-            "FAIL",
-            "rollback mutated authority or storage",
-            still_mounted=still_mounted,
-        )
-        raise RuntimeError("S8 FAIL")
-    record(
-        "S8_transaction_rollback",
-        "PASS",
-        "OFF ok; OFF→ON ok; ON activation failure restored prior ON; "
-        "storage not formatted/unmounted; sentinel kept",
-        status=rolled.status,
-        injection=injection,
-        previous_revision=revision,
-        target_revision=target_revision,
-        utc=utc_now(),
-        expected_rolled_back=STATUS_ROLLED_BACK,
+        record=record,
+        start=start,
     )

@@ -5,14 +5,17 @@ Docker/release transports are stubbed; these are NOT native containment proof.
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
+import inspect
 import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import native_media_storage_media_inside as media
+import native_media_storage_resource_acceptance as acceptance
 import native_media_storage_resource_release_path as mod
 import pytest
 from fetchnow_release import image_build
@@ -27,6 +30,10 @@ from fetchnow_release.manifest import (
     ManifestError,
     ReleaseManifest,
     write_manifest,
+)
+from fetchnow_release.media_state import (
+    parse_media_activation_state,
+    write_media_activation_state,
 )
 from fetchnow_release.media_storage import (
     MediaStorageError,
@@ -660,3 +667,189 @@ def test_positive_fixture_refuses_preexisting_volumes(monkeypatch):
             lambda *a, **kw: None,
         )
     assert len(calls) == 1 and calls[0][:3] == ["docker", "volume", "inspect"]
+
+
+def _check_record_bindings(source):
+    """Bind literal call shapes to the REAL callback signature, without exec."""
+    signature = inspect.signature(acceptance.AcceptanceOrchestrator.record)
+    calls = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "record"
+            or isinstance(node.func, ast.Attribute)
+            and node.func.attr == "record"
+        ):
+            continue
+        assert not any(isinstance(arg, ast.Starred) for arg in node.args)
+        assert all(kw.arg is not None for kw in node.keywords)
+        signature.bind(
+            object(),
+            *[object() for _ in node.args],
+            **{kw.arg: object() for kw in node.keywords},
+        )
+        calls.append(node.lineno)
+    assert calls, "record-call check must not pass without examining calls"
+    return calls
+
+
+@pytest.mark.parametrize("module", [mod, acceptance])
+def test_all_harness_record_calls_bind_real_signature(module):
+    assert _check_record_bindings(Path(module.__file__).read_text())
+
+
+@pytest.mark.parametrize("keyword", ["name", "status", "detail"])
+def test_record_signature_check_rejects_historical_keyword_collisions(keyword):
+    with pytest.raises(TypeError, match="multiple values"):
+        _check_record_bindings(f'record("S8", "PASS", "proof", {keyword}=value)')
+    assert _check_record_bindings(
+        'record(name="S8", status="PASS", detail="proof", '
+        'rollback_status="rolled_back")'
+    )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "success",
+        "timestamp_only",
+        "current_changed",
+        "media_changed",
+        "unmounted",
+        "sentinel_changed",
+        "idempotent",
+    ],
+)
+def test_complete_s8_records_and_serializes_with_real_orchestrator(
+    tmp_path, monkeypatch, outcome
+):
+    """Real S8/probe/record/export; Git/build/rollout/mount effects are stubbed."""
+    from fetchnow_release import rollout
+    from fetchnow_release.activate import ActivateError
+
+    deploy, filesystem = tmp_path / "deploy", tmp_path / "media-fs"
+    (filesystem / "tmp").mkdir(parents=True)
+    current = mod.current_path(deploy)
+    current.parent.mkdir(parents=True)
+    current.write_bytes(b'{"fixture":"previous-current"}\n')
+    original_current = current.read_bytes()
+    raw_state = {
+        "schema_version": 1,
+        "activation": True,
+        "release_mode": "media",
+        "revision": REV,
+        "updated_at_utc": "2026-01-01T00:00:00Z",
+        "media_image_ids": {
+            s: "sha256:" + "1" * 64
+            for s in (
+                "media-executor",
+                "media-net-executor",
+                "egress-proxy",
+            )
+        },
+        "profiles": ["media-executor", "media-net-executor"],
+        "overlays": ["compose.media-executor.yaml", "compose.media-net-executor.yaml"],
+        "executor_settings": {
+            "MEDIA_EXECUTOR_ENABLED": "true",
+            "MEDIA_NET_EXECUTOR_ENABLED": "true",
+        },
+        "resource_budget": disposable_test_budget().to_dict(),
+        "storage_contract": disposable_test_storage_contract(
+            host_bind_root=str(filesystem)
+        ),
+        "slice_unit": "fetchnow-media-executor.slice",
+        "denied_host": "127.0.0.1",
+    }
+    write_media_activation_state(deploy, parse_media_activation_state(raw_state))
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    orch = acceptance.AcceptanceOrchestrator(evidence)
+    marker, env = tmp_path / "marker", tmp_path / "env"
+    marker.write_text("positive-marker")
+    env.write_text(f"FETCHNOW_RELEASE_REVISION={REV}\n")
+    env.chmod(0o600)
+    target = "b" * 40
+    prepared, delegated = [], []
+    monkeypatch.setattr(mod, "commit", lambda *a: target)
+    monkeypatch.setattr(rollout, "activate_gateway", lambda **kw: delegated.append(kw))
+
+    def mount_probe(argv, **kwargs):
+        assert argv == ["mountpoint", "-q", str(filesystem)]
+        return subprocess.CompletedProcess(argv, int(outcome == "unmounted"), "", "")
+
+    monkeypatch.setattr(mod, "_run", mount_probe)
+
+    def execute(inp):
+        assert inp.expected_revision == target and prepared == [target]
+        assert load_env_file(env)["FETCHNOW_RELEASE_REVISION"] == target
+        if outcome == "idempotent":
+            return RolloutResult(True, True, ())
+        with pytest.raises(ActivateError, match="test-only gateway injection"):
+            rollout.activate_gateway(target=True)
+        rollout.activate_gateway(previous=True)
+        if outcome == "timestamp_only":
+            raw_state["updated_at_utc"] = "2026-01-01T00:00:01Z"
+            write_media_activation_state(
+                deploy, parse_media_activation_state(raw_state)
+            )
+        elif outcome == "current_changed":
+            current.write_bytes(b"wrong current")
+        elif outcome == "media_changed":
+            raw_state["media_image_ids"]["media-executor"] = "sha256:" + "2" * 64
+            write_media_activation_state(
+                deploy, parse_media_activation_state(raw_state)
+            )
+        elif outcome == "sentinel_changed":
+            (filesystem / "tmp" / "rollback-sentinel.bin").write_bytes(b"changed")
+        return RolloutResult(False, False, (), status="rolled_back")
+
+    monkeypatch.setattr(mod, "rollout_release", execute)
+    try:
+        mod.run_rollback_case(
+            clone=tmp_path,
+            marker=marker,
+            env=env,
+            revision=REV,
+            deploy=deploy,
+            mount_point=filesystem,
+            prepare=prepared.append,
+            inp=lambda rev, **kw: SimpleNamespace(expected_revision=rev),
+            record=orch.record,
+            start=orch.begin_case,
+        )
+    except Exception as exc:
+        orch._record_release_failure(exc)
+        if outcome in {"success", "timestamp_only"}:
+            raise
+    else:
+        assert outcome in {"success", "timestamp_only"}
+
+    partial = json.loads((evidence / "partial_result.json").read_text())
+    orch.cases.extend(
+        acceptance.mark_remaining_not_run(
+            acceptance.REQUIRED_CASES,
+            orch.cases,
+            reason="isolated offline S8 test",
+        )
+    )
+    status = acceptance.overall_status(orch.cases)
+    final = json.loads(orch.write_final(status).read_text())
+    case = next(c for c in final["cases"] if c["name"] == "S8_transaction_rollback")
+    assert partial["cases"] == [case]
+    if outcome in {"success", "timestamp_only"}:
+        assert case["status"] == "PASS"
+        assert case["evidence"]["rollback_status"] == "rolled_back"
+        assert case["evidence"]["previous_revision"] == REV
+        assert case["evidence"]["target_revision"] == target
+        assert case["evidence"]["injection"]["gateway_injections"] == 1
+        assert case["evidence"]["injection"]["gateway_delegations"] == 1
+        assert delegated == [{"previous": True}]
+        assert current.read_bytes() == original_current
+        assert (filesystem / "tmp" / "rollback-sentinel.bin").read_bytes() == b"keep-me"
+        assert final["status"] == "NOT_RUN"  # An isolated S8 is NOT native acceptance.
+    else:
+        assert case["status"] == "FAIL" and final["status"] == "FAIL"
+        failure = json.loads((evidence / "primary_failure.json").read_text())
+        assert failure["case"] == "S8_transaction_rollback"

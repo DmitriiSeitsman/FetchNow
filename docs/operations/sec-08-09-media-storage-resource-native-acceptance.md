@@ -162,3 +162,44 @@ Local verification of the env/evidence correction: targeted harness tests
 Ruff on the four touched Python files, mypy on both harness modules,
 stdlib-only imports (`python -S`) and `git diff --check` passed. No native,
 Trivy, broad backend or production checks were executed for this correction.
+
+## Local S8 record/export correction after run 39852414246
+
+Run 39852414246 at `6badecd01d4f44bba43d629008b27b94fda0348f`
+remains FAIL: S1–S7 and S9 passed, but S8's final recording called
+`record(..., "PASS", ..., status=rolled.status)`, binding the callback's
+`status` twice. Its historical S8 FAIL is not reclassified as PASS and does
+not establish complete native rollback evidence.
+
+The evidence key is now `rollback_status`. The complete unchanged S8
+sequence (pre-state, distinct-revision rollback probe, authority/filesystem/
+sentinel checks, and final recording) lives in `run_rollback_case`, called
+by the main release path. The callback signature and safety checks are not
+weakened.
+
+The regression executes that actual S8 function and probe with the real
+`AcceptanceOrchestrator.record`, media-state JSON reader/writer and partial/
+final evidence serialization. Git commits, prepare/build/rollout and the
+mount probe are stubbed; it is NOT a native release/rollback proof.
+Both unchanged-state and timestamp-only republication cases must serialize
+S8 PASS with `rollback_status=rolled_back`, target/previous revisions and
+one-shot injection/delegation evidence. Mutated current/media authority,
+missing mount, changed sentinel or idempotent no-op cannot pass.
+An isolated S8 success remains aggregate NOT_RUN, not a whole-gate PASS.
+
+A separate AST/signature regression binds all `record` call shapes in both
+harness modules to the real callback signature. It rejects the historical
+positional/keyword collisions for `name`, `status` and `detail`; unexamined
+dynamic argument unpacking cannot silently pass this check.
+
+No commit/push/native dispatch, Trivy, SSH, production installation or
+approval/activation change is part of this local correction.
+READY FOR ROLLOUT remains NO.
+
+Fresh verification: targeted harness **84 passed**; full `tests/release` +
+`tests/pg_backup` **804 passed**. Ruff on both touched Python files, mypy on
+the changed harness module, stdlib-only import and `git diff --check` passed.
+An AST comparison against the previous committed S8 block confirmed the
+extracted checks and execution order are identical; the only semantic change
+is the evidence keyword `status` → `rollback_status`. Native S8 remains
+unverified for this correction; historical run 39852414246 remains FAIL.
