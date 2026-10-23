@@ -2,15 +2,50 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 WORKFLOW = ROOT / ".github/workflows/sec03c-candidate7-image-audit.yml"
 sys.path.insert(0, str(SCRIPTS))
 
-import image_audit_candidate7_smoke as smoke
+import image_audit_candidate7_smoke as smoke  # noqa: E402
+
+
+@pytest.mark.parametrize("dockerfile", ["web/Dockerfile", "deploy/nginx/Dockerfile"])
+def test_alpine_expectations_match_pinned_audited_source(dockerfile: str) -> None:
+    # Read committed product pins, not an old image or dirty Dockerfile.
+    source = "9934ebe63943e7c1007564402e50258865a3a380"
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{source}:{dockerfile}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pins = re.findall(r"'([a-z0-9-]+)=([^']+)'", proc.stdout)
+    for package in ("pcre2", "tiff", "libexpat"):
+        versions = [version for name, version in pins if name == package]
+        assert len(versions) == 1, (dockerfile, package, versions)
+        assert f"{package}-{versions[0]}" in smoke.EXPECTED_ALPINE_APK
+    assert len(smoke.EXPECTED_ALPINE_APK) == 3
+
+
+@pytest.mark.parametrize("label", ["web", "gateway"])
+def test_apk_inventory_accepts_current_pin_and_rejects_stale_pin(label: str) -> None:
+    current = "pcre2-10.49-r0\ntiff-4.7.2-r0\nlibexpat-2.9.0-r0\n"
+    stage = f"{label}_apk_inventory"
+    smoke.assert_apk_pins(current, stage=stage)
+    stale = current.replace("libexpat-2.9.0-r0", "libexpat-2.8.5-r0")
+    with pytest.raises(smoke.SmokeError, match="libexpat-2.9.0-r0"):
+        smoke.assert_apk_pins(stale, stage=stage)
+    for pin in smoke.EXPECTED_ALPINE_APK:
+        with pytest.raises(smoke.SmokeError, match="missing"):
+            smoke.assert_apk_pins(current.replace(pin, "wrong-version"), stage=stage)
 
 
 def test_dpkg_query_argv_is_literal_and_shell_free() -> None:

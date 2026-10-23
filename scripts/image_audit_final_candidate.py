@@ -4,8 +4,8 @@
 Reuses the candidate-7 gate (`image_audit_candidate7.run_candidate7_gate`) for
 the seven runtime targets and adds only what the final audit needs:
 
-* ``authorize`` — push authorization by parent SHA + exact changed-path manifest
-  (no commit-message matching).
+* ``authorize`` — push authorization by the pinned audit predecessor, its source
+  parent and exact per-commit/cumulative audit-only manifests (no message match).
 * ``source-proof`` — the clean build context is ``git archive`` of the audited
   source SHA and its runtime inputs equal those at the audit commit.
 * ``audit`` — candidate-7 gate with a recording runner that proves one advisory
@@ -36,12 +36,14 @@ SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import image_audit as ia
-import image_audit_candidate7 as c7
-from fetchnow_release.bounded_subprocess import run_bounded
+import image_audit_candidate7 as c7  # noqa: E402
+from fetchnow_release.bounded_subprocess import run_bounded  # noqa: E402
+
+import image_audit as ia  # noqa: E402
 
 GATE_NAME = "sec-08-09-final-candidate-image-audit"
 AUDITED_SOURCE_SHA = "9934ebe63943e7c1007564402e50258865a3a380"
+AUDIT_PREDECESSOR_SHA = "2d243fb8c08e2d6c4f86987dee1eafa9da931d29"
 BRANCH_REF = "refs/heads/codex/security-sec-09-network-isolation"
 HISTORICAL_RUN = "38689849543"
 HISTORICAL_SUMMARY_SHA256 = (
@@ -49,13 +51,25 @@ HISTORICAL_SUMMARY_SHA256 = (
 )
 NATIVE_STORAGE_RUN = "40004249842"
 
-AUDIT_MANIFEST: tuple[str, ...] = (
+INITIAL_AUDIT_MANIFEST: tuple[str, ...] = (
     ".github/workflows/sec08-09-final-candidate-image-audit.yml",
     "docs/operations/sec-08-09-final-candidate-image-audit.md",
     "scripts/image_audit_final_caller_attribution.py",
     "scripts/image_audit_final_candidate.py",
     "scripts/image_audit_final_reconcile.py",
     "tests/image_audit/test_image_audit_final_candidate_unit.py",
+)
+
+AUDIT_MANIFEST: tuple[str, ...] = (
+    ".github/workflows/sec08-09-final-candidate-image-audit.yml",
+    "docs/operations/sec-08-09-final-candidate-image-audit.md",
+    "scripts/image_audit_candidate7_smoke.py",
+    "scripts/image_audit_final_candidate.py",
+    "tests/image_audit/test_image_audit_candidate7_smoke_unit.py",
+    "tests/image_audit/test_image_audit_final_candidate_unit.py",
+)
+CUMULATIVE_AUDIT_MANIFEST = tuple(
+    sorted(set(INITIAL_AUDIT_MANIFEST) | set(AUDIT_MANIFEST))
 )
 
 DB_FILES: tuple[str, ...] = ("db/trivy.db", "db/metadata.json")
@@ -79,7 +93,11 @@ def authorize(
     head_sha: str,
     parent_shas: Sequence[str],
     changed_paths: Sequence[str],
+    predecessor_parent_shas: Sequence[str],
+    predecessor_changed_paths: Sequence[str],
+    cumulative_changed_paths: Sequence[str],
     audited_source_sha: str = AUDITED_SOURCE_SHA,
+    audit_predecessor_sha: str = AUDIT_PREDECESSOR_SHA,
     manifest: Sequence[str] = AUDIT_MANIFEST,
 ) -> dict[str, Any]:
     reasons: list[str] = []
@@ -91,8 +109,14 @@ def authorize(
         reasons.append("ref_mismatch")
     if head_sha != github_sha:
         reasons.append("head_not_github_sha")
-    if list(parent_shas) != [audited_source_sha]:
-        reasons.append("parent_not_audited_source")
+    if list(parent_shas) != [audit_predecessor_sha]:
+        reasons.append("parent_not_audit_predecessor")
+    if list(predecessor_parent_shas) != [audited_source_sha]:
+        reasons.append("predecessor_not_audited_source")
+    if sorted(predecessor_changed_paths) != sorted(INITIAL_AUDIT_MANIFEST):
+        reasons.append("predecessor_paths_not_exact_manifest")
+    if sorted(cumulative_changed_paths) != list(CUMULATIVE_AUDIT_MANIFEST):
+        reasons.append("cumulative_paths_not_exact_manifest")
     if sorted(set(changed_paths)) != sorted(manifest) or len(changed_paths) != len(
         manifest
     ):
@@ -101,10 +125,14 @@ def authorize(
         "allowed": not reasons,
         "reasons": reasons,
         "audited_source_sha": audited_source_sha,
+        "audit_predecessor_sha": audit_predecessor_sha,
         "audit_harness_sha": head_sha,
         "parents": list(parent_shas),
         "changed_paths": sorted(changed_paths),
         "manifest": sorted(manifest),
+        "predecessor_parents": list(predecessor_parent_shas),
+        "predecessor_changed_paths": sorted(predecessor_changed_paths),
+        "cumulative_changed_paths": sorted(cumulative_changed_paths),
     }
 
 
@@ -130,6 +158,20 @@ def cmd_authorize(args: argparse.Namespace) -> int:
             ).splitlines()
             if line.strip()
         ]
+    predecessor_parents = _git(
+        repo, "rev-list", "--parents", "-n", "1", AUDIT_PREDECESSOR_SHA
+    ).split()[1:]
+    predecessor_changed = _git(
+        repo,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        AUDITED_SOURCE_SHA,
+        AUDIT_PREDECESSOR_SHA,
+    ).splitlines()
+    cumulative_changed = _git(
+        repo, "diff", "--name-only", "--no-renames", AUDITED_SOURCE_SHA, head
+    ).splitlines()
     result = authorize(
         event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
         run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),
@@ -138,6 +180,9 @@ def cmd_authorize(args: argparse.Namespace) -> int:
         head_sha=head,
         parent_shas=parents,
         changed_paths=changed,
+        predecessor_parent_shas=predecessor_parents,
+        predecessor_changed_paths=predecessor_changed,
+        cumulative_changed_paths=cumulative_changed,
     )
     args.json_out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
@@ -272,7 +317,9 @@ def finalize_summary(
     out["audit_predecessor"] = {
         "run": HISTORICAL_RUN,
         "summary_sha256": HISTORICAL_SUMMARY_SHA256,
-        "note": "Historical candidate-7 audit; reconciled offline, approvals not extended",
+        "note": (
+            "Historical candidate-7 audit; reconciled offline, approvals not extended"
+        ),
     }
     out.pop("approved_runtime_delta", None)
     out.pop("runtime_inputs_unchanged", None)
@@ -326,7 +373,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     )
     text = ia.redact_secrets(json.dumps(final, indent=2, ensure_ascii=True))
     args.summary_out.write_text(text + "\n", encoding="utf-8")
-    exit_code = ia.EXIT_FAIL if technical else code
+    exit_code: int = ia.EXIT_FAIL if technical else code
     print(
         json.dumps(
             {
@@ -432,7 +479,8 @@ def smoke_executor(image: str, *, network_profile: bool) -> list[SmokeStep]:
         tool = (
             "set -eu; test -x /usr/local/bin/sec08-launch; "
             "/opt/venv/bin/yt-dlp --version; "
-            "if command -v ffmpeg >/dev/null 2>&1; then echo ffmpeg_present; exit 3; fi; "
+            "if command -v ffmpeg >/dev/null 2>&1; "
+            "then echo ffmpeg_present; exit 3; fi; "
             "echo tools_ok"
         )
     else:

@@ -29,7 +29,7 @@ EXPECTED_API_DPKG: dict[str, str] = {
 EXPECTED_ALPINE_APK: tuple[str, ...] = (
     "pcre2-10.49-r0",
     "tiff-4.7.2-r0",
-    "libexpat-2.8.5-r0",
+    "libexpat-2.9.0-r0",
 )
 
 GOSU_SHA256 = "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0"

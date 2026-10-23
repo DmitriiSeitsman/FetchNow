@@ -9,9 +9,13 @@ native run's artifact; this document fixes how they were produced.
 - `AUDITED_SOURCE_SHA` — `9934ebe63943e7c1007564402e50258865a3a380`, the
   product source. Images are built from `git archive` of this SHA into a
   separate directory, so no worktree or dirty file enters a build context.
-- `AUDIT_HARNESS_SHA` — the audit-only commit whose single parent is the
-  audited source SHA. It adds only the files listed in
-  `scripts/image_audit_final_candidate.py` (`AUDIT_MANIFEST`).
+- `AUDIT_PREDECESSOR_SHA` — `2d243fb8c08e2d6c4f86987dee1eafa9da931d29`, the
+  first audit-only commit, whose single parent is the audited source SHA.
+- `AUDIT_HARNESS_SHA` — the corrective audit-only commit whose single parent
+  is that pinned predecessor. Its changed paths are exactly `AUDIT_MANIFEST`;
+  the original predecessor is checked against `INITIAL_AUDIT_MANIFEST`, and
+  the entire source-to-harness delta against `CUMULATIVE_AUDIT_MANIFEST` in
+  `scripts/image_audit_final_candidate.py`.
 - Every image is a `NEW_AUDIT_ARTIFACT`. Native acceptance run `40004249842`
   used synthetic L/A/B revisions; those images are not byte-identical to these
   and its PASS does not transfer. Prior approvals do not transfer either.
@@ -21,8 +25,10 @@ native run's artifact; this document fixes how they were produced.
 `.github/workflows/sec08-09-final-candidate-image-audit.yml` runs on push to
 `codex/security-sec-09-network-isolation` only when its own file changes,
 attempt 1 only. The authorize job requires: event `push`, the branch ref,
-`HEAD == GITHUB_SHA`, exactly one parent equal to the audited source SHA, and
-changed paths exactly equal to the manifest. No commit-message matching.
+`HEAD == GITHUB_SHA`, exactly one parent equal to the pinned audit predecessor,
+the predecessor's single parent equal to the unchanged audited source SHA,
+and exact per-commit and cumulative manifests. The authorize checkout contains
+three commits; the audit checkout uses full history. No commit-message matching.
 
 ## Images (seven)
 
@@ -117,3 +123,31 @@ extends or applies it.
 Product fixes, dependency bumps, approval/VEX changes, gate softening, SSH,
 production installation, merge/deploy, TEST/LIVE/SEO changes. Not rollout
 readiness.
+
+## Local correction after run 40025850562 (no new native execution)
+
+Run 40025850562 remains technically failed at `web_apk_inventory`, before
+Trivy or caller attribution. Its installed `libexpat-2.9.0-r0` matched the
+source Dockerfiles; the reused helper incorrectly expected `2.8.5-r0`.
+
+The helper now expects `2.9.0-r0`. Offline regressions read both Dockerfiles
+from the pinned source commit and compare all three Alpine pins with the
+smoke expectations. Current inventories pass; stale, missing and incorrect
+versions fail for both web and gateway stages. No product pin is changed.
+
+Successor authorization retains source `9934ebe` and pins predecessor
+`2d243fb`; a different/merge parent, altered predecessor, extra runtime path,
+missing or duplicate manifest entry is refused. These checks authorize only
+the explicitly enumerated audit-only correction, not arbitrary descendants.
+
+This is a local harness correction only: no commit, push, image build, CI,
+Trivy, caller-attribution run or production action. A complete smoke on fresh
+images of the fixed source remains required before another authorized push;
+offline tests are not that compatibility evidence. PostgreSQL was republished
+in the failed run: its new identity does not inherit the historical gosu VEX.
+
+Local verification: final-candidate + smoke tests **54 passed**; complete
+`tests/image_audit` **291 passed**. Ruff check/format, mypy on both harness
+modules, actionlint, stdlib-only imports and `git diff --check` passed. The
+saved failed run's web APK inventory passes the corrected pin assertion; this
+does not claim a fresh gateway inventory or a new full compatibility smoke.

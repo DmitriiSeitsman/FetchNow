@@ -2,8 +2,9 @@ name: SEC-08/09 final candidate image audit
 
 # One-shot audit of the seven candidate runtime images built from a clean
 # `git archive` of the audited source SHA. Push-only, attempt 1 only.
-# Authorization: the pushed commit's single parent is the audited source SHA
-# and its changed paths are exactly the audit-only manifest. No commit-message
+# Authorization: the pushed commit's single parent is the pinned audit predecessor;
+# predecessor/source ancestry and per-commit/cumulative audit-only paths are checked.
+# The audited product source stays fixed. No commit-message
 # matching. NEW_AUDIT_ARTIFACT: no prior Image ID, approval or native PASS
 # transfers. No VEX / residual acceptance / ignore-unfixed / severity lowering.
 on:
@@ -32,10 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
 
-      - name: Parent SHA + exact manifest authorization
+      - name: Audit chain + exact manifests authorization
         id: gate
         run: |
           set -euo pipefail
@@ -49,6 +50,7 @@ jobs:
     timeout-minutes: 120
     env:
       AUDITED_SOURCE_SHA: 9934ebe63943e7c1007564402e50258865a3a380
+      AUDIT_PREDECESSOR_SHA: 2d243fb8c08e2d6c4f86987dee1eafa9da931d29
       FETCHNOW_IMAGE_AUDIT_TAG: final-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Audit directories
@@ -70,7 +72,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$EVIDENCE_DIR"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$AUDITED_SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$AUDIT_PREDECESSOR_SHA"
+          test "$(git rev-parse "$AUDIT_PREDECESSOR_SHA^")" = "$AUDITED_SOURCE_SHA"
           python3 scripts/image_audit_final_candidate.py authorize \
             --json-out "$EVIDENCE_DIR/authorize.json"
           python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['allowed'], d" \

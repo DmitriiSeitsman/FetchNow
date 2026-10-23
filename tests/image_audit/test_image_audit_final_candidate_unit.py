@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import io
+import json
 import struct
 import sys
 import tarfile
@@ -13,13 +15,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import image_audit as ia
-import image_audit_final_caller_attribution as attr
-import image_audit_final_candidate as fin
-import image_audit_final_reconcile as rec
+import image_audit_final_caller_attribution as attr  # noqa: E402
+import image_audit_final_candidate as fin  # noqa: E402
+import image_audit_final_reconcile as rec  # noqa: E402
+
+import image_audit as ia  # noqa: E402
 
 WORKFLOW = ROOT / ".github/workflows/sec08-09-final-candidate-image-audit.yml"
 SOURCE = fin.AUDITED_SOURCE_SHA
+PREDECESSOR = fin.AUDIT_PREDECESSOR_SHA
 HEAD = "a" * 40
 
 
@@ -33,17 +37,22 @@ def _auth(**overrides: Any) -> dict[str, Any]:
         "ref": fin.BRANCH_REF,
         "github_sha": HEAD,
         "head_sha": HEAD,
-        "parent_shas": [SOURCE],
+        "parent_shas": [PREDECESSOR],
         "changed_paths": list(fin.AUDIT_MANIFEST),
+        "predecessor_parent_shas": [SOURCE],
+        "predecessor_changed_paths": list(fin.INITIAL_AUDIT_MANIFEST),
+        "cumulative_changed_paths": list(fin.CUMULATIVE_AUDIT_MANIFEST),
     }
     kwargs.update(overrides)
     return fin.authorize(**kwargs)
 
 
-def test_authorize_exact_manifest_on_audited_parent() -> None:
+def test_authorize_exact_successor_chain_without_retargeting_source() -> None:
     result = _auth()
     assert result["allowed"] is True
     assert result["audited_source_sha"] == SOURCE
+    assert result["audit_predecessor_sha"] == PREDECESSOR
+    assert result["predecessor_parents"] == [SOURCE]
     assert result["audit_harness_sha"] == HEAD
 
 
@@ -54,8 +63,50 @@ def test_authorize_exact_manifest_on_audited_parent() -> None:
         ({"run_attempt": "2"}, "run_attempt_not_1"),
         ({"ref": "refs/heads/main"}, "ref_mismatch"),
         ({"github_sha": "b" * 40}, "head_not_github_sha"),
-        ({"parent_shas": ["c" * 40]}, "parent_not_audited_source"),
-        ({"parent_shas": [SOURCE, "d" * 40]}, "parent_not_audited_source"),
+        ({"parent_shas": ["c" * 40]}, "parent_not_audit_predecessor"),
+        ({"parent_shas": [SOURCE]}, "parent_not_audit_predecessor"),
+        ({"parent_shas": [PREDECESSOR, "d" * 40]}, "parent_not_audit_predecessor"),
+        ({"predecessor_parent_shas": []}, "predecessor_not_audited_source"),
+        ({"predecessor_parent_shas": ["c" * 40]}, "predecessor_not_audited_source"),
+        (
+            {"predecessor_parent_shas": [SOURCE, "d" * 40]},
+            "predecessor_not_audited_source",
+        ),
+        (
+            {
+                "predecessor_changed_paths": [
+                    *fin.INITIAL_AUDIT_MANIFEST,
+                    "backend/Dockerfile",
+                ]
+            },
+            "predecessor_paths_not_exact_manifest",
+        ),
+        (
+            {"predecessor_changed_paths": list(fin.INITIAL_AUDIT_MANIFEST[:-1])},
+            "predecessor_paths_not_exact_manifest",
+        ),
+        (
+            {
+                "cumulative_changed_paths": [
+                    *fin.CUMULATIVE_AUDIT_MANIFEST,
+                    "backend/uv.lock",
+                ]
+            },
+            "cumulative_paths_not_exact_manifest",
+        ),
+        (
+            {"cumulative_changed_paths": list(fin.CUMULATIVE_AUDIT_MANIFEST[:-1])},
+            "cumulative_paths_not_exact_manifest",
+        ),
+        (
+            {
+                "cumulative_changed_paths": [
+                    *fin.CUMULATIVE_AUDIT_MANIFEST,
+                    fin.CUMULATIVE_AUDIT_MANIFEST[0],
+                ]
+            },
+            "cumulative_paths_not_exact_manifest",
+        ),
         (
             {"changed_paths": [*fin.AUDIT_MANIFEST, "backend/Dockerfile"]},
             "changed_paths_not_exact_manifest",
@@ -84,6 +135,70 @@ def test_manifest_excludes_dirty_preserved_files() -> None:
     )
     assert ".github/workflows/sec08-09-final-candidate-image-audit.yml" in manifest
     assert all((ROOT / p).is_file() for p in manifest)
+
+
+def test_pinned_predecessor_is_the_original_audit_only_commit() -> None:
+    parents = fin._git(ROOT, "rev-list", "--parents", "-n", "1", PREDECESSOR)
+    assert parents.split() == [PREDECESSOR, SOURCE]
+    paths = fin._git(
+        ROOT, "diff", "--name-only", "--no-renames", SOURCE, PREDECESSOR
+    ).splitlines()
+    assert sorted(paths) == sorted(fin.INITIAL_AUDIT_MANIFEST)
+    assert len(fin.AUDIT_MANIFEST) == 6
+    assert len(fin.CUMULATIVE_AUDIT_MANIFEST) == 8
+
+
+def test_cmd_authorize_reads_commit_chain_not_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outputs = {
+        ("rev-parse", "HEAD"): HEAD + "\n",
+        ("rev-list", "--parents", "-n", "1", "HEAD"): f"{HEAD} {PREDECESSOR}\n",
+        ("diff", "--name-only", "--no-renames", PREDECESSOR, HEAD): "\n".join(
+            fin.AUDIT_MANIFEST
+        )
+        + "\n",
+        ("rev-list", "--parents", "-n", "1", PREDECESSOR): f"{PREDECESSOR} {SOURCE}\n",
+        ("diff", "--name-only", "--no-renames", SOURCE, PREDECESSOR): "\n".join(
+            fin.INITIAL_AUDIT_MANIFEST
+        )
+        + "\n",
+        ("diff", "--name-only", "--no-renames", SOURCE, HEAD): "\n".join(
+            fin.CUMULATIVE_AUDIT_MANIFEST
+        )
+        + "\n",
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def read_git(repo: Path, *args: str) -> str:
+        assert repo == ROOT
+        calls.append(args)
+        return outputs[args]
+
+    monkeypatch.setattr(fin, "_git", read_git)
+    for key, value in {
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_REF": fin.BRANCH_REF,
+        "GITHUB_SHA": HEAD,
+        "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+    }.items():
+        monkeypatch.setenv(key, value)
+    out = tmp_path / "authorize.json"
+    assert fin.cmd_authorize(argparse.Namespace(repo=ROOT, json_out=out)) == 0
+    result = json.loads(out.read_text())
+    assert result["allowed"] is True
+    assert result["audited_source_sha"] == SOURCE
+    assert set(calls) == set(outputs)
+    assert (tmp_path / "output.txt").read_text() == "allowed=true\n"
+
+    outputs[("diff", "--name-only", "--no-renames", SOURCE, HEAD)] += (
+        "backend/Dockerfile\n"
+    )
+    assert fin.cmd_authorize(argparse.Namespace(repo=ROOT, json_out=out)) == 0
+    rejected = json.loads(out.read_text())
+    assert rejected["allowed"] is False
+    assert "cumulative_paths_not_exact_manifest" in rejected["reasons"]
 
 
 # --- source proof / DB freeze / summary --------------------------------------------
@@ -339,6 +454,7 @@ STATUS = (
 
 @pytest.fixture
 def image_fs() -> attr.ImageFs:
+    compat_path = "opt/venv/lib/python3.14/site-packages/yt_dlp/compat/__init__.py"
     files = {
         f"{LIBDIR}/libxml2.so.2.9.14": build_elf(
             ("libc.so.6",),
@@ -356,9 +472,13 @@ def image_fs() -> attr.ImageFs:
         "usr/bin/ls": build_elf(("libacl.so.1",), imports=("acl_get_file",)),
         "usr/local/bin/python3.14": build_elf(("libc.so.6",)),
         "var/lib/dpkg/status": STATUS,
-        "var/lib/dpkg/info/libxml2:amd64.list": f"/{LIBDIR}\n/lib/x86_64-linux-gnu/libxml2.so.2\n".encode(),
-        "var/lib/dpkg/info/libacl1:amd64.list": f"/{LIBDIR}/libacl.so.1.1.2302\n".encode(),
-        "opt/venv/lib/python3.14/site-packages/yt_dlp/compat/__init__.py": b"import xml.etree.ElementTree\n",
+        "var/lib/dpkg/info/libxml2:amd64.list": (
+            f"/{LIBDIR}\n/lib/x86_64-linux-gnu/libxml2.so.2\n"
+        ).encode(),
+        "var/lib/dpkg/info/libacl1:amd64.list": (
+            f"/{LIBDIR}/libacl.so.1.1.2302\n"
+        ).encode(),
+        compat_path: b"import xml.etree.ElementTree\n",
         "opt/venv/lib/python3.14/site-packages/yt_dlp/plain.py": b"x = 1\n",
     }
     links = {
@@ -403,7 +523,8 @@ def test_closure_and_consumers(image_fs: attr.ImageFs) -> None:
 LD_TEXT = (
     "ffprobe_mpd\tcalling init: /usr/lib/x86_64-linux-gnu/libxml2.so.2\n"
     "ffprobe_mpd\tbinding file /usr/lib/x86_64-linux-gnu/libavformat.so.61 [0] to "
-    "/usr/lib/x86_64-linux-gnu/libxml2.so.2 [0]: normal symbol `xmlReadMemory' [LIBXML2_2.6.0]\n"
+    "/usr/lib/x86_64-linux-gnu/libxml2.so.2 [0]: normal symbol "
+    "`xmlReadMemory' [LIBXML2_2.6.0]\n"
     "ffprobe_mpd\tbinding file /usr/lib/x86_64-linux-gnu/libavformat.so.61 [0] to "
     "/usr/lib/x86_64-linux-gnu/libxml2.so.2 [0]: normal symbol `xmlCheckVersion'\n"
     "ffprobe_mp4\tcalling init: /usr/lib/x86_64-linux-gnu/libxml2.so.2\n"
@@ -621,6 +742,10 @@ def test_workflow_trigger_and_policy_invariants() -> None:
     assert "      - .github/workflows/sec08-09-final-candidate-image-audit.yml" in text
     assert "github.run_attempt == 1" in text
     assert f"AUDITED_SOURCE_SHA: {SOURCE}" in text
+    assert f"AUDIT_PREDECESSOR_SHA: {PREDECESSOR}" in text
+    assert "fetch-depth: 3" in text
+    assert 'test "$(git rev-parse HEAD^)" = "$AUDIT_PREDECESSOR_SHA"' in text
+    assert 'test "$(git rev-parse HEAD^)" = "$AUDITED_SOURCE_SHA"' not in text
     assert 'git archive --format=tar "$AUDITED_SOURCE_SHA"' in text
     assert "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" in text
     lowered = text.lower()
