@@ -1,12 +1,12 @@
 name: SEC-08/09 final candidate image audit
 
 # One-shot audit of the seven candidate runtime images built from a clean
-# `git archive` of the audited source SHA. Push-only, attempt 1 only.
-# Authorization: the pushed commit's single parent is the pinned audit predecessor;
-# predecessor/source ancestry and per-commit/cumulative audit-only paths are checked.
-# The audited product source stays fixed. No commit-message
-# matching. NEW_AUDIT_ARTIFACT: no prior Image ID, approval or native PASS
-# transfers. No VEX / residual acceptance / ignore-unfixed / severity lowering.
+# `git archive` of the remediated product source SHA. Push-only, attempt 1 only.
+# Authorization: the pushed audit-only commit's single parent is the pinned
+# product source; that source's parent, tree and exact product manifest and the
+# exact audit manifest are checked. No commit-message matching, no fallback to
+# an earlier source. NEW_AUDIT_ARTIFACT: no prior Image ID, approval or native
+# PASS transfers. No VEX / residual acceptance / ignore-unfixed / severity lowering.
 on:
   push:
     branches: [codex/security-sec-09-network-isolation]
@@ -33,10 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 3
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Audit chain + exact manifests authorization
+      - name: Product source + audit-only commit authorization
         id: gate
         run: |
           set -euo pipefail
@@ -49,8 +49,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      AUDITED_SOURCE_SHA: 9934ebe63943e7c1007564402e50258865a3a380
-      AUDIT_PREDECESSOR_SHA: 2d243fb8c08e2d6c4f86987dee1eafa9da931d29
+      PRODUCT_SOURCE_SHA: 3792c377ecde1218ad9da9f3d5b91d620ed63b46
+      PRODUCT_SOURCE_PARENT_SHA: 5dfd0524758c7ae55e04cc7045f709c6cb22c66f
+      PRODUCT_SOURCE_TREE: e9dbbc4588c2e968fd32e0201dac99b075924134
       FETCHNOW_IMAGE_AUDIT_TAG: final-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Audit directories
@@ -60,6 +61,7 @@ jobs:
             echo "SRC_DIR=$RUNNER_TEMP/final-src"
             echo "WORK_DIR=$RUNNER_TEMP/final-trivy-work"
             echo "CACHE_DIR=$RUNNER_TEMP/final-trivy-cache"
+            echo "TRIVY_BIN=$RUNNER_TEMP/trivy-bin/trivy"
           } >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
@@ -72,8 +74,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$EVIDENCE_DIR"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$AUDIT_PREDECESSOR_SHA"
-          test "$(git rev-parse "$AUDIT_PREDECESSOR_SHA^")" = "$AUDITED_SOURCE_SHA"
+          test "$(git rev-list --parents -n 1 HEAD)" = "$GITHUB_SHA $PRODUCT_SOURCE_SHA"
+          test "$(git rev-list --parents -n 1 "$PRODUCT_SOURCE_SHA")" = \
+            "$PRODUCT_SOURCE_SHA $PRODUCT_SOURCE_PARENT_SHA"
+          test "$(git rev-parse "${PRODUCT_SOURCE_SHA}^{tree}")" = "$PRODUCT_SOURCE_TREE"
           python3 scripts/image_audit_final_candidate.py authorize \
             --json-out "$EVIDENCE_DIR/authorize.json"
           python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['allowed'], d" \
@@ -87,8 +91,8 @@ jobs:
           grep -Eqx 'x86_64|amd64' "$EVIDENCE_DIR/docker-arch.txt"
           docker version --format '{{.Server.Version}}' | tee "$EVIDENCE_DIR/docker-version.txt"
           test -z "$(docker ps -aq)"
-          docker volume ls -q | sort > "$RUNNER_TEMP/baseline-volumes.txt"
-          docker network ls -q --filter type=custom | sort > "$RUNNER_TEMP/baseline-networks.txt"
+          docker volume ls -q | LC_ALL=C sort > "$RUNNER_TEMP/baseline-volumes.txt"
+          docker network ls -q --filter type=custom | LC_ALL=C sort > "$RUNNER_TEMP/baseline-networks.txt"
 
       - uses: actions/setup-python@v5
         with:
@@ -99,28 +103,29 @@ jobs:
           set -euo pipefail
           python3.12 -m pip install --require-hashes --no-deps \
             -r backend/ci/pytest-requirements.txt
-          PYTHONPATH=scripts python3.12 -m pytest -q \
+          PYTHONPATH=scripts python3.12 -m pytest -q -p no:cacheprovider \
             tests/image_audit/test_image_audit_final_candidate_unit.py \
             tests/image_audit/test_image_audit_candidate7_unit.py \
             tests/image_audit/test_image_audit_candidate7_smoke_unit.py \
+            tests/image_audit/test_final_candidate_remediation_unit.py \
             tests/image_audit/test_image_audit_unit.py
 
-      - name: Clean build context from audited source SHA
+      - name: Clean build context from product source SHA
         run: |
           set -euo pipefail
           mkdir -p "$SRC_DIR"
-          git archive --format=tar "$AUDITED_SOURCE_SHA" | tar -x -C "$SRC_DIR"
+          git archive --format=tar "$PRODUCT_SOURCE_SHA" | tar -x -C "$SRC_DIR"
           PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py source-proof \
             --repo "$GITHUB_WORKSPACE" \
             --clean-dir "$SRC_DIR" \
-            --audited-source-sha "$AUDITED_SOURCE_SHA" \
+            --audited-source-sha "$PRODUCT_SOURCE_SHA" \
             --json-out "$EVIDENCE_DIR/source-proof.json"
 
       - name: Build/pull seven runtime images from clean context
         id: build
         run: |
           set -euo pipefail
-          rev="$AUDITED_SOURCE_SHA"
+          rev="$PRODUCT_SOURCE_SHA"
           tag="$FETCHNOW_IMAGE_AUDIT_TAG"
           cd "$SRC_DIR"
           pg_ref="$(sed -nE 's/^[[:space:]]+image:[[:space:]]+(postgres:[^[:space:]]+)[[:space:]]*$/\1/p' compose.yaml | head -n1)"
@@ -144,12 +149,12 @@ jobs:
             -t "fetchnow-media-net-executor:${tag}" -f backend/Dockerfile.media-net-executor ./backend
           docker build --platform linux/amd64 --build-arg "FETCHNOW_RELEASE_REVISION=${rev}" \
             -t "fetchnow-egress-proxy:${tag}" -f backend/Dockerfile.media-egress-proxy ./backend
-          docker pull --platform linux/amd64 "$pg_ref"
           docker buildx imagetools inspect "$pg_ref" > "$EVIDENCE_DIR/postgres-registry-index.txt"
           docker buildx imagetools inspect --raw "$pg_ref" > "$EVIDENCE_DIR/postgres-registry-index.raw.json"
+          docker pull --platform linux/amd64 "$pg_ref"
           cd "$GITHUB_WORKSPACE"
           PG_REF="$pg_ref" python3.12 - <<'PY'
-          import json, os, subprocess
+          import json, os, re, subprocess
           from pathlib import Path
 
           tag = os.environ["FETCHNOW_IMAGE_AUDIT_TAG"]
@@ -181,8 +186,37 @@ jobs:
               }
               print(name, json.dumps(identities[name], sort_keys=True))
               if name != "postgres":
-                  assert identities[name]["revision_label"] == os.environ["AUDITED_SOURCE_SHA"], name
+                  assert identities[name]["revision_label"] == os.environ["PRODUCT_SOURCE_SHA"], name
               assert identities[name]["platform"] == "linux/amd64", name
+          index_text = (evidence / "postgres-registry-index.txt").read_text(encoding="utf-8")
+          match = re.search(r"^Digest:\s+(sha256:[0-9a-f]{64})\s*$", index_text, re.M)
+          assert match, "registry index digest missing"
+          index_digest = match.group(1)
+          index_raw = json.loads((evidence / "postgres-registry-index.raw.json").read_text())
+          amd64 = [
+              m["digest"]
+              for m in index_raw.get("manifests", [])
+              if (m.get("platform") or {}).get("os") == "linux"
+              and (m.get("platform") or {}).get("architecture") == "amd64"
+              and not (m.get("platform") or {}).get("variant")
+          ]
+          assert len(amd64) == 1, amd64
+          pg = identities["postgres"]
+          repo = os.environ["PG_REF"].split(":", 1)[0]
+          assert f"{repo}@{index_digest}" in pg["repo_digests"], (index_digest, pg["repo_digests"])
+          postgres_identity = {
+              "reference": os.environ["PG_REF"],
+              "candidate_only": True,
+              "live_retained_postgresql": "NOT_VERIFIED",
+              "registry_index_digest": index_digest,
+              "platform_manifest_digest_linux_amd64": amd64[0],
+              "config_image_id": pg["image_id"],
+              "repo_digests": pg["repo_digests"],
+              "platform": pg["platform"],
+          }
+          (evidence / "postgres-identity.json").write_text(
+              json.dumps(postgres_identity, indent=2) + "\n", encoding="utf-8"
+          )
           (evidence / "pre-scan-identities.json").write_text(
               json.dumps(identities, indent=2) + "\n", encoding="utf-8"
           )
@@ -201,7 +235,7 @@ jobs:
             --gateway-image "fetchnow-gateway:${tag}" \
             --postgres-image postgres:16.15-alpine3.24
 
-      - name: Compatibility smoke (executors + egress proxy)
+      - name: Compatibility smoke (API certifi pin, executors, egress proxy)
         run: |
           set -euo pipefail
           PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py smoke-isolated \
@@ -218,8 +252,8 @@ jobs:
           echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/trivy-bin"
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/trivy-bin" trivy
-          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/trivy-bin/trivy" version | tee "$EVIDENCE_DIR/trivy-version.txt"
+          test -x "$TRIVY_BIN"
+          "$TRIVY_BIN" version | tee "$EVIDENCE_DIR/trivy-version.txt"
           grep -q 'Version: 0.74.0' "$EVIDENCE_DIR/trivy-version.txt"
 
       - name: Seven-image Trivy audit on one frozen DB snapshot
@@ -229,7 +263,7 @@ jobs:
           mkdir -p "$WORK_DIR" "$CACHE_DIR"
           set +e
           PYTHONPATH=scripts python3.12 scripts/image_audit_final_candidate.py audit \
-            --trivy-bin trivy \
+            --trivy-bin "$TRIVY_BIN" \
             --cache-dir "$CACHE_DIR" \
             --targets-file "$EVIDENCE_DIR/targets.json" \
             --expected-platform linux/amd64 \
@@ -237,14 +271,19 @@ jobs:
             --summary-out "$EVIDENCE_DIR/final-summary.json" \
             --clean-dir "$SRC_DIR" \
             --source-proof "$EVIDENCE_DIR/source-proof.json" \
-            --audited-source-sha "$AUDITED_SOURCE_SHA" \
+            --audited-source-sha "$PRODUCT_SOURCE_SHA" \
             --audit-harness-sha "$GITHUB_SHA"
           gate_rc=$?
           set -e
           echo "gate_rc=${gate_rc}" >> "$GITHUB_OUTPUT"
           technical="$(python3.12 -c "import json,sys; print(str(json.load(open(sys.argv[1])).get('status') == 'technical_failure').lower())" "$EVIDENCE_DIR/final-summary.json")"
           echo "technical=${technical}" >> "$GITHUB_OUTPUT"
-          cp "$WORK_DIR"/*.trivy.json "$EVIDENCE_DIR/" 2>/dev/null || true
+          shopt -s nullglob
+          raw_reports=("$WORK_DIR"/*.trivy.json)
+          if (( ${#raw_reports[@]} > 0 )); then
+            cp -- "${raw_reports[@]}" "$EVIDENCE_DIR/"
+          fi
+          echo "raw_trivy_reports=${#raw_reports[@]}"
           python3.12 - <<'PY'
           import json, os
           from pathlib import Path
@@ -271,24 +310,56 @@ jobs:
             --identities-file "$EVIDENCE_DIR/pre-scan-identities.json" \
             --json-out "$EVIDENCE_DIR/caller-attribution.json"
 
-      - name: Evidence hashes
+      - name: Evidence privacy check
+        id: privacy
         if: always()
         run: |
           set -euo pipefail
-          if [[ -d "$EVIDENCE_DIR" ]]; then
-            (cd "$EVIDENCE_DIR" && find . -maxdepth 1 -type f -print0 \
-              | sort -z | xargs -0 -r sha256sum > "$RUNNER_TEMP/evidence-sha256.txt")
-            mv "$RUNNER_TEMP/evidence-sha256.txt" "$EVIDENCE_DIR/evidence-sha256.txt"
-            cat "$EVIDENCE_DIR/evidence-sha256.txt"
-          fi
+          test -d "$EVIDENCE_DIR"
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          patterns = {
+              "github_token": re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,}"),
+              "aws_access_key": re.compile(rb"AKIA(?!IOSFODNN7EXAMPLE)[0-9A-Z]{16}"),
+              "private_key": re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----\s*[A-Za-z0-9+/]{40}"),
+              "bearer": re.compile(rb"(?i)authorization:\s*bearer\s+[A-Za-z0-9._~+/=-]{20,}"),
+          }
+          runtime_token = os.environ.get("ACTIONS_RUNTIME_TOKEN", "").encode()
+          hits = []
+          for path in sorted(evidence.iterdir()):
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              for label, pattern in patterns.items():
+                  if pattern.search(data):
+                      hits.append({"file": path.name, "pattern": label})
+              if len(runtime_token) >= 16 and runtime_token in data:
+                  hits.append({"file": path.name, "pattern": "actions_runtime_token"})
+          report = {"ok": not hits, "hits": hits}
+          (evidence / "privacy-check.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report, sort_keys=True))
+          raise SystemExit(0 if report["ok"] else 1)
+          PY
+
+      - name: Evidence hashes
+        if: always() && steps.privacy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          (cd "$EVIDENCE_DIR" && find . -maxdepth 1 -type f -print0 \
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$RUNNER_TEMP/evidence-sha256.txt")
+          mv "$RUNNER_TEMP/evidence-sha256.txt" "$EVIDENCE_DIR/evidence-sha256.txt"
+          cat "$EVIDENCE_DIR/evidence-sha256.txt"
 
       - name: Upload audit evidence
-        if: always()
+        if: always() && steps.privacy.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: final-candidate-image-audit-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_DIR }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: Scoped cleanup + verification
@@ -300,6 +371,7 @@ jobs:
           report="$RUNNER_TEMP/final-cleanup/cleanup.txt"
           : > "$report"
           fail=0
+          note() { printf '%s\n' "$1" >> "$report"; }
           refs=("fetchnow-api:${tag}" "fetchnow-web:${tag}" "fetchnow-gateway:${tag}"
                 "fetchnow-media-executor:${tag}" "fetchnow-media-net-executor:${tag}"
                 "fetchnow-egress-proxy:${tag}")
@@ -307,31 +379,80 @@ jobs:
             refs+=("postgres:16.15-alpine3.24")
           fi
           for ref in "${refs[@]}"; do
-            docker image rm "$ref" >/dev/null 2>&1 || true
-            if [[ -n "$(docker image ls -q --no-trunc --filter "reference=${ref}")" ]]; then
-              echo "image_still_present ${ref}" >> "$report"; fail=1
+            if ! docker image rm "$ref" >/dev/null 2>&1; then
+              note "image_rm_nonzero ${ref} (absence must be proven by inventory)"
+            fi
+            if ! present="$(docker image ls -q --no-trunc --filter "reference=${ref}")"; then
+              note "image_inventory_failed ${ref}"; fail=1
+            elif [[ -n "$present" ]]; then
+              note "image_still_present ${ref}"; fail=1
             else
-              echo "image_absent ${ref}" >> "$report"
+              note "image_absent ${ref}"
             fi
           done
           if [[ -d "$CACHE_DIR" ]]; then
-            "$RUNNER_TEMP/trivy-bin/trivy" --cache-dir "$CACHE_DIR" clean --all >/dev/null 2>&1 || true
+            if [[ -x "$TRIVY_BIN" ]] && ! "$TRIVY_BIN" --cache-dir "$CACHE_DIR" clean --all >/dev/null 2>&1; then
+              note "trivy_clean_nonzero (cache directory removed and verified below)"
+            fi
             rm -rf "$CACHE_DIR"
           fi
           rm -rf "$WORK_DIR" "$SRC_DIR"
           for d in "$CACHE_DIR" "$WORK_DIR" "$SRC_DIR"; do
-            if [[ -e "$d" ]]; then echo "dir_still_present ${d}" >> "$report"; fail=1; fi
+            if [[ -e "$d" ]]; then note "dir_still_present ${d}"; fail=1; fi
           done
-          if [[ -n "$(docker ps -aq)" ]]; then echo "containers_present" >> "$report"; fail=1; fi
-          if [[ -n "$(docker volume ls -q | sort | comm -13 "$RUNNER_TEMP/baseline-volumes.txt" -)" ]]; then
-            echo "new_volumes_present" >> "$report"; fail=1
+          if ! containers="$(docker ps -aq --no-trunc)"; then
+            note "container_inventory_failed"; fail=1
+          elif [[ -n "$containers" ]]; then
+            note "containers_present"; fail=1
+          else
+            note "containers_none"
           fi
-          if [[ -n "$(docker network ls -q --filter type=custom | sort | comm -13 "$RUNNER_TEMP/baseline-networks.txt" -)" ]]; then
-            echo "new_custom_networks_present" >> "$report"; fail=1
+          if [[ ! -f "$RUNNER_TEMP/baseline-volumes.txt" ]]; then
+            note "volume_baseline_missing"; fail=1
+          elif ! volumes="$(docker volume ls -q)"; then
+            note "volume_inventory_failed"; fail=1
+          else
+            new_volumes="$(printf '%s\n' "$volumes" | sed '/^$/d' | LC_ALL=C sort \
+              | LC_ALL=C comm -13 "$RUNNER_TEMP/baseline-volumes.txt" -)"
+            if [[ -n "$new_volumes" ]]; then
+              note "new_volumes_present $(printf '%s' "$new_volumes" | tr '\n' ' ')"; fail=1
+            else
+              note "volumes_equal_baseline"
+            fi
           fi
-          echo "cleanup_ok=$([[ $fail == 0 ]] && echo true || echo false)" >> "$report"
+          if [[ ! -f "$RUNNER_TEMP/baseline-networks.txt" ]]; then
+            note "network_baseline_missing"; fail=1
+          elif ! networks="$(docker network ls -q --filter type=custom)"; then
+            note "network_inventory_failed"; fail=1
+          else
+            new_networks="$(printf '%s\n' "$networks" | sed '/^$/d' | LC_ALL=C sort \
+              | LC_ALL=C comm -13 "$RUNNER_TEMP/baseline-networks.txt" -)"
+            if [[ -n "$new_networks" ]]; then
+              note "new_custom_networks_present $(printf '%s' "$new_networks" | tr '\n' ' ')"; fail=1
+            else
+              note "custom_networks_equal_baseline"
+            fi
+          fi
+          note "cleanup_ok=$([[ $fail == 0 ]] && echo true || echo false)"
           cat "$report"
           exit "$fail"
+
+      - name: Final evidence manifest (audit evidence + cleanup report)
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/final-cleanup"
+          tmp="$RUNNER_TEMP/final-evidence-manifest.tmp"
+          : > "$tmp"
+          if [[ -d "$EVIDENCE_DIR" ]]; then
+            (cd "$EVIDENCE_DIR" && find . -maxdepth 1 -type f -print0 | LC_ALL=C sort -z \
+              | xargs -0 -r sha256sum | sed 's#  \./#  evidence/#') >> "$tmp"
+          fi
+          if [[ -f "$RUNNER_TEMP/final-cleanup/cleanup.txt" ]]; then
+            (cd "$RUNNER_TEMP/final-cleanup" && sha256sum cleanup.txt | sed 's#  #  cleanup/#') >> "$tmp"
+          fi
+          mv "$tmp" "$RUNNER_TEMP/final-cleanup/final-evidence-manifest.sha256"
+          cat "$RUNNER_TEMP/final-cleanup/final-evidence-manifest.sha256"
 
       - name: Upload cleanup evidence
         if: always()
@@ -339,7 +460,7 @@ jobs:
         with:
           name: final-candidate-image-audit-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/final-cleanup
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: Gate result (findings are non-zero, not technical)

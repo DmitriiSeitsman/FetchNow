@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import struct
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -22,8 +24,10 @@ import image_audit_final_reconcile as rec  # noqa: E402
 import image_audit as ia  # noqa: E402
 
 WORKFLOW = ROOT / ".github/workflows/sec08-09-final-candidate-image-audit.yml"
-SOURCE = fin.AUDITED_SOURCE_SHA
-PREDECESSOR = fin.AUDIT_PREDECESSOR_SHA
+SOURCE = fin.PRODUCT_SOURCE_SHA
+SOURCE_PARENT = fin.PRODUCT_SOURCE_PARENT_SHA
+SOURCE_TREE = fin.PRODUCT_SOURCE_TREE
+OLD_SOURCE = fin.HISTORICAL_SOURCE_SHA
 HEAD = "a" * 40
 
 
@@ -37,87 +41,99 @@ def _auth(**overrides: Any) -> dict[str, Any]:
         "ref": fin.BRANCH_REF,
         "github_sha": HEAD,
         "head_sha": HEAD,
-        "parent_shas": [PREDECESSOR],
+        "parent_shas": [SOURCE],
         "changed_paths": list(fin.AUDIT_MANIFEST),
-        "predecessor_parent_shas": [SOURCE],
-        "predecessor_changed_paths": list(fin.INITIAL_AUDIT_MANIFEST),
-        "cumulative_changed_paths": list(fin.CUMULATIVE_AUDIT_MANIFEST),
+        "product_parent_shas": [SOURCE_PARENT],
+        "product_tree": SOURCE_TREE,
+        "product_changed_paths": list(fin.PRODUCT_MANIFEST),
     }
     kwargs.update(overrides)
     return fin.authorize(**kwargs)
 
 
-def test_authorize_exact_successor_chain_without_retargeting_source() -> None:
+def test_authorize_exact_audit_only_successor_of_product_source() -> None:
     result = _auth()
     assert result["allowed"] is True
-    assert result["audited_source_sha"] == SOURCE
-    assert result["audit_predecessor_sha"] == PREDECESSOR
-    assert result["predecessor_parents"] == [SOURCE]
+    assert result["reasons"] == []
+    assert result["product_source_sha"] == SOURCE
+    assert result["product_source_parent_sha"] == SOURCE_PARENT
+    assert result["product_source_tree"] == SOURCE_TREE
     assert result["audit_harness_sha"] == HEAD
+    assert result["audit_harness_sha"] != result["product_source_sha"]
 
 
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
         ({"event_name": "workflow_dispatch"}, "event_not_push"),
+        ({"event_name": "pull_request"}, "event_not_push"),
         ({"run_attempt": "2"}, "run_attempt_not_1"),
         ({"ref": "refs/heads/main"}, "ref_mismatch"),
         ({"github_sha": "b" * 40}, "head_not_github_sha"),
-        ({"parent_shas": ["c" * 40]}, "parent_not_audit_predecessor"),
-        ({"parent_shas": [SOURCE]}, "parent_not_audit_predecessor"),
-        ({"parent_shas": [PREDECESSOR, "d" * 40]}, "parent_not_audit_predecessor"),
-        ({"predecessor_parent_shas": []}, "predecessor_not_audited_source"),
-        ({"predecessor_parent_shas": ["c" * 40]}, "predecessor_not_audited_source"),
+        ({"parent_shas": ["c" * 40]}, "parent_not_product_source"),
+        ({"parent_shas": [OLD_SOURCE]}, "parent_not_product_source"),
+        ({"parent_shas": [SOURCE_PARENT]}, "parent_not_product_source"),
+        ({"parent_shas": [SOURCE, "d" * 40]}, "parent_not_product_source"),
+        ({"parent_shas": []}, "parent_not_product_source"),
+        ({"product_parent_shas": []}, "product_parent_mismatch"),
+        ({"product_parent_shas": [OLD_SOURCE]}, "product_parent_mismatch"),
         (
-            {"predecessor_parent_shas": [SOURCE, "d" * 40]},
-            "predecessor_not_audited_source",
+            {"product_parent_shas": [SOURCE_PARENT, "d" * 40]},
+            "product_parent_mismatch",
+        ),
+        ({"product_tree": "e" * 40}, "product_tree_mismatch"),
+        (
+            {
+                "product_changed_paths": sorted(
+                    [*fin.PRODUCT_MANIFEST, "backend/Dockerfile"]
+                )
+            },
+            "product_paths_not_exact_manifest",
+        ),
+        (
+            {"product_changed_paths": list(fin.PRODUCT_MANIFEST[:-1])},
+            "product_paths_not_exact_manifest",
         ),
         (
             {
-                "predecessor_changed_paths": [
-                    *fin.INITIAL_AUDIT_MANIFEST,
-                    "backend/Dockerfile",
+                "product_changed_paths": [
+                    *fin.PRODUCT_MANIFEST,
+                    fin.PRODUCT_MANIFEST[-1],
                 ]
             },
-            "predecessor_paths_not_exact_manifest",
+            "product_paths_not_exact_manifest",
         ),
         (
-            {"predecessor_changed_paths": list(fin.INITIAL_AUDIT_MANIFEST[:-1])},
-            "predecessor_paths_not_exact_manifest",
+            {"changed_paths": sorted([*fin.AUDIT_MANIFEST, "backend/uv.lock"])},
+            "audit_paths_not_exact_manifest",
+        ),
+        (
+            {"changed_paths": sorted([*fin.AUDIT_MANIFEST, "compose.yaml"])},
+            "audit_paths_not_exact_manifest",
         ),
         (
             {
-                "cumulative_changed_paths": [
-                    *fin.CUMULATIVE_AUDIT_MANIFEST,
-                    "backend/uv.lock",
-                ]
+                "changed_paths": sorted(
+                    [*fin.AUDIT_MANIFEST, "scripts/image_audit_candidate7_smoke.py"]
+                )
             },
-            "cumulative_paths_not_exact_manifest",
-        ),
-        (
-            {"cumulative_changed_paths": list(fin.CUMULATIVE_AUDIT_MANIFEST[:-1])},
-            "cumulative_paths_not_exact_manifest",
+            "audit_paths_not_exact_manifest",
         ),
         (
             {
-                "cumulative_changed_paths": [
-                    *fin.CUMULATIVE_AUDIT_MANIFEST,
-                    fin.CUMULATIVE_AUDIT_MANIFEST[0],
-                ]
+                "changed_paths": sorted(
+                    [*fin.AUDIT_MANIFEST, "docs/operations/extra.md"]
+                )
             },
-            "cumulative_paths_not_exact_manifest",
-        ),
-        (
-            {"changed_paths": [*fin.AUDIT_MANIFEST, "backend/Dockerfile"]},
-            "changed_paths_not_exact_manifest",
+            "audit_paths_not_exact_manifest",
         ),
         (
             {"changed_paths": list(fin.AUDIT_MANIFEST[:-1])},
-            "changed_paths_not_exact_manifest",
+            "audit_paths_not_exact_manifest",
         ),
         (
-            {"changed_paths": [*fin.AUDIT_MANIFEST, fin.AUDIT_MANIFEST[0]]},
-            "changed_paths_not_exact_manifest",
+            {"changed_paths": [*fin.AUDIT_MANIFEST, fin.AUDIT_MANIFEST[-1]]},
+            "audit_paths_not_exact_manifest",
         ),
     ],
 )
@@ -127,47 +143,69 @@ def test_authorize_rejects(overrides: dict[str, Any], reason: str) -> None:
     assert reason in result["reasons"]
 
 
-def test_manifest_excludes_dirty_preserved_files() -> None:
-    manifest = set(fin.AUDIT_MANIFEST)
-    assert ".github/workflows/sec03c-candidate7-image-audit.yml" not in manifest
-    assert not any(
-        "residual" in p or "gosu" in p or "storage_resource" in p for p in manifest
+def test_authorize_rejects_previous_audit_chain() -> None:
+    result = _auth(
+        parent_shas=[fin.PREVIOUS_AUDIT_HARNESS_SHA],
+        product_parent_shas=[OLD_SOURCE],
     )
-    assert ".github/workflows/sec08-09-final-candidate-image-audit.yml" in manifest
-    assert all((ROOT / p).is_file() for p in manifest)
+    assert result["allowed"] is False
+    assert "parent_not_product_source" in result["reasons"]
+    assert "product_parent_mismatch" in result["reasons"]
 
 
-def test_pinned_predecessor_is_the_original_audit_only_commit() -> None:
-    parents = fin._git(ROOT, "rev-list", "--parents", "-n", "1", PREDECESSOR)
-    assert parents.split() == [PREDECESSOR, SOURCE]
+def test_manifests_are_exact_disjoint_and_exclude_preserved_files() -> None:
+    audit = set(fin.AUDIT_MANIFEST)
+    product = set(fin.PRODUCT_MANIFEST)
+    assert not audit & product
+    assert list(fin.AUDIT_MANIFEST) == sorted(audit)
+    assert list(fin.PRODUCT_MANIFEST) == sorted(product)
+    assert ".github/workflows/sec03c-candidate7-image-audit.yml" not in audit
+    assert not any(
+        "residual" in p or "gosu" in p or "storage_resource" in p for p in audit
+    )
+    runtime = {"backend/", "web/", "deploy/", "compose.yaml"}
+    assert not any(p.startswith(tuple(runtime)) for p in audit)
+    assert "scripts/image_audit_candidate7_smoke.py" not in audit
+    assert "scripts/image_audit_final_caller_attribution.py" not in audit
+    assert all((ROOT / p).is_file() for p in audit | product)
+
+
+def test_pinned_product_source_is_the_remediation_commit() -> None:
+    parents = fin._git(ROOT, "rev-list", "--parents", "-n", "1", SOURCE)
+    assert parents.split() == [SOURCE, SOURCE_PARENT]
+    assert fin._git(ROOT, "rev-parse", f"{SOURCE}^{{tree}}").strip() == SOURCE_TREE
     paths = fin._git(
-        ROOT, "diff", "--name-only", "--no-renames", SOURCE, PREDECESSOR
+        ROOT, "diff", "--name-only", "--no-renames", SOURCE_PARENT, SOURCE
     ).splitlines()
-    assert sorted(paths) == sorted(fin.INITIAL_AUDIT_MANIFEST)
-    assert len(fin.AUDIT_MANIFEST) == 6
-    assert len(fin.CUMULATIVE_AUDIT_MANIFEST) == 8
+    assert paths == list(fin.PRODUCT_MANIFEST)
+    for rel, want in fin.PRODUCT_RUNTIME_SHA256.items():
+        blob = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"{SOURCE}:{rel}"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert hashlib.sha256(blob).hexdigest() == want, rel
+
+
+def _git_outputs(changed: list[str], parents: str) -> dict[tuple[str, ...], str]:
+    return {
+        ("rev-parse", "HEAD"): HEAD + "\n",
+        ("rev-list", "--parents", "-n", "1", "HEAD"): parents + "\n",
+        ("diff", "--name-only", "--no-renames", SOURCE, HEAD): "\n".join(changed)
+        + "\n",
+        ("rev-list", "--parents", "-n", "1", SOURCE): f"{SOURCE} {SOURCE_PARENT}\n",
+        ("rev-parse", f"{SOURCE}^{{tree}}"): SOURCE_TREE + "\n",
+        ("diff", "--name-only", "--no-renames", SOURCE_PARENT, SOURCE): "\n".join(
+            fin.PRODUCT_MANIFEST
+        )
+        + "\n",
+    }
 
 
 def test_cmd_authorize_reads_commit_chain_not_worktree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    outputs = {
-        ("rev-parse", "HEAD"): HEAD + "\n",
-        ("rev-list", "--parents", "-n", "1", "HEAD"): f"{HEAD} {PREDECESSOR}\n",
-        ("diff", "--name-only", "--no-renames", PREDECESSOR, HEAD): "\n".join(
-            fin.AUDIT_MANIFEST
-        )
-        + "\n",
-        ("rev-list", "--parents", "-n", "1", PREDECESSOR): f"{PREDECESSOR} {SOURCE}\n",
-        ("diff", "--name-only", "--no-renames", SOURCE, PREDECESSOR): "\n".join(
-            fin.INITIAL_AUDIT_MANIFEST
-        )
-        + "\n",
-        ("diff", "--name-only", "--no-renames", SOURCE, HEAD): "\n".join(
-            fin.CUMULATIVE_AUDIT_MANIFEST
-        )
-        + "\n",
-    }
+    outputs = _git_outputs(list(fin.AUDIT_MANIFEST), f"{HEAD} {SOURCE}")
     calls: list[tuple[str, ...]] = []
 
     def read_git(repo: Path, *args: str) -> str:
@@ -188,7 +226,7 @@ def test_cmd_authorize_reads_commit_chain_not_worktree(
     assert fin.cmd_authorize(argparse.Namespace(repo=ROOT, json_out=out)) == 0
     result = json.loads(out.read_text())
     assert result["allowed"] is True
-    assert result["audited_source_sha"] == SOURCE
+    assert result["product_source_sha"] == SOURCE
     assert set(calls) == set(outputs)
     assert (tmp_path / "output.txt").read_text() == "allowed=true\n"
 
@@ -198,7 +236,28 @@ def test_cmd_authorize_reads_commit_chain_not_worktree(
     assert fin.cmd_authorize(argparse.Namespace(repo=ROOT, json_out=out)) == 0
     rejected = json.loads(out.read_text())
     assert rejected["allowed"] is False
-    assert "cumulative_paths_not_exact_manifest" in rejected["reasons"]
+    assert "audit_paths_not_exact_manifest" in rejected["reasons"]
+
+
+def test_cmd_authorize_rejects_merge_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outputs = _git_outputs(list(fin.AUDIT_MANIFEST), f"{HEAD} {SOURCE} {'f' * 40}")
+    monkeypatch.setattr(fin, "_git", lambda _repo, *args: outputs[args])
+    for key, value in {
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_REF": fin.BRANCH_REF,
+        "GITHUB_SHA": HEAD,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "authorize.json"
+    assert fin.cmd_authorize(argparse.Namespace(repo=ROOT, json_out=out)) == 0
+    rejected = json.loads(out.read_text())
+    assert rejected["allowed"] is False
+    assert "parent_not_product_source" in rejected["reasons"]
+    assert "audit_paths_not_exact_manifest" in rejected["reasons"]
 
 
 # --- source proof / DB freeze / summary --------------------------------------------
@@ -214,6 +273,84 @@ def test_compare_runtime_inputs() -> None:
     assert diff["missing_in_clean_source"] == ["b"]
 
 
+def _tree_entries(files: dict[str, bytes]) -> dict[str, tuple[str, str]]:
+    return {rel: ("100644", fin.git_blob_id(data)) for rel, data in files.items()}
+
+
+def test_git_blob_id_matches_git() -> None:
+    assert fin.git_blob_id(b"") == "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    assert fin.git_blob_id(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+def test_parse_ls_tree_rejects_non_blob() -> None:
+    raw = b"100644 blob " + b"1" * 40 + b"\ta.txt\0"
+    assert fin.parse_ls_tree(raw) == {"a.txt": ("100644", "1" * 40)}
+    with pytest.raises(ValueError, match="unsupported"):
+        fin.parse_ls_tree(raw + b"160000 commit " + b"2" * 40 + b"\tsub\0")
+
+
+def test_compare_clean_tree_exact(tmp_path: Path) -> None:
+    files = {"a.txt": b"a\n", "dir/b.txt": b"b\n"}
+    for rel, data in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(data)
+    assert fin.compare_clean_tree(tmp_path, _tree_entries(files))["ok"] is True
+
+
+@pytest.mark.parametrize("defect", ["missing", "extra", "blob_mismatches"])
+def test_compare_clean_tree_detects_drift(tmp_path: Path, defect: str) -> None:
+    files = {"a.txt": b"a\n", "dir/b.txt": b"b\n"}
+    for rel, data in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(data)
+    if defect == "missing":
+        (tmp_path / "dir/b.txt").unlink()
+    elif defect == "extra":
+        (tmp_path / "untracked.md").write_text("dirty worktree file\n")
+    else:
+        (tmp_path / "a.txt").write_text("worktree edit\n")
+    result = fin.compare_clean_tree(tmp_path, _tree_entries(files))
+    assert result["ok"] is False
+    assert result[defect]
+
+
+def test_compare_pinned_runtime(tmp_path: Path) -> None:
+    for rel in fin.PRODUCT_RUNTIME_SHA256:
+        blob = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"{SOURCE}:{rel}"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(blob)
+    assert fin.compare_pinned_runtime(tmp_path)["ok"] is True
+    (tmp_path / "backend/uv.lock").write_text("relocked\n")
+    drift = fin.compare_pinned_runtime(tmp_path)
+    assert drift["ok"] is False
+    assert drift["differing"] == ["backend/uv.lock"]
+
+
+def test_source_proof_refuses_old_source(tmp_path: Path) -> None:
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    archive = subprocess.run(
+        ["git", "-C", str(ROOT), "archive", "--format=tar", OLD_SOURCE],
+        check=True,
+        capture_output=True,
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(clean, filter="tar")
+    out = tmp_path / "proof.json"
+    args = argparse.Namespace(
+        repo=ROOT, clean_dir=clean, audited_source_sha=OLD_SOURCE, json_out=out
+    )
+    assert fin.cmd_source_proof(args) == 1
+    proof = json.loads(out.read_text())
+    assert proof["product_source_identity_ok"] is False
+    assert proof["clean_tree_vs_git_tree"]["ok"] is True
+    assert proof["pinned_runtime_sha256"]["ok"] is False
+
+
 class FakeTrivy:
     def __init__(self, cache: Path, *, mutate_on_scan: bool = False) -> None:
         self.cache = cache
@@ -226,7 +363,7 @@ class FakeTrivy:
             (self.cache / "db/metadata.json").write_text("{}")
         elif self.mutate_on_scan:
             (self.cache / "db/trivy.db").write_bytes(b"db-v2")
-        return object()
+        return argparse.Namespace(returncode=0)
 
 
 def _scan_argv() -> list[str]:
@@ -251,6 +388,23 @@ def test_db_freeze_proof_ok(tmp_path: Path) -> None:
     assert proof["ok"] is True
     assert proof["scan_invocations"] == 7
     assert proof["db_download_invocations"] == 1
+    assert proof["db_download_exit_codes"] == [0]
+    assert proof["scan_exit_codes"] == [0] * 7
+
+
+def test_db_freeze_records_scan_exception_and_reraises(tmp_path: Path) -> None:
+    def boom(argv: list[str], **_: Any) -> Any:
+        if "--download-db-only" in argv:
+            return FakeTrivy(tmp_path)(argv)
+        raise TimeoutError("scan timeout")
+
+    runner = fin.DbFreezeRunner(inner=boom, cache_dir=tmp_path, trivy_bin="trivy")
+    runner(["trivy", "image", "--download-db-only"])
+    with pytest.raises(TimeoutError):
+        runner(_scan_argv())
+    proof = runner.proof(fin.hash_db(tmp_path))
+    assert proof["scan_exit_codes"] == ["TimeoutError"]
+    assert proof["scan_invocations"] == 1
 
 
 def test_db_freeze_detects_mutation_double_download_and_online_scan(
@@ -291,13 +445,16 @@ def _gate_summary(status: str) -> dict[str, Any]:
     }
 
 
+GOOD_PROOF = {"ok": True, "audited_source_sha": SOURCE}
+
+
 def test_finalize_findings_are_not_technical() -> None:
     out, technical = fin.finalize_summary(
         _gate_summary(ia.STATUS_FAIL),
         freeze={"ok": True},
         audited_source_sha=SOURCE,
         audit_harness_sha=HEAD,
-        source_proof={"ok": True},
+        source_proof=GOOD_PROOF,
     )
     assert technical is False
     assert out["status"] == ia.STATUS_FAIL
@@ -305,24 +462,51 @@ def test_finalize_findings_are_not_technical() -> None:
     assert out["verdicts"]["audit_execution_completeness"] == "PASS"
     assert out["verdicts"]["residual_acceptance"] == "NOT_GRANTED"
     assert out["native_acceptance_history"]["transfers_to_these_images"] is False
-    assert out["shas"] == {"audited_source_sha": SOURCE, "audit_harness_sha": HEAD}
+    assert out["native_acceptance_history"]["source_sha"] == OLD_SOURCE
+    assert out["audit_predecessor"]["run"] == fin.PREVIOUS_AUDIT_RUN
+    assert out["audit_predecessor"]["source_sha"] == OLD_SOURCE
+    assert out["historical_approval_source"]["run"] == fin.HISTORICAL_RUN
+    assert out["shas"] == {
+        "audited_source_sha": SOURCE,
+        "product_source_parent_sha": SOURCE_PARENT,
+        "product_source_tree": SOURCE_TREE,
+        "audit_harness_sha": HEAD,
+    }
+    assert out["source_identity_ok"] is True
     assert "approved_runtime_delta" not in out
 
 
 @pytest.mark.parametrize(
-    ("freeze", "proof", "code"),
+    ("freeze", "proof", "source", "code"),
     [
-        ({"ok": False}, {"ok": True}, "db_snapshot_not_frozen"),
-        ({"ok": True}, {"ok": False}, "source_proof_failed"),
+        ({"ok": False}, GOOD_PROOF, SOURCE, "db_snapshot_not_frozen"),
+        (
+            {"ok": True},
+            {"ok": False, "audited_source_sha": SOURCE},
+            SOURCE,
+            "source_proof_failed",
+        ),
+        (
+            {"ok": True},
+            {"ok": True, "audited_source_sha": OLD_SOURCE},
+            SOURCE,
+            "source_identity_mismatch",
+        ),
+        (
+            {"ok": True},
+            {"ok": True, "audited_source_sha": OLD_SOURCE},
+            OLD_SOURCE,
+            "source_identity_mismatch",
+        ),
     ],
 )
 def test_finalize_marks_technical(
-    freeze: dict[str, Any], proof: dict[str, Any], code: str
+    freeze: dict[str, Any], proof: dict[str, Any], source: str, code: str
 ) -> None:
     out, technical = fin.finalize_summary(
         _gate_summary(ia.STATUS_FAIL),
         freeze=freeze,
-        audited_source_sha=SOURCE,
+        audited_source_sha=source,
         audit_harness_sha=HEAD,
         source_proof=proof,
     )
@@ -354,6 +538,31 @@ def test_smoke_argv_unprivileged_and_offline() -> None:
         "--user",
         "10001:10001",
     ]
+
+
+def test_certifi_probe_is_literal_offline_argv() -> None:
+    argv = fin.certifi_argv("api-img")
+    assert argv[:5] == ["docker", "run", "--rm", "--network", "none"]
+    assert argv[argv.index("--entrypoint") + 1] == "/opt/venv/bin/python"
+    assert argv[-2:] == ["-c", fin.CERTIFI_PROBE]
+    assert not any(token in {"sh", "/bin/sh", "bash"} for token in argv)
+
+
+VENV_PEM = "/opt/venv/lib/python3.14/site-packages/certifi/cacert.pem"
+
+
+@pytest.mark.parametrize(
+    ("rc", "out", "ok"),
+    [
+        (0, f"2026.10.19\n{VENV_PEM}\n", True),
+        (0, f"2026.7.22\n{VENV_PEM}\n", False),
+        (0, "2026.10.19\n/usr/lib/python3/dist-packages/certifi/cacert.pem\n", False),
+        (1, "2026.10.19\n/opt/venv/x\n", False),
+        (0, "", False),
+    ],
+)
+def test_certifi_pin_evaluation(rc: int, out: str, ok: bool) -> None:
+    assert fin.evaluate_certifi(rc, out).ok is ok
 
 
 # --- ELF / attribution -----------------------------------------------------------
@@ -741,13 +950,30 @@ def test_workflow_trigger_and_policy_invariants() -> None:
     assert "head_commit" not in text and "EXPECTED_SUBJECT" not in text
     assert "      - .github/workflows/sec08-09-final-candidate-image-audit.yml" in text
     assert "github.run_attempt == 1" in text
-    assert f"AUDITED_SOURCE_SHA: {SOURCE}" in text
-    assert f"AUDIT_PREDECESSOR_SHA: {PREDECESSOR}" in text
-    assert "fetch-depth: 3" in text
-    assert 'test "$(git rev-parse HEAD^)" = "$AUDIT_PREDECESSOR_SHA"' in text
-    assert 'test "$(git rev-parse HEAD^)" = "$AUDITED_SOURCE_SHA"' not in text
-    assert 'git archive --format=tar "$AUDITED_SOURCE_SHA"' in text
+    assert f"PRODUCT_SOURCE_SHA: {SOURCE}" in text
+    assert f"PRODUCT_SOURCE_PARENT_SHA: {SOURCE_PARENT}" in text
+    assert f"PRODUCT_SOURCE_TREE: {SOURCE_TREE}" in text
+    for stale in (
+        OLD_SOURCE,
+        "2d243fb8c08e2d6c4f86987dee1eafa9da931d29",
+        "AUDIT_PREDECESSOR_SHA",
+        "AUDITED_SOURCE_SHA",
+        "fetch-depth: 3",
+    ):
+        assert stale not in text
+    assert text.count("fetch-depth: 0") == 2
+    assert text.count("persist-credentials: false") == 2
+    assert (
+        'test "$(git rev-list --parents -n 1 HEAD)" = "$GITHUB_SHA $PRODUCT_SOURCE_SHA"'
+        in text
+    )
+    assert 'test "$(git rev-parse "${PRODUCT_SOURCE_SHA}^{tree}")" = ' in text
+    assert 'git archive --format=tar "$PRODUCT_SOURCE_SHA"' in text
+    assert '--audited-source-sha "$PRODUCT_SOURCE_SHA"' in text
     assert "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" in text
+    assert "GITHUB_PATH" not in text
+    assert '--trivy-bin "$TRIVY_BIN"' in text
+    assert "--trivy-bin trivy" not in text
     lowered = text.lower()
     for forbidden in (
         "--ignore-unfixed",
@@ -756,6 +982,34 @@ def test_workflow_trigger_and_policy_invariants() -> None:
         "gosu_vex",
         "prune",
         "ssh ",
+        "|| true",
+        "2>/dev/null || true",
     ):
         assert forbidden not in lowered
     assert "--severity" not in text
+
+
+def test_workflow_cleanup_requires_successful_inventories() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    cleanup = text.split("- name: Scoped cleanup + verification", 1)[1].split(
+        "- name: Final evidence manifest", 1
+    )[0]
+    for marker in (
+        "image_inventory_failed",
+        "container_inventory_failed",
+        "volume_inventory_failed",
+        "network_inventory_failed",
+        "volume_baseline_missing",
+        "network_baseline_missing",
+        'exit "$fail"',
+    ):
+        assert marker in cleanup
+    assert "docker volume rm" not in cleanup
+    assert "docker rm " not in cleanup
+    manifest = text.split("- name: Final evidence manifest", 1)[1].split(
+        "- name: Upload cleanup evidence", 1
+    )[0]
+    assert "cleanup.txt" in manifest
+    assert "final-evidence-manifest.tmp" in manifest
+    upload = text.split("- name: Upload audit evidence", 1)[1].split("- name:", 1)[0]
+    assert "steps.privacy.outcome == 'success'" in upload
