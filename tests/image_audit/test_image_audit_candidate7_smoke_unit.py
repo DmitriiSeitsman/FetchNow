@@ -18,8 +18,8 @@ import image_audit_candidate7_smoke as smoke  # noqa: E402
 
 
 @pytest.mark.parametrize("dockerfile", ["web/Dockerfile", "deploy/nginx/Dockerfile"])
-def test_alpine_expectations_match_pinned_audited_source(dockerfile: str) -> None:
-    # Read committed product pins, not an old image or dirty Dockerfile.
+def test_alpine_expectations_preserve_historical_source_pins(dockerfile: str) -> None:
+    # Existing pins remain unchanged; the local successor adds two new pins.
     source = "9934ebe63943e7c1007564402e50258865a3a380"
     proc = subprocess.run(
         ["git", "-C", str(ROOT), "show", f"{source}:{dockerfile}"],
@@ -32,12 +32,24 @@ def test_alpine_expectations_match_pinned_audited_source(dockerfile: str) -> Non
         versions = [version for name, version in pins if name == package]
         assert len(versions) == 1, (dockerfile, package, versions)
         assert f"{package}-{versions[0]}" in smoke.EXPECTED_ALPINE_APK
-    assert len(smoke.EXPECTED_ALPINE_APK) == 3
+    assert len(smoke.EXPECTED_ALPINE_APK) == 5
+
+
+@pytest.mark.parametrize("dockerfile", ["web/Dockerfile", "deploy/nginx/Dockerfile"])
+def test_alpine_expectations_match_current_remediation(dockerfile: str) -> None:
+    # This is the local successor, NOT the images audited at 9934ebe.
+    pins = re.findall(r"'([a-z0-9-]+)=([^']+)'", (ROOT / dockerfile).read_text())
+    assert sorted(f"{name}-{version}" for name, version in pins) == sorted(
+        smoke.EXPECTED_ALPINE_APK
+    )
 
 
 @pytest.mark.parametrize("label", ["web", "gateway"])
 def test_apk_inventory_accepts_current_pin_and_rejects_stale_pin(label: str) -> None:
-    current = "pcre2-10.49-r0\ntiff-4.7.2-r0\nlibexpat-2.9.0-r0\n"
+    current = (
+        "pcre2-10.49-r0\ntiff-4.7.2-r0\nlibexpat-2.9.0-r0\n"
+        "brotli-libs-1.2.1-r0\nlibx11-1.8.14-r0\n"
+    )
     stage = f"{label}_apk_inventory"
     smoke.assert_apk_pins(current, stage=stage)
     stale = current.replace("libexpat-2.9.0-r0", "libexpat-2.8.5-r0")
@@ -46,6 +58,12 @@ def test_apk_inventory_accepts_current_pin_and_rejects_stale_pin(label: str) -> 
     for pin in smoke.EXPECTED_ALPINE_APK:
         with pytest.raises(smoke.SmokeError, match="missing"):
             smoke.assert_apk_pins(current.replace(pin, "wrong-version"), stage=stage)
+    for fixed, vulnerable in (
+        ("brotli-libs-1.2.1-r0", "brotli-libs-1.2.0-r1"),
+        ("libx11-1.8.14-r0", "libx11-1.8.13-r0"),
+    ):
+        with pytest.raises(smoke.SmokeError, match="missing"):
+            smoke.assert_apk_pins(current.replace(fixed, vulnerable), stage=stage)
 
 
 def test_dpkg_query_argv_is_literal_and_shell_free() -> None:

@@ -30,6 +30,8 @@ EXPECTED_ALPINE_APK: tuple[str, ...] = (
     "pcre2-10.49-r0",
     "tiff-4.7.2-r0",
     "libexpat-2.9.0-r0",
+    "brotli-libs-1.2.1-r0",
+    "libx11-1.8.14-r0",
 )
 
 GOSU_SHA256 = "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0"
@@ -227,63 +229,56 @@ def cleanup(ctx: SmokeContext) -> None:
     """Remove resources created by this run (reverse order). Failures recorded."""
     for kind, name in reversed(ctx.created):
         if kind == "container":
-            proc = subprocess.run(
-                ["docker", "rm", "-f", name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                # Explicit missing-container handling (not a silent blanket || true).
-                inspect = subprocess.run(
-                    ["docker", "inspect", name],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if inspect.returncode == 0:
-                    ctx.cleanup_errors.append(
-                        f"container {name}: rm failed rc={proc.returncode} "
-                        f"{_cap(proc.stderr)}"
-                    )
+            # Docker removes only anonymous volumes attached to this container;
+            # named volumes are removed only by their separate tracked identity.
+            remove = ["docker", "rm", "-f", "-v", name]
+            inventory = [
+                "docker",
+                "ps",
+                "-a",
+                "--no-trunc",
+                "--format",
+                "{{.ID}} {{.Names}}",
+            ]
         elif kind == "network":
-            proc = subprocess.run(
-                ["docker", "network", "rm", name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                inspect = subprocess.run(
-                    ["docker", "network", "inspect", name],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if inspect.returncode == 0:
-                    ctx.cleanup_errors.append(
-                        f"network {name}: rm failed rc={proc.returncode} "
-                        f"{_cap(proc.stderr)}"
-                    )
+            remove = ["docker", "network", "rm", name]
+            inventory = ["docker", "network", "ls", "--format", "{{.Name}}"]
         elif kind == "volume":
+            remove = ["docker", "volume", "rm", name]
+            inventory = ["docker", "volume", "ls", "--format", "{{.Name}}"]
+        else:
+            ctx.cleanup_errors.append(f"unknown tracked resource kind: {kind}")
+            continue
+        try:
             proc = subprocess.run(
-                ["docker", "volume", "rm", name],
+                remove,
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=DEFAULT_CMD_TIMEOUT_S,
             )
             if proc.returncode != 0:
-                inspect = subprocess.run(
-                    ["docker", "volume", "inspect", name],
+                # A failed inspect is not proof of absence (daemon errors also
+                # fail). Require a successful, exact inventory instead.
+                remaining = subprocess.run(
+                    inventory,
                     capture_output=True,
                     text=True,
                     check=False,
+                    timeout=DEFAULT_CMD_TIMEOUT_S,
                 )
-                if inspect.returncode == 0:
+                if remaining.returncode != 0 or any(
+                    name in row.split() for row in remaining.stdout.splitlines()
+                ):
                     ctx.cleanup_errors.append(
-                        f"volume {name}: rm failed rc={proc.returncode} "
+                        f"{kind} {name}: rm failed rc={proc.returncode}; "
+                        f"absence not proven (inventory rc={remaining.returncode}); "
                         f"{_cap(proc.stderr)}"
                     )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            ctx.cleanup_errors.append(
+                f"{kind} {name}: cleanup failed: {_cap(str(exc))}"
+            )
 
 
 def stage_inventory(ctx: SmokeContext) -> None:
@@ -312,7 +307,9 @@ def stage_inventory(ctx: SmokeContext) -> None:
     ctx.partial["api_dpkg"] = rows
 
     for label, image in (("web", ctx.web_image), ("gateway", ctx.gateway_image)):
-        apk_argv = apk_info_argv(image, ("pcre2", "tiff", "libexpat"))
+        apk_argv = apk_info_argv(
+            image, ("pcre2", "tiff", "libexpat", "brotli-libs", "libx11")
+        )
         apk_proc = run_cmd(apk_argv, stage=f"{label}_apk_inventory")
         apk_path = ctx.work_dir / f"cand7-{label}-apk.txt"
         apk_path.write_text(apk_proc.stdout, encoding="utf-8")
@@ -749,12 +746,12 @@ def stage_media(ctx: SmokeContext) -> None:
 
 
 def stage_gosu(ctx: SmokeContext) -> None:
+    name = track(ctx, "container", f"{ctx.prefix}-gosu")
     cid_proc = run_cmd(
-        ["docker", "create", ctx.postgres_image, "true"],
+        ["docker", "create", "--name", name, ctx.postgres_image, "true"],
         stage="gosu_create",
     )
     cid = cid_proc.stdout.strip()
-    track(ctx, "container", cid)
     gosu_path = ctx.work_dir / "cand7-gosu"
     run_cmd(
         ["docker", "cp", f"{cid}:/usr/local/bin/gosu", str(gosu_path)],
