@@ -1,0 +1,430 @@
+name: SEC-08/09 native saved-image delivery acceptance
+
+# One-shot native proof that a prepared media release (six FetchNow images +
+# explicit candidate PostgreSQL) moves between two clean native linux/amd64
+# Docker daemons without rebuild and keeps exact Image IDs.
+# Push-only; exact first-line commit subject (trailers ignored); attempt 1 only.
+# Builder: standard prepare/build -> export-images -> private bundle artifact.
+# Importer: separate runner/daemon, standard prepare --image-bundle, refusals.
+# Trusted-main authority is a disposable TEST FIXTURE (clone-local origin/main).
+# NEW ARTIFACT: no prior Image ID, native PASS, VEX or approval transfers.
+# Not image-security acceptance, not production installation or rollout.
+on:
+  push:
+    branches: [codex/security-sec-09-network-isolation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec08-09-saved-image-delivery
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  authorize:
+    if: >-
+      github.run_attempt == 1 &&
+      github.ref == 'refs/heads/codex/security-sec-09-network-isolation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      allowed: ${{ steps.subject.outputs.allowed }}
+    steps:
+      - name: Match exact commit subject (first line only; trailers ignored)
+        id: subject
+        timeout-minutes: 1
+        env:
+          EXPECTED_SUBJECT: >-
+            test(security): SEC-08/09 native saved-image delivery acceptance [native-once-20261024-imgbndl]
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          head = event.get("head_commit") or {}
+          message = head.get("message", "")
+          subject = message.splitlines()[0] if isinstance(message, str) and message else ""
+          expected = os.environ["EXPECTED_SUBJECT"].strip()
+          allowed = (
+              os.environ["GITHUB_EVENT_NAME"] == "push"
+              and head.get("id") == os.environ["GITHUB_SHA"]
+              and subject == expected
+          )
+          print(f"subject={subject!r}")
+          print(f"expected={expected!r}")
+          print(f"allowed={allowed}")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"allowed={str(allowed).lower()}\n")
+          PY
+
+  builder:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      bundle_sha256: ${{ steps.build.outputs.bundle_sha256 }}
+      published: ${{ steps.confirm.outputs.published }}
+    steps:
+      - name: Builder directories
+        timeout-minutes: 1
+        run: |
+          {
+            echo "EVIDENCE_DIR=$RUNNER_TEMP/saved-image-builder-evidence"
+            echo "BUNDLE_DIR=$RUNNER_TEMP/saved-image-bundle"
+            echo "CLEANUP_DIR=$RUNNER_TEMP/saved-image-builder-cleanup"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Exact tooling/product identity
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = 97b3964160fb6757dd6e86d497f1cd3d838754be
+          test "$(git rev-parse "3792c377ecde1218ad9da9f3d5b91d620ed63b46^{tree}")" = e9dbbc4588c2e968fd32e0201dac99b075924134
+          git merge-base --is-ancestor 3792c377ecde1218ad9da9f3d5b91d620ed63b46 HEAD
+          test -z "$(git status --porcelain)"
+
+      - name: Native host (linux/amd64, Docker API >= 1.48, no containers)
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          docker version
+          docker info --format '{{.OSType}}/{{.Architecture}}' | grep -Eqx 'linux/(x86_64|amd64)'
+          test -z "$(docker ps -aq)"
+          df -B1 / "$RUNNER_TEMP"
+
+      - uses: actions/setup-python@v5
+        id: py
+        timeout-minutes: 5
+        with:
+          python-version: "3.12"
+
+      - name: Offline saved-image delivery regressions (hashed pytest closure)
+        timeout-minutes: 10
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          "$PY" -m venv "$RUNNER_TEMP/saved-image-venv"
+          venv_py="$RUNNER_TEMP/saved-image-venv/bin/python"
+          "$venv_py" -m pip install --quiet --require-hashes --no-deps \
+            -r backend/ci/pytest-requirements.txt
+          PYTHONPATH=scripts "$venv_py" -m pytest -q -p no:cacheprovider \
+            tests/release/test_image_bundle_unit.py \
+            tests/release/test_native_saved_image_delivery_unit.py
+          test -z "$(git status --porcelain)"
+
+      - name: Docker image baseline (for scoped cleanup)
+        timeout-minutes: 2
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py \
+            inventory --out "$RUNNER_TEMP/builder-baseline-inventory.json"
+
+      - name: Builder - prepare (build) -> verify -> candidate PostgreSQL -> export
+        id: build
+        timeout-minutes: 75
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+          FETCHNOW_NATIVE_SAVED_IMAGE_DELIVERY_EXECUTE: "1"
+        run: |
+          set -euo pipefail
+          if [[ -e "$EVIDENCE_DIR" || -e "$BUNDLE_DIR" ]]; then
+            echo "refusing pre-existing evidence/bundle directory" >&2
+            exit 1
+          fi
+          set +e
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py builder \
+            --tooling-sha "$GITHUB_SHA" \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --bundle-dir "$BUNDLE_DIR" \
+            --work-parent "$RUNNER_TEMP"
+          rc=$?
+          set -e
+          echo "builder exit=$rc"
+          test -r "$EVIDENCE_DIR/result.json"
+          "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k: d.get(k) for k in ('status','primary_error','case_counts')}, indent=2))" "$EVIDENCE_DIR/result.json"
+          if [[ "$rc" != 0 ]]; then
+            exit "$rc"
+          fi
+          sha="$(cat "$EVIDENCE_DIR/bundle-sha256.txt")"
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$BUNDLE_DIR/image-bundle.json" | cut -d' ' -f1)" = "$sha"
+          echo "bundle_sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Publish complete bundle (private artifact, limited retention)
+        id: upload_bundle
+        timeout-minutes: 40
+        uses: actions/upload-artifact@v4
+        with:
+          name: saved-image-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BUNDLE_DIR }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 1
+
+      - name: Confirm bundle publication before cleanup
+        id: confirm
+        timeout-minutes: 2
+        env:
+          ARTIFACT_ID: ${{ steps.upload_bundle.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload_bundle.outputs.artifact-digest }}
+          BUNDLE_SHA256: ${{ steps.build.outputs.bundle_sha256 }}
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          test -n "$ARTIFACT_ID"
+          "$PY" - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          bundle = Path(os.environ["BUNDLE_DIR"])
+          files = {
+              p.name: {"size_bytes": p.stat().st_size,
+                       "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+              for p in sorted(bundle.iterdir())
+          }
+          record = {
+              "artifact_name": f"saved-image-bundle-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+              "artifact_id": os.environ["ARTIFACT_ID"],
+              "artifact_zip_digest": os.environ.get("ARTIFACT_DIGEST") or None,
+              "bundle_sha256": os.environ["BUNDLE_SHA256"],
+              "files": files,
+              "retention_days": 3,
+          }
+          assert files["image-bundle.json"]["sha256"] == record["bundle_sha256"]
+          Path(os.environ["EVIDENCE_DIR"], "bundle-publication.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Builder evidence privacy check + hashes
+        id: privacy
+        if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          test -d "$EVIDENCE_DIR"
+          if find "$EVIDENCE_DIR" -type f \( -name '.env' -o -name 'env' -o -name '*.tar' -o -name 'config.json' \) | grep -q .; then
+            echo "forbidden file type in evidence" >&2
+            exit 1
+          fi
+          if grep -rIl -E 'POSTGRES_PASSWORD=[^<[:space:]"]|gh[pousr]_[A-Za-z0-9]{36,}|BEGIN [A-Z ]*PRIVATE KEY' "$EVIDENCE_DIR"; then
+            echo "privacy pattern found in evidence" >&2
+            exit 1
+          fi
+          (cd "$EVIDENCE_DIR" && find . -type f ! -name evidence-sha256.txt -print0 \
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$RUNNER_TEMP/builder-evidence-sha256.txt")
+          mv "$RUNNER_TEMP/builder-evidence-sha256.txt" "$EVIDENCE_DIR/evidence-sha256.txt"
+          cat "$EVIDENCE_DIR/evidence-sha256.txt"
+
+      - name: Upload builder evidence
+        if: always() && steps.privacy.outcome == 'success'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: saved-image-builder-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Scoped builder cleanup (run-created images/directories only)
+        if: always()
+        timeout-minutes: 15
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          work_dirs=()
+          for d in "$RUNNER_TEMP"/saved-image-builder-*; do
+            [[ "$d" == "$EVIDENCE_DIR" || "$d" == "$CLEANUP_DIR" ]] && continue
+            [[ -d "$d" ]] && work_dirs+=(--remove-dir "$d")
+          done
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py cleanup \
+            --baseline "$RUNNER_TEMP/builder-baseline-inventory.json" \
+            --report "$CLEANUP_DIR/cleanup.json" \
+            --remove-dir "$BUNDLE_DIR" "${work_dirs[@]}"
+
+      - name: Upload builder cleanup report
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: saved-image-builder-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CLEANUP_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+  importer:
+    needs: [authorize, builder]
+    if: >-
+      needs.authorize.outputs.allowed == 'true' &&
+      needs.builder.result == 'success' &&
+      needs.builder.outputs.published == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Importer directories
+        timeout-minutes: 1
+        run: |
+          {
+            echo "EVIDENCE_DIR=$RUNNER_TEMP/saved-image-importer-evidence"
+            echo "RECEIVED_DIR=$RUNNER_TEMP/received-bundle"
+            echo "BUILDER_EVIDENCE_DIR=$RUNNER_TEMP/received-builder-evidence"
+            echo "CLEANUP_DIR=$RUNNER_TEMP/saved-image-importer-cleanup"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Exact tooling/product identity
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = 97b3964160fb6757dd6e86d497f1cd3d838754be
+          test "$(git rev-parse "3792c377ecde1218ad9da9f3d5b91d620ed63b46^{tree}")" = e9dbbc4588c2e968fd32e0201dac99b075924134
+          test -z "$(git status --porcelain)"
+
+      - name: Native host (clean daemon, no containers)
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          uname -m | grep -qx 'x86_64'
+          docker version
+          docker info --format '{{.OSType}}/{{.Architecture}}' | grep -Eqx 'linux/(x86_64|amd64)'
+          test -z "$(docker ps -aq)"
+          df -B1 / "$RUNNER_TEMP"
+
+      - uses: actions/setup-python@v5
+        id: py
+        timeout-minutes: 5
+        with:
+          python-version: "3.12"
+
+      - name: Docker image baseline (for scoped cleanup)
+        timeout-minutes: 2
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py \
+            inventory --out "$RUNNER_TEMP/importer-baseline-inventory.json"
+
+      - name: Receive builder evidence
+        timeout-minutes: 5
+        uses: actions/download-artifact@v4
+        with:
+          name: saved-image-builder-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BUILDER_EVIDENCE_DIR }}
+
+      - name: Receive bundle artifact
+        timeout-minutes: 30
+        uses: actions/download-artifact@v4
+        with:
+          name: saved-image-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RECEIVED_DIR }}
+
+      - name: Importer - refusals, import, idempotency, identity
+        timeout-minutes: 60
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+          BUNDLE_SHA256: ${{ needs.builder.outputs.bundle_sha256 }}
+          FETCHNOW_NATIVE_SAVED_IMAGE_DELIVERY_EXECUTE: "1"
+        run: |
+          set -euo pipefail
+          if [[ -e "$EVIDENCE_DIR" ]]; then
+            echo "refusing pre-existing evidence directory" >&2
+            exit 1
+          fi
+          [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          set +e
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py importer \
+            --tooling-sha "$GITHUB_SHA" \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --bundle "$RECEIVED_DIR" \
+            --bundle-sha256 "$BUNDLE_SHA256" \
+            --builder-summary "$BUILDER_EVIDENCE_DIR/result.json" \
+            --work-parent "$RUNNER_TEMP"
+          rc=$?
+          set -e
+          echo "importer exit=$rc"
+          test -r "$EVIDENCE_DIR/result.json"
+          "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k: d.get(k) for k in ('status','primary_error','case_counts')}, indent=2))" "$EVIDENCE_DIR/result.json"
+          exit "$rc"
+
+      - name: Importer evidence privacy check + hashes
+        id: privacy
+        if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          test -d "$EVIDENCE_DIR"
+          if find "$EVIDENCE_DIR" -type f \( -name '.env' -o -name 'env' -o -name '*.tar' -o -name 'config.json' \) | grep -q .; then
+            echo "forbidden file type in evidence" >&2
+            exit 1
+          fi
+          if grep -rIl -E 'POSTGRES_PASSWORD=[^<[:space:]"]|gh[pousr]_[A-Za-z0-9]{36,}|BEGIN [A-Z ]*PRIVATE KEY' "$EVIDENCE_DIR"; then
+            echo "privacy pattern found in evidence" >&2
+            exit 1
+          fi
+          (cd "$EVIDENCE_DIR" && find . -type f ! -name evidence-sha256.txt -print0 \
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$RUNNER_TEMP/importer-evidence-sha256.txt")
+          mv "$RUNNER_TEMP/importer-evidence-sha256.txt" "$EVIDENCE_DIR/evidence-sha256.txt"
+          cat "$EVIDENCE_DIR/evidence-sha256.txt"
+
+      - name: Upload importer evidence
+        if: always() && steps.privacy.outcome == 'success'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: saved-image-importer-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Scoped importer cleanup (run-created images/directories only)
+        if: always()
+        timeout-minutes: 15
+        env:
+          PY: ${{ steps.py.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          work_dirs=()
+          for d in "$RUNNER_TEMP"/saved-image-importer-*; do
+            [[ "$d" == "$EVIDENCE_DIR" || "$d" == "$CLEANUP_DIR" ]] && continue
+            [[ -d "$d" ]] && work_dirs+=(--remove-dir "$d")
+          done
+          PYTHONPATH=scripts "$PY" scripts/native_saved_image_delivery_acceptance.py cleanup \
+            --baseline "$RUNNER_TEMP/importer-baseline-inventory.json" \
+            --report "$CLEANUP_DIR/cleanup.json" \
+            --remove-dir "$RECEIVED_DIR" "${work_dirs[@]}"
+
+      - name: Upload importer cleanup report
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: saved-image-importer-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CLEANUP_DIR }}
+          if-no-files-found: error
+          retention-days: 30

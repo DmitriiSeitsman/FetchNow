@@ -12,6 +12,7 @@ from .config_rollout import ConfigRolloutInput, run_config_rollout
 from .deploy_plan import DeployPlanInput, emit_deploy_plan, run_deploy_plan
 from .deploy_root import release_dir, validate_deploy_root
 from .health import HealthInput, run_health
+from .image_bundle import export_image_bundle
 from .migrate import MigrationInput, run_migration
 from .migration_recover import MigrationRecoverInput, recover_migration
 from .preflight import PreflightInput, run_preflight
@@ -111,6 +112,32 @@ def build_parser() -> argparse.ArgumentParser:
             "Default canonical; never inferred from file presence."
         ),
     )
+    prep.add_argument(
+        "--image-bundle",
+        type=Path,
+        default=None,
+        help="Import saved images instead of building; never falls back to build",
+    )
+    prep.add_argument(
+        "--image-bundle-sha256",
+        default=None,
+        help="Trusted SHA-256 of image-bundle.json (required with --image-bundle)",
+    )
+
+    export = sub.add_parser(
+        "export-images", help="Save exact prepared images; no build/pull/activation"
+    )
+    export.add_argument("--expected-revision", required=True)
+    export.add_argument("--deploy-root", type=Path, required=True)
+    export.add_argument("--repo-root", type=Path, default=None)
+    export.add_argument("--output", type=Path, required=True)
+    export.add_argument(
+        "--postgres-identity-json",
+        type=Path,
+        required=True,
+        help="Candidate PostgreSQL config, registry index and platform-manifest identities from the audit",
+    )
+    export.add_argument("--wait-lock", action="store_true")
 
     ver = sub.add_parser(
         "verify-release",
@@ -375,7 +402,26 @@ def main(argv: list[str] | None = None) -> int:
                 deploy_root=args.deploy_root.expanduser().resolve(),
                 wait_lock=bool(args.wait_lock),
                 release_mode=str(args.release_mode),
+                image_bundle=(
+                    args.image_bundle.expanduser()
+                    if args.image_bundle is not None
+                    else None
+                ),
+                image_bundle_sha256=args.image_bundle_sha256,
             )
+        )
+        for line in result.messages:
+            print(line, file=sys.stdout if result.ok else sys.stderr)
+        return 0 if result.ok else 1
+
+    if args.command == "export-images":
+        result = export_image_bundle(
+            deploy_root=args.deploy_root.expanduser().resolve(),
+            repo_root=repo,
+            revision=args.expected_revision,
+            output=args.output.expanduser(),
+            postgres_identity_json=args.postgres_identity_json.expanduser(),
+            wait_lock=bool(args.wait_lock),
         )
         for line in result.messages:
             print(line, file=sys.stdout if result.ok else sys.stderr)
